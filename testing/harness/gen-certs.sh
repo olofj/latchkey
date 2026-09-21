@@ -48,7 +48,7 @@ openssl req -x509 -newkey rsa:2048 -nodes \
     -days 3650 -config ca.cnf >/dev/null 2>&1
 openssl x509 -in ca.pem -outform der -out ca.der
 
-echo "==> leaf for dash.tail-scale.ts.net / dash.localtest.me / localhost / 127.0.0.1 / ::1"
+echo "==> leaf for dash.tail-scale.ts.net / gw.tail-scale.ts.net / dash.localtest.me / localhost / 127.0.0.1 / ::1"
 openssl req -newkey rsa:2048 -nodes \
     -keyout server.key -out server.csr \
     -subj "/CN=dash.tail-scale.ts.net" >/dev/null 2>&1

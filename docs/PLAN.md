@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | In implementation. M0–M3 done (the M1 device check awaits owner actions O1–O3); revisions from `docs/PLAN-REVISIONS.md` being applied — where they disagree with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
+| Status | In implementation. M0–M4 done (the M1 device check awaits owner actions O1–O3); revisions from `docs/PLAN-REVISIONS.md` being applied — where they disagree with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
 | Author | Drafted 2026-09-20 from three parallel research passes |
 | Repo | `~/src/latchkey` |
 | Base | Fork of [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) @ `dba0555` (2026-08-24), BSD-3-Clause |
@@ -429,7 +429,7 @@ See §6 for the full strategy; this is the build-out.
 | 2.9 | Script the whole thing | `scripts/test-offline.sh`: certs → harness up → `xcodebuild test -only-testing:...` → harness down, with logs and a screenshot on failure. **Done**, plus R10's preflight and R1's validated token check. **R9:** `xcodebuild test` from the agent shell is proven, so no Terminal fallback is needed. |
 
 **AC:**
-- `scripts/test-offline.sh` passes from a clean checkout on a machine with **no Tailscale account and no tailnet**.
+- `scripts/test-offline.sh` passes on a machine with **no Tailscale account and no tailnet** — after one `--build`; the < 3 min budget excludes the build (`test-without-building`, R37).
 - The blackhole test fails the page load (not the test), proving no direct fallback.
 - Total runtime under 3 minutes.
 
@@ -475,6 +475,8 @@ covered by M2.
 ---
 
 ### M4 — KiroCrew session management (8–12 h; re-estimated 14–20 h by R36)
+
+**Status:** done 2026-09-20 against the fake gateway serving the real 0.6.0 bundle: `scripts/test-session.sh` passes 9/9 in ~4 min. The O7 contract run against a real gateway is Olof's (R19). `docs/DECISIONS.md` "R19" and "M4 done" have the detail.
 
 **Goal:** the app holds a durable session, lets the page renew it silently, and asks
 for a new token only when renewal truly fails.
@@ -638,7 +640,7 @@ proxy fails the connection outright.
 - **`simctl status_bar` is cosmetic.** It changes the rendered status bar, not the network stack. To simulate network loss, kill or blackhole the stub proxy.
 - **There is no `simctl suspend`.** Background/foreground only from inside XCUITest.
 - **The simulator does not reproduce real suspension.** Listener reclamation, jetsam and true suspended state are device-only. Section M6.6 exists because of this.
-- **Web content assertions**: the accessibility tree is flaky for dynamic content. Prefer the debug-only JS bridge (M2.8).
+- **Web content assertions**: the accessibility tree is flaky for dynamic content. Observe server-side instead (R13): the page reports to the harness, and the tests read the harness's control ports.
 
 ### 6.5 CI
 
@@ -646,9 +648,10 @@ There is no CI today and none is required for v1, but keep every layer
 script-invocable so it can be added later:
 
 ```bash
-scripts/test-policy.sh     # L0, ~2 s, no simulator
+make -C app test-policy    # L0, a few seconds, no simulator
 scripts/test-offline.sh    # L1, <3 min, no tailnet
-scripts/test-tsnet.sh      # L2, <5 min, no tailnet
+scripts/test-tailnet.sh    # L2, <5 min, no tailnet
+scripts/test-session.sh    # M4: the real KiroCrew bundle against the fake gateway
 ```
 
 Wrap simulator runs in a hard `timeout`; on failure, capture a screenshot and
@@ -712,10 +715,10 @@ fixes it. No architectural impact.
 Each is answerable in minutes during the milestone that needs it; none changes
 the architecture.
 
-1. **What exactly does `kirocrew token` print?** The URL shape is known (`{base}?token=…`, `dashboard/urls.py:364`) and the dashboard's own copy says "Run `kirocrew token` in a terminal, then paste the URL", but the CLI's output was not read directly. *Needed by M4.4.* Just run it.
+1. ~~What exactly does `kirocrew token` print?~~ **Resolved (R37):** up to three URLs — localhost, `dashboard.url` and the tailnet name — so the token sheet extracts the first `token=` with a regex (R23, M4.4).
 2. **What argv does `kirocrew tailnet up` pass to `tailscale serve`?** Affects whether a gateway sits on 443 or behind a path prefix. *Needed by M5.2.* Read `dashboard/tailnet_serve.py`.
-3. **What is `<port>` in the `mc_token_<port>` cookie name behind `tailscale serve`?** Derived from the Host header (`dashboard/token_auth.py:1353`), and a serve URL carries no explicit port. *Needed by M4.1* so the fake dashboard matches real cookie names.
-4. **Does suppressing the page's own banner (M4.8) have side effects?** It also drives a connectivity pill via the same events. *Verify at M4.8.*
+3. ~~What is `<port>` in the cookie name behind `tailscale serve`?~~ **Resolved (R37):** the Host header's port, else the listen port — `mc_token_5476` / `mc_refresh_5476` behind serve. The fake gateway emulates exactly that (`--cookie-port`).
+4. ~~Does suppressing the page's own banner have side effects?~~ **Resolved by R22:** CSS only — the element stays (a startup gate reads it; ✕ clears latches), the events still fire, so the header pill still updates.
 
 **Resolved during planning** (recorded so nobody re-investigates):
 
@@ -782,20 +785,22 @@ All verified in `kiro_crew` 0.6.0 source. Paths are relative to the gateway orig
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /?token=<token>` | the token itself | Redeem a link; sets session + refresh cookies. Link window 300 s; re-redeemable inside it |
-| `GET /api/auth/me` | cookie | `{"user_id","session_exp","refresh_exp"}`; `401 {"error":"unauthenticated"}` |
-| `POST /api/auth/refresh` | refresh cookie | `200 {"refreshed_at","session_exp","refresh_exp"}` + rotated cookies. `401 no_refresh_cookie` / `invalid_refresh` / `refresh_chain_revoked`; `429` + `Retry-After: 60` (60/min per IP) |
+| `?token=<token>` on **any** request | the token itself | Redeems a link: the response the route would give anyway (`/` → the shell, 200, **no redirect**) carries the session and refresh cookies. Link window 300 s, re-redeemable inside it; each redemption starts a **new** refresh chain. A restart forgets unredeemed links. A bad token with a valid access cookie is ignored silently; without one, shell paths get the shell and `/api/*` a 403 (`token_auth.py:2603-3061`) |
+| `GET /api/auth/me` | cookie | `{"user_id","session_exp","refresh_exp"}`. **Stale or missing access cookie: `403 {"error": …, "code":"forbidden"}` + `X-Auth-Required: true`** — not 401; the handler's `401 unauthenticated` is unreachable behind the middleware (R37) |
+| `POST /api/auth/refresh` | refresh cookie | `200 {"refreshed_at","session_exp","refresh_exp"}` + rotated cookies (access re-minted at a flat 20 h). `401 no_refresh_cookie`; `401 invalid_refresh` (also a `boot` mismatch; **no** cookie clear); `401 refresh_chain_revoked` (**clears** the refresh cookie). A superseded token is forgiven only as the chain head, from the same remote, within 60 s (same tokens re-served); any other reuse revokes the chain. `429 {"error":"rate_limited"}` + `Retry-After: 60`: 60/min keyed on `request.remote`, so **behind `tailscale serve` every client shares one bucket**. A foreign Origin gets the CSRF middleware's **text/plain 403** first — the handler's `403 bad_origin` is effectively unreachable (`auth_refresh.py:398-678`) |
 | `POST /api/auth/logout` | cookie | Ends the session (nonce denylist) |
-| `POST /api/tailnet/mobile/qr` | cookie | `{"url","image","ttl_secs","link_window_secs","host"}`. Default TTL 1 h, max 12 h, never exceeding the calling session |
+| `POST /api/tailnet/mobile/qr` | cookie | `{"url","image","ttl_secs","link_window_secs","host"}`. The 1 h default (max 12 h) is the **access-token** TTL; with `qr_session_until_restart` (default true) the session carries a `boot` claim and **lasts until the gateway restarts** — the only mint path that sets `boot` (R24, R37) |
 | `POST /api/auth/mobile-link` | cookie | `{"url","expires_in"}` |
 | `GET /manifest.json` | **none** | Discovery probe: `{"name":"Kiro Crew",…}` |
 | `GET /api/health` | **none** | `{"ok":true}` only, through `tailscale serve` — deliberately no version |
 | `GET /api/ws` | cookie or `?token=` | The main channel. Auth resolves **once at upgrade** and is never re-checked; the server never closes the socket on session expiry. Heartbeat 30 s. Client reconnects with 1 s→10 s backoff and recovers missed state by HTTP refetch — there is no replay cursor |
 | `POST /api/notifications/push` | **app token only** | A notification-bus producer, **not** Web Push. 0.6.0 has no VAPID, no `PushManager`, no subscribe endpoint |
 
-**Cookies:** `mc_token_<port>` (HttpOnly, SameSite=Lax, Secure on HTTPS, path `/`, ≤20 h) and `mc_refresh_<port>` (path `/api/auth`, ≤30 d). `<port>` comes from the Host header.
+**Cookies:** `mc_token_<port>` (HttpOnly, SameSite=Lax, path `/`, Max-Age ≤ 20 h) and `mc_refresh_<port>` (HttpOnly, SameSite=Lax, path `/api/auth`, ~30 d, **sliding**: each rotation issues a fresh 30 days). `Secure` when the request is HTTPS, or `X-Forwarded-Proto: https` from a loopback peer. `<port>` is the Host header's port, falling back to the **listen** port when the Host carries none — so behind `tailscale serve` the names are **`mc_token_5476` / `mc_refresh_5476`** (`token_auth.py:1353-1369`; resolves open question 3).
 
-**Session killers:** revocation generation bump; boot-id change at gateway restart (when `qr_session_until_restart` is true, the default); `session_exp`; explicit logout.
+**Session killers:** revocation generation bump; a boot-id change at gateway restart — **for boot-bound (QR) sessions only**; CLI links (`kirocrew token` → `/api/token/local`) carry no `boot` claim and survive restarts (R24); `session_exp` (recoverable by refresh); explicit logout. A revoked refresh chain does not revoke the live access session.
+
+**Every middleware denial** is 403 + `X-Auth-Required: true` (JSON on `/api/*`; the shell on GET of other paths). **Not** carrying the header: the Host-allowlist and CSRF 403s (text/plain), the refresh/logout 401s, and handler-level permission 403s.
 
 **CSP:** `frame-ancestors 'self'`; `connect-src 'self'` plus loopback; no CORS on `/api`; no user-agent sniffing. The page fetches fonts and CDN scripts from the public internet — with a split tunnel those go direct, which is correct, but a tailnet-only device would render in fallback fonts.
 
@@ -822,9 +827,9 @@ xcodebuild test -scheme Latchkey \
 xcrun xcresulttool get test-results summary --path /tmp/out.xcresult --format json
 
 # Harness
-python3 testing/harness/dashboard.py --port 8443 --cert server.pem --key server.key
-python3 testing/harness/socks5stub.py --port 1080 --user tsnet --password s3cret \
-    --journal /tmp/proxy.ndjson --map dash.tail-scale.ts.net:443=127.0.0.1:8443
+make -C testing/harness harness-up      # dashboard.py + socks5stub.py (journal: testing/harness/.run/proxy.ndjson)
+make -C testing/harness gateway-up      # fake_gateway.py: the real KiroCrew bundle (M4)
+make -C testing/tsnet-harness up        # the L2 fake control plane (M3)
 ```
 
 **Total estimated effort: 43–70 focused hours across M0–M8. Re-estimated by R36: M2 10–16 h, M3 12–20 h, M4 14–20 h, total ≈ 75–110 h.** Actuals per milestone are recorded in `docs/DECISIONS.md`. M0–M2 (14–23 h) is

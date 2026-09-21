@@ -76,6 +76,11 @@ for devs in json.load(sys.stdin)['devices'].values():
 sys.exit(1)") || { echo "error: no simulator named $SIM_NAME" >&2; exit 1; }
 xcrun simctl bootstatus "$UDID" -b >/dev/null
 xcrun simctl keychain "$UDID" add-root-cert "$HARNESS/ca.der"
+# A fresh app container, so R1's disk scan below reads only what THIS run
+# wrote. Other suites (M4's session tests serve the real KiroCrew bundle,
+# whose cached JS contains `?token=` in code) share the container otherwise.
+# test-without-building installs the app again.
+xcrun simctl uninstall "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------ harness --
 teardown() {

@@ -1087,4 +1087,159 @@ of the Go harness and scripts (`54c318d`). Fifteen findings, all fixed:
 - No data races on `h.mu`.
 
 After the fixes: self-test ok, `make test-policy` ok, L2 4/4 in 83 s, L1
-9/9 (see the commit).
+9/9 in 108 s. Commits: `app/` `0d5ff348a`, parent `7a82fa1`.
+
+## 2026-09-20 — R19: a fake gateway that serves the REAL KiroCrew bundle
+
+`testing/harness/fake_gateway.py` serves the installed
+`kiro_crew/static/dist` byte for byte and emulates the server side of the
+auth contract. The contract was **read** from the installed 0.6.0 source:
+middleware order, redemption, cookies, denials, `/api/auth/me`, refresh with
+rotation, the grace window, chain revocation, `boot`, the rate limit, and the
+WebSocket gate. Nothing of KiroCrew's is run or imported (D10). Its
+credentials are opaque strings it invents. Decisions:
+
+- **Pinned, and it refuses to start on drift.** The installed version must be
+  0.6.0, and `index.html` plus the three auth bundles must match their
+  SHA-256. `index.html` names every other asset by content hash, so pinning
+  it pins the whole entry graph. **Demonstrated:** a copy with one byte
+  appended to `client-*.js` fails `--check-bundle` and the server exits 2. The
+  smoke test also fails if `mc-auth-required`, `mc-auth-cleared`,
+  `mc-session-expired`, `X-Auth-Required` or `refresh_chain_revoked` vanish
+  from the bundle.
+- **Separate from `harness-up`** (`make gateway-up`): a KiroCrew upgrade must
+  not take the L1 suite down with it. It has its own name
+  (`gw.tail-scale.ts.net`, added to the leaf **explicitly**, per the M3
+  wildcard lesson) and its own ports (8444, control 8481). The stub proxy
+  maps the name.
+- **Cookies are named for the emulated listen port (5476)** when the Host
+  carries no port, as behind `tailscale serve`.
+- **R25's hazard is tracked, not just emulated.** Every reuse of a
+  superseded refresh token outside the grace window is recorded as a
+  lineage violation, and tests assert there are none.
+- **`gateway_check.py`** is a 17-step host-side contract self-test covering
+  every behaviour the app's tests lean on.
+- **`contract_test.py`** is the owner-run half (O7). It replays a nine-step
+  sequence against a real gateway and against the fake, and diffs statuses,
+  headers, error codes and cookie names and attributes. Values are never
+  compared or printed. The link comes from `KR_CONTRACT_LINK_FILE` or
+  `KR_CONTRACT_LINK`, never argv. It checks the gateway's version over
+  `/api/ws`, and it needs a short-TTL link (`kirocrew token --ttl 2m`) so
+  the expiry step does not wait 20 hours. Validated in `--fake-only` mode.
+
+**Observed:** the real SPA renders against the fake, and with no session it
+draws its own `#mc-session-expired` banner. The banner is `position:fixed;
+top:0`, so in the app it sits under the status bar, which is one more reason
+for R22's native sheet. The startup calls the fake does not implement get
+404, which the SPA tolerates. They are listed in `/__state` → `unknown`.
+
+## 2026-09-20 — M4 done
+
+**Built (`app/`):**
+- **The session bridge** (`PageScriptSources.sessionBridge`) runs at
+  document start, main frame only, in the app's **own content world**
+  (`latchkey-session`). DOM events reach it from the page, but its message
+  handler does not exist in the page world, so neither the page nor
+  anything it loads from a CDN can post to it.
+  - It forwards `mc-auth-required` and `mc-auth-cleared`, hides
+    `#mc-session-expired` with a CSS-only `<style>` (R22), and says `ready`.
+  - If a gateway document commits and no `ready` arrives within 8 s, native
+    removes the style again, so the page's own banner is the fallback.
+- **`SessionManager`** (R21): `mc-auth-required` → `needsToken` plus the
+  sheet.
+  - `mc-auth-cleared` and each first `ready` trigger a page-world
+    `GET /api/auth/me`, run from the app's content world with the page's
+    cookies. Only a 200 means `active`.
+  - It never calls `/api/auth/refresh` (R20) and persists nothing (R5).
+- **Redemption** navigates the web view to `<selected gateway>/?token=…`,
+  always that origin (`loadSessionURL` refuses any other). A redemption
+  counts as successful only if `/api/auth/me` answers 200 after the load.
+  A failure says why: links last 5 minutes and work only on the gateway
+  that minted them.
+- **`TokenEntrySheet`** (R23, D3):
+  - Paste goes through `PasteButton`, never a silent read. Typed input is
+    accepted too.
+  - QR goes through `AVCaptureSession`; `NSCameraUsageDescription` was
+    added.
+  - One parser (`TokenInput`): the first `token=` in the text, so the CLI's
+    three-URL output works; otherwise a bare token.
+  - A link naming another host is reported before use and never followed.
+    The CLI's own localhost link is not treated as foreign.
+  - The clipboard is cleared after sign-in only if its `changeCount` is
+    unchanged since the paste. Reading the content to compare would raise
+    the paste prompt.
+- A **"Signed out — Sign in" capsule** reopens a closed sheet. With the
+  banner hidden, it is the only other way in.
+
+**A compiler hazard found by the host tests.** Under `-O`, Swift 6.4
+miscompiled `unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.contains)`
+in a module that also passes `tokenCharacters.contains` unapplied. Most
+likely the two thunks were merged. Every bare token then "contained
+whitespace".
+- `-Onone` was correct, so Debug and Testing builds would have passed and
+  Release would have broken.
+- Reduced to a two-file reproduction: the result was true only with
+  `TokenInput.swift` in the module, and closures were unaffected.
+- Fixed with explicit closures. AGENTS.md now carries the rule. The host
+  tests keep building with `-O`, which is how this was caught.
+
+**Tests:**
+- Host: `test-token-input` 22 checks at both `-O` and `-Onone`; the session
+  bridge 10 checks under Node, with a fake page.
+- `scripts/test-session.sh`: the pin, the fake's self-test, then
+  `SessionTests` **9/9 in 231 s**. The nine tests:
+  - signed out → native sheet, banner hidden, capsule reopens;
+  - a broken bridge → the page's banner is shown (the positive control for
+    the hidden-banner check);
+  - pasting CLI output signs in (one redemption, `/api/auth/me` 200,
+    clipboard cleared);
+  - a bad token says so;
+  - **R25:** ~40 s of 6-s access sessions with a forced expiry midway gives
+    ≥ 5 rotations, zero lineage violations and never the sheet;
+  - revoked chain → sheet → a new token recovers;
+  - **R24:** a CLI session survives a restart and keeps rotating, and a QR
+    session ends at one;
+  - network loss (blackholed stub) → no sheet, and it recovers on return.
+
+**Deviations, deliberate:**
+- R38's `localStorage mc-onboarded=1` preset is not needed. The SPA prefers
+  `/api/theme/boot`'s booleans over localStorage, and the fake answers
+  `onboarded: true`.
+- The R25 AC's "several expiries" runs over 40 s rather than 10 minutes.
+  With the real scheduler's 5-s floor, 40 s already gives a countable
+  number of rotations (the assertion is ≥ 5), and the lineage check covers
+  the hazard.
+- QR scanning cannot run in the simulator (no camera). Its payload goes
+  through the same host-tested parser, and the camera path is left for the
+  device check.
+
+**Found while verifying: the test hook leaked data stores, and L1's scan
+read them.**
+- After the M4 suite, L1's R1 disk scan failed on `token=` inside WebKit
+  `NetworkCache` blobs belonging to data stores L1 had not created.
+- Cause: `-UITestResetWorkspaces` removed old workspaces' tsnet state but
+  never their `WKWebsiteDataStore`s. The container held **111** of them.
+- The hits were in cached assets from other suites. The most likely source
+  is the real KiroCrew JS, which contains `?token=` in code.
+- Fixes:
+  - The hook now removes every other data store.
+  - `test-offline.sh` and `test-session.sh` uninstall the app first, so each
+    R1 scan reads only its own run.
+  - L1 passes again, scanning 14 WebKit files, all its own.
+- **M4 got its own R1 check.** No `fk1.` sign-in link may appear in the
+  container (binary grep over Library and tmp), and no `fk1.` or `token=` in
+  the unified log. The check is validated by requiring logged redemptions (8
+  in the run) and WebKit data to scan. It passes. The session cookies are on
+  disk by design; they are the session.
+
+**Known and left for the review:** the token sheet is presented from the
+dashboard, while Settings is a root-level sheet. If the page asks for a
+token while Settings is open, the token sheet cannot stack on top of it.
+
+**Waiting on Olof:**
+- **O7** can now run: `contract_test.py` with a short-TTL link he mints. See
+  its header.
+- **O4** still has no answer. Nothing built here depends on it.
+
+**Actual:** about 2 h agent wall-clock for R19 through M4, including the
+research pass (not engineer-hours).

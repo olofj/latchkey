@@ -11,11 +11,13 @@ distinguished_name=dn
 #                         test can actually detect one
 #                         Also the L2 tsnet harness's dash peer (R17), which
 #                         forwards to the same dashboard.
+# gw.tail-scale.ts.net    the fake KiroCrew gateway serving the real bundle
+#                         (fake_gateway.py, M4 / R19)
 # NOT *.tail-scale.ts.net, though R17 suggested it: the wildcard also covers
 #                         wrong.tail-scale.ts.net, the M2 certificate-name-
 #                         mismatch fixture, and that test then fails for the
 #                         right reason. Add each new gateway name explicitly.
 # localhost, 127.0.0.1, ::1  the control plane of the tests themselves
-subjectAltName=DNS:dash.tail-scale.ts.net,DNS:dash.localtest.me,DNS:localhost,IP:127.0.0.1,IP:::1
+subjectAltName=DNS:dash.tail-scale.ts.net,DNS:gw.tail-scale.ts.net,DNS:dash.localtest.me,DNS:localhost,IP:127.0.0.1,IP:::1
 extendedKeyUsage=serverAuth
 basicConstraints=CA:FALSE

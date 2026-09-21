@@ -9,6 +9,13 @@
 #   make harness-status  what is running
 #   make certs           mint the test CA + leaf (idempotent)
 #   make trust           teach the booted simulator to trust the test CA
+#   make gateway-up      start the fake KiroCrew gateway (real 0.6.0 bundle, M4)
+#   make gateway-down    stop it
+#   make gateway-check   its host-side contract self-test (starts and stops it)
+#
+# The fake gateway is separate from harness-up on purpose: it refuses to start
+# unless the installed KiroCrew bundle is the pinned one, and a KiroCrew
+# upgrade must not take the offline (L1) suite down with it.
 #
 # BLACKHOLE=1 starts the proxy in refuse-every-CONNECT mode, which is the
 # negative fixture: the page load must FAIL rather than quietly succeeding by
@@ -19,6 +26,9 @@ PROXY_PORT   ?= 1080
 PROXY_CONTROL_PORT ?= 1081
 DASH_PORT    ?= 8443
 DASH_CONTROL_PORT  ?= 8480
+GW_PORT      ?= 8444
+GW_CONTROL_PORT ?= 8481
+GW_EXPIRE_IN ?= 0
 PROXY_USER   ?= tsnet
 PROXY_PASS   ?= s3cret
 DASH_HOST    ?= dash.tail-scale.ts.net
@@ -30,6 +40,8 @@ PROXY_PID    := $(RUN_DIR)/socks5.pid
 DASH_PID     := $(RUN_DIR)/dashboard.pid
 PROXY_LOG    := $(RUN_DIR)/socks5.log
 DASH_LOG     := $(RUN_DIR)/dashboard.log
+GW_PID       := $(RUN_DIR)/gateway.pid
+GW_LOG       := $(RUN_DIR)/gateway.log
 
 ifeq ($(BLACKHOLE),1)
   BLACKHOLE_FLAG := --blackhole
@@ -77,6 +89,7 @@ harness-up: certs harness-down  ## Start the fake dashboard + stub proxy
 		--map $(DASH_HOST):443=127.0.0.1:$(DASH_PORT) \
 		--map wrong.tail-scale.ts.net:443=127.0.0.1:$(DASH_PORT) \
 		--map down.tail-scale.ts.net:443=127.0.0.1:9 \
+		--map gw.tail-scale.ts.net:443=127.0.0.1:$(GW_PORT) \
 		> $(PROXY_LOG) 2>&1 & echo $$! > $(PROXY_PID)
 	@# Wait for OUR processes to listen. Checking the port alone is what let
 	@# the stray above masquerade as a healthy harness, so verify the pid we
@@ -127,12 +140,12 @@ harness-reap:  ## Stop strays on the harness ports, pidfile or not
 	@# (it fails with "operation not permitted"), and a reaper that silently
 	@# declines to reap is a reaper that does not work when you need it.
 	@# `lsof` reports cwd in those same shells, so (2) is the one that holds.
-	@for port in $(DASH_PORT) $(DASH_CONTROL_PORT) $(PROXY_PORT) $(PROXY_CONTROL_PORT); do \
+	@for port in $(DASH_PORT) $(DASH_CONTROL_PORT) $(PROXY_PORT) $(PROXY_CONTROL_PORT) $(GW_PORT) $(GW_CONTROL_PORT); do \
 	    for pid in $$(lsof -nP -iTCP:$$port -sTCP:LISTEN -t 2>/dev/null || true); do \
 	        cmd=$$(ps -o command= -p $$pid 2>/dev/null || true); \
 	        cwd=$$(lsof -a -p $$pid -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1); \
 	        mine=0; \
-	        case "$$cmd" in *dashboard.py*|*socks5stub.py*) mine=1;; esac; \
+	        case "$$cmd" in *dashboard.py*|*socks5stub.py*|*fake_gateway.py*) mine=1;; esac; \
 	        [ "$$cwd" = "$(CURDIR)" ] && mine=1; \
 	        if [ $$mine -eq 1 ]; then \
 	            echo "reaping pid $$pid on :$$port"; kill $$pid 2>/dev/null || true; \
@@ -143,8 +156,43 @@ harness-reap:  ## Stop strays on the harness ports, pidfile or not
 	        fi; \
 	    done; \
 	done
-	@rm -f $(PROXY_PID) $(DASH_PID)
+	@rm -f $(PROXY_PID) $(DASH_PID) $(GW_PID)
 	@echo "::: strays reaped :::"
+
+.PHONY: gateway-up
+gateway-up: certs gateway-down  ## Start the fake KiroCrew gateway (GW_EXPIRE_IN=seconds)
+	@mkdir -p $(RUN_DIR)
+	@for port in $(GW_PORT) $(GW_CONTROL_PORT); do \
+	    if lsof -nP -iTCP:$$port -sTCP:LISTEN -t >/dev/null 2>&1; then \
+	        echo "error: 127.0.0.1:$$port is already in use (a stray? make harness-reap)" >&2; exit 1; \
+	    fi; \
+	done
+	@$(PY) fake_gateway.py --port $(GW_PORT) --control-port $(GW_CONTROL_PORT) \
+		--cert server.pem --key server.key --expire-in $(GW_EXPIRE_IN) \
+		> $(GW_LOG) 2>&1 & echo $$! > $(GW_PID)
+	@pid=$$(cat $(GW_PID)); ok=0; \
+	for i in $$(seq 1 100); do \
+	    if ! kill -0 $$pid 2>/dev/null; then \
+	        echo "error: the fake gateway exited during startup:" >&2; cat $(GW_LOG) >&2; exit 1; \
+	    fi; \
+	    if lsof -nP -iTCP:$(GW_PORT) -sTCP:LISTEN -t 2>/dev/null | grep -qx "$$pid"; then ok=1; break; fi; \
+	    sleep 0.1; \
+	done; \
+	if [ $$ok -ne 1 ]; then echo "error: the fake gateway is not listening after 10s" >&2; cat $(GW_LOG) >&2; exit 1; fi
+	@echo "::: fake gateway up — https://gw.tail-scale.ts.net via the stub, :$(GW_PORT), control :$(GW_CONTROL_PORT) :::"
+
+.PHONY: gateway-down
+gateway-down:  ## Stop the fake KiroCrew gateway
+	@if [ -f $(GW_PID) ]; then \
+	    pid=$$(cat $(GW_PID)); kill $$pid 2>/dev/null || true; \
+	    for i in $$(seq 1 50); do kill -0 $$pid 2>/dev/null || break; sleep 0.1; done; \
+	    rm -f $(GW_PID); \
+	fi
+
+.PHONY: gateway-check
+gateway-check: gateway-up  ## Host-side contract self-test of the fake gateway
+	@status=0; $(PY) gateway_check.py --port $(GW_PORT) --control-port $(GW_CONTROL_PORT) --ca ca.pem || status=$$?; \
+	$(MAKE) --no-print-directory gateway-down; exit $$status
 
 .PHONY: harness-status
 harness-status:  ## Show what is running
