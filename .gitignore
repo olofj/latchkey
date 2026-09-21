@@ -6,6 +6,11 @@ testing/harness/*.srl
 testing/harness/*.log
 *.ndjson
 
+# The aperture-plus fork is its own git repository (branch latchkey, remote
+# `upstream`), not a submodule of this one. See docs/DECISIONS.md; recreate it
+# with scripts/bootstrap.sh.
+app/
+
 # Xcode / build
 app/build/
 app/.dd/
