@@ -33,6 +33,17 @@ expect(parsed("https://gw.tail-scale.ts.net/?token=abc<script>x") == nil, "marku
 expect(parsed("https://gw.tail-scale.ts.net/?Token=\(tok)") == nil, "the parameter name is case-sensitive, as the server's is")
 expect(parsed("https://gw.tail-scale.ts.net/?tokenx=\(tok)") == nil, "only the token parameter itself")
 expect(parsed("https://gw.tail-scale.ts.net/?mytoken=\(tok)") == nil, "not a parameter merely ending in token")
+// Chat and Markdown wrapping (M4 review).
+expect(parsed("`https://gw.tail-scale.ts.net/?token=\(tok)`")?.token == tok, "backticks")
+expect(parsed("**https://gw.tail-scale.ts.net/?token=\(tok)**")?.token == tok, "bold markers")
+expect(parsed("Here: https://gw.tail-scale.ts.net/?token=\(tok)!")?.token == tok, "a trailing exclamation mark")
+expect(parsed("https://gw.tail-scale.ts.net/?token=\(tok).")?.token == tok, "a trailing full stop is not part of the token")
+expect(parsed("https://gw.tail-scale.ts.net/?token=\(tok)…")?.token == tok, "a trailing ellipsis")
+expect(["::1", "[::1]"].contains(parsed("http://[::1]:5476/?token=\(tok)")?.linkHost ?? ""),
+       "the CLI's IPv6 loopback link (SessionManager treats either spelling as local)")
+expect(parsed("https://a/?token=bad<x> then https://gw.tail-scale.ts.net/?token=\(tok)")?.token == tok,
+       "an unusable first link does not hide a good second one")
+expect(parsed("`\(tok)`") == .init(token: tok, linkHost: nil), "a bare token in backticks")
 
 print("== bare tokens")
 expect(parsed(tok) == .init(token: tok, linkHost: nil), "a bare token")

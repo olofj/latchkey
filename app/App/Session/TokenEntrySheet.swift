@@ -124,11 +124,11 @@ struct TokenEntrySheet: View {
             }
         }
         .sheet(isPresented: $scanning) {
-            QRScannerView { code in
+            QRScannerView(onCode: { code in
                 scanning = false
                 input = code
                 submitIfUnambiguous()
-            }
+            }, onClose: { scanning = false })
             .ignoresSafeArea()
         }
     }
@@ -160,9 +160,10 @@ struct TokenEntrySheet: View {
 /// A full-screen QR scanner for the dashboard's Phone access code (D3).
 struct QRScannerView: UIViewControllerRepresentable {
     let onCode: (String) -> Void
+    let onClose: () -> Void
 
     func makeUIViewController(context: Context) -> QRScannerController {
-        QRScannerController(onCode: onCode)
+        QRScannerController(onCode: onCode, onClose: onClose)
     }
 
     func updateUIViewController(_ controller: QRScannerController, context: Context) {}
@@ -170,11 +171,15 @@ struct QRScannerView: UIViewControllerRepresentable {
 
 final class QRScannerController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
     private let onCode: (String) -> Void
+    private let onClose: () -> Void
     private let session = AVCaptureSession()
+    /// One serial queue, so start and stop cannot run out of order (M4 review).
+    private let sessionQueue = DispatchQueue(label: "net.lixom.latchkey.qr-session")
     private var delivered = false
 
-    init(onCode: @escaping (String) -> Void) {
+    init(onCode: @escaping (String) -> Void, onClose: @escaping () -> Void) {
         self.onCode = onCode
+        self.onClose = onClose
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -183,10 +188,20 @@ final class QRScannerController: UIViewController, AVCaptureMetadataOutputObject
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
+        addCloseButton()
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        if status == .denied || status == .restricted {
+            // Without this the sheet was black, silent and had no way out.
+            showMessage("Camera access is off for Latchkey. Allow it in Settings → Latchkey, or paste the sign-in link instead.")
+            return
+        }
         guard let device = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input)
-        else { return }
+        else {
+            showMessage("No camera is available. Paste the sign-in link instead.")
+            return
+        }
         session.addInput(input)
         let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else { return }
@@ -196,24 +211,53 @@ final class QRScannerController: UIViewController, AVCaptureMetadataOutputObject
         let preview = AVCaptureVideoPreviewLayer(session: session)
         preview.videoGravity = .resizeAspectFill
         preview.frame = view.layer.bounds
-        view.layer.addSublayer(preview)
+        preview.name = "qr-preview"
+        view.layer.insertSublayer(preview, at: 0)
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        view.layer.sublayers?.first?.frame = view.layer.bounds
+        view.layer.sublayers?.first { $0.name == "qr-preview" }?.frame = view.layer.bounds
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         let session = self.session
-        DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
+        sessionQueue.async { if !session.inputs.isEmpty { session.startRunning() } }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         let session = self.session
-        DispatchQueue.global(qos: .userInitiated).async { session.stopRunning() }
+        sessionQueue.async { if session.isRunning { session.stopRunning() } }
+    }
+
+    private func addCloseButton() {
+        let close = UIButton(type: .system, primaryAction: UIAction(title: "Close") { [weak self] _ in
+            self?.onClose()
+        })
+        close.tintColor = .white
+        close.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(close)
+        NSLayoutConstraint.activate([
+            close.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            close.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+        ])
+    }
+
+    private func showMessage(_ text: String) {
+        let label = UILabel()
+        label.text = text
+        label.textColor = .white
+        label.numberOfLines = 0
+        label.textAlignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: view.layoutMarginsGuide.leadingAnchor),
+            label.trailingAnchor.constraint(equalTo: view.layoutMarginsGuide.trailingAnchor),
+        ])
     }
 
     nonisolated func metadataOutput(_ output: AVCaptureMetadataOutput,

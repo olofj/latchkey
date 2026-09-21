@@ -29,6 +29,9 @@ struct DashboardRootView: View {
     /// Settings is global (reachable from both the gate and the dashboard), so
     /// its sheet lives here.
     @State private var showingSettings = false
+    /// The token sheet waits while Settings is up, and until Settings has
+    /// finished dismissing: two sheets cannot stack (M4 review).
+    @State private var tokenSheetAllowed = true
 
     private var presentedWorkspace: Workspace? {
         workspaceManager.activeWorkspace
@@ -50,7 +53,15 @@ struct DashboardRootView: View {
                 ProgressView()
             }
         }
-        .sheet(isPresented: $showingSettings) {
+        .background {
+            if let ws = presentedWorkspace {
+                TokenSheetHost(session: ws.session, allowed: tokenSheetAllowed)
+            }
+        }
+        .onChange(of: showingSettings) { _, showing in
+            if showing { tokenSheetAllowed = false }
+        }
+        .sheet(isPresented: $showingSettings, onDismiss: { tokenSheetAllowed = true }) {
             if let ws = presentedWorkspace {
                 SettingsView(
                     viewModel: SettingsViewModel(
@@ -64,6 +75,26 @@ struct DashboardRootView: View {
                 )
             }
         }
+    }
+}
+
+/// Presents the dashboard's sign-in sheet (M4) from the root, next to
+/// Settings rather than under it, so a token request that arrives while
+/// Settings is open is shown when Settings closes instead of being lost.
+private struct TokenSheetHost: View {
+    @ObservedObject var session: SessionManager
+    let allowed: Bool
+
+    var body: some View {
+        Color.clear
+            .sheet(isPresented: Binding(
+                get: { session.isTokenSheetPresented && allowed },
+                set: { if !$0 { session.isTokenSheetPresented = false } }
+            )) {
+                TokenEntrySheet(session: session)
+                    .onAppear { session.isTokenSheetOnScreen = true }
+                    .onDisappear { session.isTokenSheetOnScreen = false }
+            }
     }
 }
 
@@ -170,7 +201,9 @@ private struct DashboardContent: View {
         .overlay(alignment: .top) {
             // The way back to the sheet after closing it: the page's own
             // banner is hidden (R22), so this is the only sign-in control.
-            if session.state == .needsToken, !session.isTokenSheetPresented {
+            // Keyed on the sheet being ON SCREEN, not requested: a deferred
+            // request must not hide the only way in (M4 review).
+            if session.state == .needsToken, !session.isTokenSheetOnScreen {
                 Button {
                     session.isTokenSheetPresented = true
                 } label: {
@@ -185,9 +218,15 @@ private struct DashboardContent: View {
                 .accessibilityIdentifier("session-signin-button")
             }
         }
-        .sheet(isPresented: $session.isTokenSheetPresented) {
-            TokenEntrySheet(session: session)
+#if LATCHKEY_TEST_HOOKS
+        .overlay(alignment: .bottom) {
+            // For UI tests: how many times the page asked for a token, so a
+            // sheet that flashes up and away between two looks is caught.
+            Text("\(session.authRequiredEvents)")
+                .accessibilityIdentifier("session-auth-required-count")
+                .opacity(0.01)
         }
+#endif
         .overlay(alignment: .bottomTrailing) {
             // A concrete accessibility element for UI automation. An
             // identifier applied to a container view is not reliably surfaced.

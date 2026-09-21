@@ -46,16 +46,20 @@ enum TokenInput {
     /// Real tokens are long signed strings; anything shorter is a typo.
     static let minimumBareTokenLength = 16
 
+    /// What chat apps and Markdown wrap around a pasted link: quotes,
+    /// brackets, backticks, bold markers, sentence punctuation. Never part of
+    /// a token (real tokens are dot-separated signed segments, and do not end
+    /// in a dot).
+    private static let wrapping = CharacterSet(charactersIn: "\"'<>()[]{},;:.!?…*`")
+
     static func parse(_ raw: String) -> Parsed? {
-        // A link: the first `token=` parameter anywhere in the text.
-        if let match = firstTokenParameter(in: raw) {
-            guard !match.token.isEmpty,
-                  match.token.unicodeScalars.allSatisfy({ tokenCharacters.contains($0) })
-            else { return nil }
-            return Parsed(token: match.token, linkHost: match.host)
+        // A link: the first VALID `token=` parameter anywhere in the text.
+        if containsTokenParameter(raw) {
+            return firstTokenParameter(in: raw).map { Parsed(token: $0.token, linkHost: $0.host) }
         }
         // Otherwise a bare token: one word, no URL syntax.
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: wrapping)
         guard trimmed.count >= minimumBareTokenLength,
               !trimmed.contains("://"),
               !trimmed.contains(where: { $0.isWhitespace || $0.isNewline }),
@@ -76,15 +80,20 @@ enum TokenInput {
         return URL(string: base + "/?token=" + token)
     }
 
+    private static func containsTokenParameter(_ text: String) -> Bool {
+        text.range(of: #"[?&]token="#, options: .regularExpression) != nil
+    }
+
     private static func firstTokenParameter(in text: String) -> (token: String, host: String?)? {
-        // Split into whitespace-separated words; the first word carrying a
-        // `token=` query parameter wins.
+        // Whitespace-separated words; the first one carrying a usable
+        // `token=` parameter wins. One with an unusable value is skipped, not
+        // fatal: a later link in the same paste may be fine.
         for word in text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }) {
-            let w = String(word).trimmingCharacters(in: CharacterSet(charactersIn: "\"'<>()[],;"))
+            let w = String(word).trimmingCharacters(in: wrapping)
             guard let range = w.range(of: #"[?&]token="#, options: .regularExpression) else { continue }
-            let value = w[range.upperBound...].prefix { $0 != "&" && $0 != "#" }
-            let host = URLComponents(string: w)?.host
-            return (String(value), host)
+            let value = String(w[range.upperBound...].prefix { $0 != "&" && $0 != "#" })
+            guard !value.isEmpty, value.unicodeScalars.allSatisfy({ tokenCharacters.contains($0) }) else { continue }
+            return (value, URLComponents(string: w)?.host)
         }
         return nil
     }

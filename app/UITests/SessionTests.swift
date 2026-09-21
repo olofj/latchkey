@@ -71,9 +71,12 @@ final class SessionTests: XCTestCase {
         element(app, "token-sheet-close").tap()
         XCTAssertTrue(element(app, "session-signin-button").waitForExistence(timeout: 5),
                       "with the sheet closed, the app keeps a way to sign in")
-        // Positive control for this check: testABrokenBridgeLeavesThePageBannerVisible.
-        XCTAssertFalse(app.webViews.textFields[Self.bannerPlaceholder].waitForExistence(timeout: 3),
-                       "the page's own banner is hidden (CSS only)")
+        // Past the 8 s handshake watchdog, so a healthy bridge is shown not to
+        // trigger the fallback (M4 review). Positive control for this query:
+        // testABrokenBridgeLeavesThePageBannerVisible.
+        try await Task.sleep(for: .seconds(11))
+        XCTAssertFalse(app.webViews.textFields[Self.bannerPlaceholder].exists,
+                       "the page's own banner stays hidden (CSS only), past the watchdog")
         element(app, "session-signin-button").tap()
         XCTAssertTrue(sheet.waitForExistence(timeout: 5), "the button reopens the sheet")
     }
@@ -102,7 +105,7 @@ final class SessionTests: XCTestCase {
         try await signIn(app, kind: "cli")
         let state = try await gatewayState()
         XCTAssertEqual(counter(state, "redemptions"), 1, "exactly one redemption")
-        XCTAssertGreaterThanOrEqual(counter(state, "auth_me_ok"), 1, "the app confirmed the session by API (R21, R38)")
+        XCTAssertGreaterThanOrEqual(counter(state, "app_auth_checks"), 1, "the app confirmed the session by API (R21, R38)")
         XCTAssertFalse(UIPasteboard.general.hasStrings, "the pasted sign-in link is cleared from the clipboard (R23)")
         XCTAssertFalse(element(app, "session-signin-button").exists)
     }
@@ -137,16 +140,20 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
         try await signIn(app, kind: "cli")
         let start = try await gatewayState()
+        let asked = authRequiredCount(app)
 
-        for i in 0..<20 {
-            if i == 10 { _ = try await Self.post("\(Self.gatewayControl)/__expire") }
-            try await Task.sleep(for: .seconds(2))
-            XCTAssertFalse(element(app, "token-sheet").exists, "the sheet must never appear (t=\(2 * (i + 1))s)")
-            XCTAssertFalse(element(app, "session-signin-button").exists, "no sign-in prompt (t=\(2 * (i + 1))s)")
-        }
+        try await Task.sleep(for: .seconds(20))
+        let beforeExpiry = try await gatewayState()
+        _ = try await Self.post("\(Self.gatewayControl)/__expire")
+        try await Task.sleep(for: .seconds(20))
         let end = try await gatewayState()
+        XCTAssertEqual(authRequiredCount(app), asked,
+                       "the page never asked for a token (counted, so a flash between looks is caught)")
+        XCTAssertFalse(element(app, "token-sheet").exists)
         let rotations = counter(end, "rotations") - counter(start, "rotations")
         XCTAssertGreaterThanOrEqual(rotations, 5, "the page must have refreshed repeatedly; saw \(rotations)")
+        XCTAssertGreaterThan(counter(end, "denials"), counter(beforeExpiry, "denials"),
+                             "the forced expiry must actually have hit a 403 (the interceptor path)")
         XCTAssertEqual(violations(end), 0, "no superseded refresh token reused: \(end["violations"] ?? [])")
         XCTAssertEqual(counter(end, "redemptions"), 1, "no re-sign-in happened")
     }
@@ -160,10 +167,24 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
         try await signIn(app, kind: "cli")
 
+        // Revoke the chain but leave the access session valid, as reuse
+        // detection does: the page's scheduler is then the first to hit the
+        // revoked chain (its refresh is due every ~5 s), which is the path
+        // that reloads the page. Expiring access too would let the 403
+        // interceptor get there first, with no reload -- a race.
+        let shellLoads = counter(try await gatewayState(), "shell_loads")
         _ = try await Self.post("\(Self.gatewayControl)/__revoke")
-        _ = try await Self.post("\(Self.gatewayControl)/__expire")
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
-                      "a revoked chain ends in the native sheet")
+        var reloaded = shellLoads
+        for _ in 0..<20 where reloaded <= shellLoads {
+            try await Task.sleep(for: .seconds(1))
+            reloaded = counter(try await gatewayState(), "shell_loads")
+        }
+        XCTAssertGreaterThan(reloaded, shellLoads,
+                             "refresh_chain_revoked reloads the page (location.assign('/'))")
+        // The reloaded document's bridge must be there: when its access
+        // session lapses, the sheet comes from THAT document.
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 60),
+                      "a revoked chain ends in the native sheet, from the reloaded page")
 
         try await signIn(app, kind: "cli")
         let state = try await gatewayState()
@@ -183,12 +204,17 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
         try await signIn(app, kind: "cli")
 
-        _ = try await Self.post("\(Self.gatewayControl)/__restart")
+        let asked = authRequiredCount(app)
+        let wsBefore = counter(try await gatewayState(), "ws_opens")
+        // A real restart: every connection drops and the gateway is gone for
+        // a few seconds (M4 review: the zero-downtime restart proved less).
+        _ = try await Self.post("\(Self.gatewayControl)/__restart?down=3")
         let before = counter(try await gatewayState(), "rotations")
-        for _ in 0..<8 {
-            try await Task.sleep(for: .seconds(2))
-            XCTAssertFalse(element(app, "token-sheet").exists, "a CLI session must survive the restart")
-        }
+        try await Task.sleep(for: .seconds(16))
+        XCTAssertEqual(authRequiredCount(app), asked, "a CLI session must survive the restart")
+        let wsAfter = counter(try await gatewayState(), "ws_opens")
+        XCTAssertGreaterThan(wsAfter, wsBefore,
+                             "the page's WebSocket reconnected after the restart")
         let after = counter(try await gatewayState(), "rotations")
         XCTAssertGreaterThan(after, before, "and keep rotating after it")
     }
@@ -219,11 +245,10 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
         try await signIn(app, kind: "cli")
 
+        let asked = authRequiredCount(app)
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
-        for _ in 0..<10 {
-            try await Task.sleep(for: .seconds(2))
-            XCTAssertFalse(element(app, "token-sheet").exists, "an unreachable gateway is not a sign-out")
-        }
+        try await Task.sleep(for: .seconds(20))
+        XCTAssertEqual(authRequiredCount(app), asked, "an unreachable gateway is not a sign-out")
         let before = counter(try await gatewayState(), "rotations")
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
         var recovered = false
@@ -233,8 +258,80 @@ final class SessionTests: XCTestCase {
             if counter(try await gatewayState(), "rotations") > before { recovered = true; break }
         }
         XCTAssertTrue(recovered, "the page refreshed again once the gateway was reachable")
+        XCTAssertEqual(authRequiredCount(app), asked, "recovery needed no token")
         let finalState = try await gatewayState()
         XCTAssertEqual(violations(finalState), 0)
+    }
+
+    // MARK: - M4 review: what real gateways do that the first fake did not
+
+    /// `kirocrew logout` bumps the revocation generation: the access session
+    /// AND the refresh chain are refused (401 invalid_refresh, no cookie
+    /// clear, so no reload). The sheet comes through the page's 403
+    /// interceptor, and a new token recovers.
+    func testSignOutEverywhereShowsTheSheet() async throws {
+        _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+
+        _ = try await Self.post("\(Self.gatewayControl)/__logout-all")
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+                      "signed out everywhere: the app asks for a token")
+        try await signIn(app, kind: "cli")
+        let redemptions = counter(try await gatewayState(), "redemptions")
+        XCTAssertEqual(redemptions, 2)
+    }
+
+    /// A refresh the gateway carried out but whose response was lost: the
+    /// page still holds the consumed token. Its next attempt comes inside
+    /// the 60 s grace window, gets the same tokens re-served, and the session
+    /// carries on — no sheet, no lineage violation.
+    func testALostRefreshResponseIsRecoveredByTheGraceWindow() async throws {
+        _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+        let asked = authRequiredCount(app)
+
+        _ = try await Self.post("\(Self.gatewayControl)/__drop-next-refresh")
+        var state: [String: Any] = [:]
+        for _ in 0..<30 {
+            try await Task.sleep(for: .seconds(2))
+            state = try await gatewayState()
+            if counter(state, "refresh_dropped") > 0, counter(state, "grace_reserves") > 0 { break }
+        }
+        XCTAssertEqual(counter(state, "refresh_dropped"), 1, "a refresh response was lost")
+        XCTAssertGreaterThanOrEqual(counter(state, "grace_reserves"), 1, "the retry came inside the grace window")
+        XCTAssertEqual(violations(state), 0)
+        XCTAssertEqual(authRequiredCount(app), asked, "no token needed")
+    }
+
+    /// The same lost response, but the gateway restarts before the retry:
+    /// the grace cache is memory-only, so the retry looks like token reuse
+    /// and the chain is revoked. KiroCrew behaviour, not something the app
+    /// can prevent — what the app must do is recover through the sheet.
+    func testALostRefreshAtARestartEndsInTheSheet() async throws {
+        _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+
+        _ = try await Self.post("\(Self.gatewayControl)/__drop-next-refresh")
+        for _ in 0..<15 {
+            try await Task.sleep(for: .seconds(1))
+            if counter(try await gatewayState(), "refresh_dropped") > 0 { break }
+        }
+        _ = try await Self.post("\(Self.gatewayControl)/__restart")
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 75),
+                      "the chain is revoked by the retry; the app asks for a token")
+        let afterRestart = try await gatewayState()
+        XCTAssertGreaterThanOrEqual(violations(afterRestart), 1,
+                                    "the revocation came from the retried (superseded) token, as on a real gateway")
+        try await signIn(app, kind: "cli")
     }
 
     // MARK: - Helpers
@@ -247,6 +344,9 @@ final class SessionTests: XCTestCase {
             "-TestStatusFixture", OfflineHarnessTests.fixture(suffix: "tail-scale.ts.net", peers: ["gw"]),
             "-TestProxyEndpoint", OfflineHarnessTests.proxyEndpoint,
             "-TestProxyCredential", OfflineHarnessTests.proxyCredential,
+            // Keep every test's web data: test-session.sh's R1 scan must see
+            // all of it, not only the last test's (M4 review).
+            "-UITestKeepWebData",
         ] + extra
         app.launch()
         return app
@@ -263,7 +363,7 @@ final class SessionTests: XCTestCase {
             with: try await Self.post("\(Self.gatewayControl)/__mint?kind=\(kind)")) as? [String: Any]
         let url = try XCTUnwrap(minted?["url"] as? String)
         let link = try XCTUnwrap(minted?["link"] as? String)
-        let before = counter(try await gatewayState(), "auth_me_ok")
+        let before = counter(try await gatewayState(), "app_auth_checks")
         UIPasteboard.general.string = """
             Dashboard sign-in links (valid 5 minutes):
               http://localhost:5476/?token=\(link)
@@ -276,8 +376,15 @@ final class SessionTests: XCTestCase {
         paste.tap()
         XCTAssertTrue(element(app, "token-sheet").waitForNonExistence(timeout: 30),
                       "signing in dismisses the sheet")
-        let after = counter(try await gatewayState(), "auth_me_ok")
-        XCTAssertGreaterThan(after, before, "the app confirmed the session with /api/auth/me")
+        let after = counter(try await gatewayState(), "app_auth_checks")
+        XCTAssertGreaterThan(after, before, "the APP confirmed the session with its own /api/auth/me")
+    }
+
+    /// How many times the page has asked for a token in this launch.
+    private func authRequiredCount(_ app: XCUIApplication) -> Int {
+        let marker = element(app, "session-auth-required-count")
+        guard marker.waitForExistence(timeout: 5) else { return -1 }
+        return Int(marker.label) ?? -1
     }
 
     private func typeToken(_ app: XCUIApplication, _ text: String) {

@@ -64,7 +64,15 @@ final class SessionManager: NSObject, ObservableObject {
     }
 
     @Published private(set) var state: State = .unknown
+    /// The REQUEST to show the sheet. Presentation can be deferred (Settings
+    /// is open), so views that must know whether the sheet is actually up
+    /// read `isTokenSheetOnScreen`.
     @Published var isTokenSheetPresented = false
+    /// Set by the sheet itself (onAppear/onDisappear).
+    @Published var isTokenSheetOnScreen = false
+    /// How many `mc-auth-required` events arrived (test builds show it, so a
+    /// sheet that flashes up and away between two looks is still caught).
+    @Published private(set) var authRequiredEvents = 0
     /// The last thing worth telling the user on the sheet, if any.
     @Published private(set) var message: String?
     @Published private(set) var isRedeeming = false
@@ -81,6 +89,9 @@ final class SessionManager: NSObject, ObservableObject {
     private var watchdog: Task<Void, Never>?
     private var redemption: Redemption?
     private var redemptionTimer: Task<Void, Never>?
+    /// Bumped by every `mc-auth-required`. A check started before the bump
+    /// cannot mark the session active: the page has spoken since (M4 review).
+    private var authGeneration = 0
 
     private struct Redemption {
         /// `UIPasteboard.changeCount` when the token was pasted; nil when it
@@ -123,8 +134,20 @@ final class SessionManager: NSObject, ObservableObject {
     }
 
     func navigationFinished() {
+        if redemption != nil {
+            Task { await verify(afterRedemption: true) }
+        } else if state != .active {
+            // A signed-in document fires no event: without this, a page that
+            // recovered on its own would stay "needsToken" (M4 review).
+            Task { await verify(afterRedemption: false) }
+        }
+    }
+
+    /// The sign-in navigation itself failed (network, TLS): say so now rather
+    /// than after the redemption timeout.
+    func signInLoadFailed() {
         guard redemption != nil else { return }
-        Task { await verify(afterRedemption: true) }
+        failRedemption(because: "Couldn't reach the gateway to sign in. Check the connection and try again.")
     }
 
     // MARK: - The bridge
@@ -143,10 +166,17 @@ final class SessionManager: NSObject, ObservableObject {
         case "ready":
             readySinceNavigationStart = true
             watchdog?.cancel()
-            if state == .unknown { Task { await verify(afterRedemption: false) } }
+            if state != .active { Task { await verify(afterRedemption: false) } }
         case "auth-required":
             logger.log("Session: the page needs a token")
-            if redemption != nil { failRedemption() }
+            authRequiredEvents += 1
+            authGeneration += 1
+            if redemption != nil {
+                // Any script on the page can dispatch this event. While a
+                // sign-in is in flight, believe it only if the server agrees.
+                Task { await confirmAuthRequiredDuringRedemption() }
+                return
+            }
             state = .needsToken
             isTokenSheetPresented = true
         case "auth-cleared":
@@ -180,6 +210,10 @@ final class SessionManager: NSObject, ObservableObject {
         redemptionTimer = Task { [weak self] in
             try? await Task.sleep(for: Self.redemptionTimeout)
             guard !Task.isCancelled, let self, self.redemption != nil else { return }
+            // Ask once before calling it a failure: a slow relay can finish
+            // the load after the timer (M4 review).
+            await self.verify(afterRedemption: true)
+            guard self.redemption != nil else { return }
             self.failRedemption(because: "The gateway did not answer. Check the connection and try again.")
         }
         logger.log("Session: redeeming a token at \(origin.redactedForLog)")
@@ -201,8 +235,19 @@ final class SessionManager: NSObject, ObservableObject {
     // MARK: - Verification
 
     private func verify(afterRedemption: Bool) async {
-        guard let status = await host?.sessionFetchStatus("/api/auth/me") else { return }
+        let generation = authGeneration
+        var status = await host?.sessionFetchStatus("/api/auth/me")
+        if status == nil {
+            // One retry: a single failed fetch must not strand the session.
+            try? await Task.sleep(for: .seconds(1))
+            status = await host?.sessionFetchStatus("/api/auth/me")
+        }
+        guard let status else { return }
         if status == 200 {
+            guard generation == authGeneration else {
+                logger.log("Session: ignoring a stale check; the page asked for a token since")
+                return
+            }
             if state != .active { logger.log("Session: active") }
             state = .active
             isTokenSheetPresented = false
@@ -216,6 +261,17 @@ final class SessionManager: NSObject, ObservableObject {
         } else if afterRedemption, redemption != nil {
             failRedemption()
         }
+    }
+
+    private func confirmAuthRequiredDuringRedemption() async {
+        let status = await host?.sessionFetchStatus("/api/auth/me")
+        if status == 200 {
+            logger.log("Session: auth-required during sign-in, but the session answers; ignored")
+            return
+        }
+        if redemption != nil { failRedemption() }
+        state = .needsToken
+        isTokenSheetPresented = true
     }
 
     private func failRedemption(because reason: String? = nil) {
@@ -243,7 +299,7 @@ final class SessionManager: NSObject, ObservableObject {
     /// `kirocrew token` prints a localhost link first; its host is not a
     /// warning sign.
     private static func isLocalCLIHost(_ host: String) -> Bool {
-        host == "localhost" || host == "127.0.0.1" || host == "kirocrew.localhost"
+        ["localhost", "127.0.0.1", "::1", "[::1]", "kirocrew.localhost"].contains(host)
     }
 
     static func matches(_ origin: WKSecurityOrigin, _ allowed: URL?) -> Bool {

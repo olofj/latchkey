@@ -466,7 +466,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         navError = (error, attemptedURL)
         navErrorMessage = "More than one tailnet device matches “\(host)”: \(candidates.joined(separator: ", ")). Enter the full name."
         navErrorKind = .retrieval
-        navErrorURLString = attemptedURL.absoluteString
+        navErrorURLString = Self.withoutSignInToken(attemptedURL).absoluteString
         url = attemptedURL
         failedInitialURL = attemptedURL == initialURL ? attemptedURL : nil
     }
@@ -477,12 +477,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
         navError = (error, attemptedURL)
         navErrorMessage = "No device named “\(host)” exists in this tailnet. Check the name and try again."
         navErrorKind = .retrieval
-        navErrorURLString = attemptedURL.absoluteString
+        navErrorURLString = Self.withoutSignInToken(attemptedURL).absoluteString
         url = attemptedURL
         failedInitialURL = attemptedURL == initialURL ? attemptedURL : nil
     }
 
-    func navigationError(_ error: Error, for url: URL) {
+    func navigationError(_ error: Error, for failedURL: URL) {
+        // A failed sign-in load must not put its token on the error page, in
+        // `url`, or into a ⌘R retry (M4 review).
+        let url = Self.withoutSignInToken(failedURL)
         logger.log("Navigation error for \(url.redactedForLog): \(LogRedaction.describe(error))")
         navError = (error, url)
         navErrorMessage = Self.describe(error)
@@ -719,6 +722,7 @@ extension BrowserViewModel: WKNavigationDelegate {
         guard !(ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled) else { return }
         if handlePolicyInterruption(ns) { return }
         let failedURL = ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? url ?? initialURL
+        if Self.carriesSignInToken(failedURL) { session?.signInLoadFailed() }
         if retryStartupLoadIfAppropriate(error, failedURL: failedURL) { return }
         startupLoad = nil
         navigationError(error, for: failedURL)
@@ -732,6 +736,7 @@ extension BrowserViewModel: WKNavigationDelegate {
         // provisional destination or the old committed page depending on the
         // failure phase, so it is never used as address-bar truth here.
         let failedURL = ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? url ?? initialURL
+        if Self.carriesSignInToken(failedURL) { session?.signInLoadFailed() }
         if retryStartupLoadIfAppropriate(error, failedURL: failedURL) { return }
         startupLoad = nil
         navigationError(error, for: failedURL)
@@ -878,7 +883,9 @@ extension BrowserViewModel: SessionHost {
         guard let webView else { return nil }
         do {
             let result = try await webView.callAsyncJavaScript(
-                "const r = await fetch(path, {credentials: 'same-origin', cache: 'no-store'}); return r.status;",
+                // The header only marks the app's own check, so the test gateway
+                // can tell it from the page's identical call; servers ignore it.
+                "const r = await fetch(path, {credentials: 'same-origin', cache: 'no-store', headers: {'X-Latchkey-Check': '1'}}); return r.status;",
                 arguments: ["path": path], in: nil, contentWorld: SessionManager.world)
             return (result as? NSNumber)?.intValue
         } catch {
@@ -890,5 +897,21 @@ extension BrowserViewModel: SessionHost {
     func revealSessionBanner() {
         webView?.evaluateJavaScript(PageScriptSources.revealSessionBanner, in: nil,
                                     in: SessionManager.world) { _ in }
+    }
+}
+
+extension BrowserViewModel {
+    nonisolated static func carriesSignInToken(_ url: URL) -> Bool {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.contains { $0.name == "token" } ?? false
+    }
+
+    /// `url` without its `token` query parameter (everything else kept).
+    nonisolated static func withoutSignInToken(_ url: URL) -> URL {
+        guard carriesSignInToken(url),
+              var c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        c.queryItems = c.queryItems?.filter { $0.name != "token" }
+        if c.queryItems?.isEmpty == true { c.queryItems = nil }
+        return c.url ?? url
     }
 }

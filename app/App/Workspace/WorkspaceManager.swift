@@ -80,7 +80,11 @@ final class WorkspaceManager: ObservableObject {
             // a few suite runs — and scripts/test-offline.sh's R1 disk scan
             // then read other suites' caches (M4). The new store is not
             // created yet and is never in the list removed here.
-            Self.removeWebsiteDataStores(except: d.dataStoreUUID)
+            // `-UITestKeepWebData` opts out, for suites whose leak scan must
+            // see every test's data, not only the last one's (M4 review).
+            if !TestHooks.flag("-UITestKeepWebData") {
+                Self.removeWebsiteDataStores(except: d.dataStoreUUID)
+            }
         }
 
         // UI-test hook: wipe every workspace's tsnet state dir so the next
