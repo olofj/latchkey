@@ -116,6 +116,10 @@ enum WorkspaceStore {
     /// suite. The XCTest environment check also protects newly-added tests
     /// that forget to add a reset hook. Neither signal exists during a normal
     /// app launch.
+    ///
+    /// Deliberately NOT behind TestHooks (R15). It grants no capability — it
+    /// only moves a test run's data to a separate directory — and it has to
+    /// hold in every build, so a test run can never touch a real session.
     private static let isUITestProcess: Bool = {
         let process = ProcessInfo.processInfo
         if process.arguments.contains(where: { $0.hasPrefix("-UITest") }) {

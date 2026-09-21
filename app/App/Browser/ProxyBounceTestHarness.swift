@@ -12,6 +12,9 @@
 //  a lost fetch observable without a real tailnet/auth key.
 //
 
+// Hermetic in-app harness (-UITestProxyBounceHarness). Test builds only (R15).
+#if LATCHKEY_TEST_HOOKS
+
 import SwiftUI
 import Combine
 import WebKit
@@ -150,9 +153,7 @@ private final class ProxyBounceHarnessModel: ObservableObject {
 
     /// R7: kill the content process and let the browser recover by itself.
     func killWebContent() {
-#if DEBUG
         browser.simulateContentProcessTermination()
-#endif
     }
 
     func bounce() {
@@ -204,3 +205,5 @@ struct ProxyBounceTestHarnessView: View {
         }
     }
 }
+
+#endif // LATCHKEY_TEST_HOOKS

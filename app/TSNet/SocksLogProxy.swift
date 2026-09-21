@@ -56,8 +56,11 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
     /// `APERTURE_NO_SOCKS_LOG=1` to point WebKit directly at tsnet (useful to
     /// rule the relay itself out of any investigation).
     nonisolated static func isEnabled() -> Bool {
-        if ProcessInfo.processInfo.environment["APERTURE_NO_SOCKS_LOG"] == "1" { return false }
-        return !ProcessInfo.processInfo.arguments.contains("-NoSocksLog")
+        // The off switch is a test hook (R15); R10's anti-leak variant needs
+        // it, because with the relay on WebKit always talks to an in-app
+        // listener, which masks the proxy-unreachable path.
+        if TestHooks.environment("APERTURE_NO_SOCKS_LOG") == "1" { return false }
+        return !TestHooks.flag("-NoSocksLog")
     }
 
     private let upstreamHost: String

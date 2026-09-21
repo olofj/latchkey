@@ -107,34 +107,23 @@ final class TSNetManager {
     }
 
     /// The auth key supplied at launch, if any. See the doc comment above the
-    /// class for the resolution order. `nonisolated` so it's safe to call from
-    /// any isolation context.
-    /// doc comment for the resolution order. `nonisolated` so it's safe to
-    /// call from any isolation context.
+    /// class for the resolution order. Test builds only (R15): in any other
+    /// build an auth key from a paired Mac could join the app to a foreign
+    /// tailnet.
     nonisolated static func launchAuthKey() -> String? {
-        let env = ProcessInfo.processInfo.environment
-        if let key = env["APERTURE_AUTHKEY"], !key.isEmpty {
-            return key
-        }
-        let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "-AuthKey"), i + 1 < args.count {
-            let key = args[i + 1]
-            if !key.isEmpty { return key }
-        }
-        return nil
+        TestHooks.environment("APERTURE_AUTHKEY") ?? TestHooks.value("-AuthKey")
     }
 
     /// Whether the node should register as ephemeral. Honors either the
     /// `APERTURE_EPHEMERAL` env var ("1") or the `-Ephemeral` launch arg.
+    /// Test builds only (R15); a real install is never ephemeral (R6).
     nonisolated static func launchEphemeral() -> Bool {
-        let env = ProcessInfo.processInfo.environment
-        if let v = env["APERTURE_EPHEMERAL"], v == "1" { return true }
-        return ProcessInfo.processInfo.arguments.contains("-Ephemeral")
+        TestHooks.environment("APERTURE_EPHEMERAL") == "1" || TestHooks.flag("-Ephemeral")
     }
 
+    /// Upstream's L2 recovery hooks (R14 uses them). Test builds only (R15).
     nonisolated static func tcpChaosTestRequested() -> Bool {
-        ProcessInfo.processInfo.arguments.contains("-UITestDefunctLoopback")
-            || ProcessInfo.processInfo.arguments.contains("-UITestShutdownTCPConnections")
+        TestHooks.flag("-UITestDefunctLoopback") || TestHooks.flag("-UITestShutdownTCPConnections")
     }
 
     nonisolated private func startTailscale() async {
@@ -549,10 +538,9 @@ final class TSNetManager {
     /// device, and with the exit-node toggle removed there is no longer an
     /// on-device equivalent — Settings → Routing is the on-device diagnostic.
     nonisolated static func proxyEverythingOverride() -> Bool {
-        if ProcessInfo.processInfo.environment["APERTURE_PROXY_EVERYTHING"] == "1" {
-            return true
-        }
-        return ProcessInfo.processInfo.arguments.contains("-ProxyEverything")
+        // Test builds only (R4, R15): in any other build nothing can switch
+        // public traffic onto the proxy.
+        TestHooks.environment("APERTURE_PROXY_EVERYTHING") == "1" || TestHooks.flag("-ProxyEverything")
     }
 
     @MainActor
@@ -567,7 +555,7 @@ final class TSNetManager {
             self.model.tcpChaosTestStatus = "damaging"
             logger.log("TCP chaos test: defuncting the tsnet loopback listener")
             do {
-                if ProcessInfo.processInfo.arguments.contains("-UITestDefunctLoopback") {
+                if TestHooks.flag("-UITestDefunctLoopback") {
                     try await node.debugDefunctLoopback()
                 } else {
                     try await node.debugShutdownTCPConnections()

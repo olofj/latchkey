@@ -56,12 +56,12 @@ trap cleanup EXIT
 
 if [[ "${NO_BUILD:-0}" != 1 ]]; then
     xcodebuild build-for-testing -project Latchkey.xcodeproj -scheme Latchkey \
-        -configuration Debug -destination "$DEST" -derivedDataPath "$DERIVED" \
+        -configuration Testing -destination "$DEST" -derivedDataPath "$DERIVED" \
         >"$LOG_DIR/build.log" 2>&1
 fi
 
 xcodebuild test-without-building -project Latchkey.xcodeproj -scheme Latchkey \
-    -configuration Debug -destination "$DEST" -derivedDataPath "$DERIVED" \
+    -configuration Testing -destination "$DEST" -derivedDataPath "$DERIVED" \
     -only-testing:LatchkeyUITests/LatchkeyUITests/testExternalProcessSuspendRecoversWithoutReloadingPage \
     >"$LOG_DIR/test.log" 2>&1 &
 TEST_PID=$!

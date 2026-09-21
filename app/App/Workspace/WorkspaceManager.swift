@@ -54,8 +54,6 @@ final class WorkspaceManager: ObservableObject {
         // the node keys, WebKit's store the 30-day refresh cookie.
         logger.log(BackupExclusion.apply(appSupportRoot: WorkspaceStore.appSupportDir))
 
-        let args = ProcessInfo.processInfo.arguments
-
         // Load the workspace list (or seed a single default on first launch).
         let loaded = WorkspaceStore.load()
         var defs: [WorkspaceDefinition]
@@ -71,7 +69,7 @@ final class WorkspaceManager: ObservableObject {
 
         // Hermetic multi-workspace UI-test hook. Remove all prior workspace
         // data and seed one fresh definition before any tsnet node is created.
-        if args.contains("-UITestResetWorkspaces") {
+        if TestHooks.flag("-UITestResetWorkspaces") {
             for d in defs { WorkspaceStore.removeWorkspaceDir(d.id) }
             let d = WorkspaceDefinition.makeDefault()
             defs = [d]
@@ -83,7 +81,7 @@ final class WorkspaceManager: ObservableObject {
         // silently re-using a login a prior test left behind. Harmless in
         // normal use — the launch argument is never set outside UI tests.
         // Must run before the workspaces (and their nodes) are created.
-        if args.contains("-UITestResetLogin") {
+        if TestHooks.flag("-UITestResetLogin") {
             for d in defs { try? FileManager.default.removeItem(at: WorkspaceStore.stateDir(d.id)) }
         }
 
@@ -91,7 +89,7 @@ final class WorkspaceManager: ObservableObject {
         // connected tests are hermetic (a prior test may have left a non-default
         // value). Mirrors the old `HomePage.standard.url = default` in
         // `LatchkeyApp.init`.
-        if args.contains("-UITestResetHomePage") {
+        if TestHooks.flag("-UITestResetHomePage") {
             defs = defs.map {
                 var d = $0
                 d.homePageURL = HomePage.defaultURL
@@ -103,8 +101,8 @@ final class WorkspaceManager: ObservableObject {
         // than a particular tailnet web service. Keeping those tests on a
         // direct HTTPS page prevents an unrelated private-service outage from
         // masquerading as a login failure.
-        if let index = args.firstIndex(of: "-UITestHomePage"), index + 1 < args.count {
-            let testURL = GatewayAddress.persistable(args[index + 1])
+        if let raw = TestHooks.value("-UITestHomePage") {
+            let testURL = GatewayAddress.persistable(raw)
             defs = defs.map {
                 var d = $0
                 d.homePageURL = testURL

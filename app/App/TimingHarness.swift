@@ -37,6 +37,9 @@
 //  ConnectionTypeResolver. See `runPeerMode` and timing/README.md.
 //    -TimingPeer ai [-TimingPeerWatch 30] [-TimingPeerTraffic 12] [-TimingPeerUseUp]
 //
+// Upstream's latency harness (-TimingHarness). Test builds only (R15).
+#if LATCHKEY_TEST_HOOKS
+
 import Foundation
 import OSLog
 import SwiftUI
@@ -734,3 +737,5 @@ private func runTraffic(session: URLSession, url: URL, until deadline: Date) asy
     }
     return (gets, ok, firstErr)
 }
+
+#endif // LATCHKEY_TEST_HOOKS

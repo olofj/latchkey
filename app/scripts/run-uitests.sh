@@ -114,7 +114,7 @@ if [[ "$BUILD" -eq 1 ]]; then
     echo "▶ Building for testing…"
     xcodebuild build-for-testing \
         -project Latchkey.xcodeproj -scheme Latchkey \
-        -configuration Debug -destination "$DEST" \
+        -configuration Testing -destination "$DEST" \
         -derivedDataPath "$DERIVED" "${SANDBOX_FLAGS[@]}" 2>&1 | tee "$COMBINED"
 fi
 
@@ -122,7 +122,7 @@ echo "▶ Running tests…"
 set +e
 xcodebuild test-without-building \
     -project Latchkey.xcodeproj -scheme Latchkey \
-    -configuration Debug -destination "$DEST" \
+    -configuration Testing -destination "$DEST" \
     -derivedDataPath "$DERIVED" 2>&1 | tee -a "$COMBINED"
 TEST_RC=${PIPESTATUS[0]}
 set -e

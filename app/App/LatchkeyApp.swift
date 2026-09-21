@@ -14,6 +14,12 @@ import TailscaleKit
 
 @main
 struct LatchkeyApp: App {
+    /// A test harness owns the window instead of the dashboard (R15: test
+    /// builds only; always false elsewhere).
+    private static var harnessMode: Bool {
+        TestHooks.flag("-TimingHarness") || TestHooks.flag("-UITestProxyBounceHarness")
+    }
+
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var workspaceManager: WorkspaceManager?
@@ -22,30 +28,35 @@ struct LatchkeyApp: App {
         // Only construct the (heavy) WorkspaceManager — which initializes the
         // process logger and starts tsnet nodes — in normal mode. Harness modes
         // bypass it and own their node lifecycle.
-        if !ProcessInfo.processInfo.arguments.contains("-TimingHarness")
-            && !ProcessInfo.processInfo.arguments.contains("-UITestProxyBounceHarness") {
+        if !Self.harnessMode {
             _workspaceManager = State(initialValue: WorkspaceManager())
         }
     }
 
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("-TimingHarness") {
+#if LATCHKEY_TEST_HOOKS
+            if TestHooks.flag("-TimingHarness") {
                 TimingHarnessView()
-            } else if ProcessInfo.processInfo.arguments.contains("-UITestProxyBounceHarness") {
+            } else if TestHooks.flag("-UITestProxyBounceHarness") {
                 ProxyBounceTestHarnessView()
             } else if let workspaceManager {
                 DashboardRootView(workspaceManager: workspaceManager)
             } else {
                 ProgressView()
             }
+#else
+            if let workspaceManager {
+                DashboardRootView(workspaceManager: workspaceManager)
+            } else {
+                ProgressView()
+            }
+#endif
         }
         .onChange(of: scenePhase) { _, newPhase in
             // Don't fan scenePhase to WorkspaceManager in harness mode (there
             // is none); the harness manages its own node lifecycles.
-            guard !ProcessInfo.processInfo.arguments.contains("-TimingHarness"),
-                  !ProcessInfo.processInfo.arguments.contains("-UITestProxyBounceHarness")
-            else { return }
+            guard !Self.harnessMode else { return }
             guard let workspaceManager else { return }
             switch newPhase {
             case .background:

@@ -173,8 +173,7 @@ private struct DashboardContent: View {
                 .opacity(0.01)
         }
         .overlay(alignment: .bottomLeading) {
-            if (ProcessInfo.processInfo.arguments.contains("-UITestDefunctLoopback")
-                || ProcessInfo.processInfo.arguments.contains("-UITestShutdownTCPConnections")),
+            if TSNetManager.tcpChaosTestRequested(),
                let status = workspace.model.tcpChaosTestStatus {
                 Text(status)
                     .accessibilityIdentifier("tcp-chaos-test-status")

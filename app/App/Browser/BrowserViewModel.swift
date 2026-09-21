@@ -571,7 +571,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     private func maybeDumpLoadedPage(_ view: WKWebView) {
-        guard ProcessInfo.processInfo.arguments.contains("-UITestLogResponses") else { return }
+        guard TestHooks.flag("-UITestLogResponses") else { return }
         let js = "JSON.stringify({href:location.origin+location.pathname,title:document.title,contentType:document.contentType,body:(document.body?document.body.innerText:'(no body)').substring(0,300)})"
         view.evaluateJavaScript(js) { result, error in
             if let error { logger.log("LOADED-PAGE error: \(error)") }
@@ -667,7 +667,7 @@ extension BrowserViewModel: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
-        if ProcessInfo.processInfo.arguments.contains("-UITestLogResponses") {
+        if TestHooks.flag("-UITestLogResponses") {
             logger.log("RESP-LOG action: \(navigationAction.request.url?.redactedForLog ?? "(nil)") type=\(navigationAction.navigationType.rawValue)")
         }
         // Exactly one destination (R3). A nil targetFrame is a new-window
@@ -691,7 +691,7 @@ extension BrowserViewModel: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
-        if ProcessInfo.processInfo.arguments.contains("-UITestLogResponses") {
+        if TestHooks.flag("-UITestLogResponses") {
             let response = navigationResponse.response
             let url = response.url?.redactedForLog ?? "(nil)"
             if let http = response as? HTTPURLResponse {
@@ -749,12 +749,11 @@ extension BrowserViewModel: WKNavigationDelegate {
 }
 
 extension BrowserViewModel {
-#if DEBUG
+#if LATCHKEY_TEST_HOOKS
     /// Test hook (R7): kills this web view's content process the way iOS
     /// does under memory pressure, so the recovery path can be exercised end
-    /// to end. Uses WebKit's private `_killWebContentProcess`, which is why
-    /// it is compiled into DEBUG builds only; revision R15 moves every test
-    /// hook behind a dedicated flag.
+    /// to end. Uses WebKit's private `_killWebContentProcess`, which is why it
+    /// is compiled into test builds only (R15).
     func simulateContentProcessTermination() {
         let selector = NSSelectorFromString("_killWebContentProcess")
         guard let webView, webView.responds(to: selector) else {
