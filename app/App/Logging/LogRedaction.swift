@@ -43,6 +43,24 @@ extension URL {
 
 enum LogRedaction {
     /// See `URL.redactedForLog`.
+    /// Login links carry their secret in the PATH, where the query/fragment
+    /// rule does not reach: Tailscale's `https://login.tailscale.com/a/<code>`
+    /// (anyone holding it can finish the login -- with THEIR account) and a
+    /// control plane's `/auth/<id>` (testcontrol, headscale). The path is
+    /// kept up to the secret, so the line still says what it was (M8.3).
+    /// A secret is one alphanumeric segment of 8+ characters after the
+    /// prefix; an ordinary short path like `/a/b` is left alone.
+    nonisolated static func redactSecretPath(_ path: String) -> String {
+        for prefix in ["/a/", "/auth/"] where path.hasPrefix(prefix) {
+            let rest = path.dropFirst(prefix.count)
+            let segment = rest.prefix { $0 != "/" }
+            if segment.count >= 8, segment.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) {
+                return prefix + "…" + rest.dropFirst(segment.count)
+            }
+        }
+        return path
+    }
+
     nonisolated static func redact(_ url: URL) -> String {
         guard let scheme = url.scheme?.lowercased() else {
             return "<url>"
@@ -66,7 +84,7 @@ enum LogRedaction {
         // releases returned them bare. Normalise to bracketed either way.
         out += (host.contains(":") && !host.hasPrefix("[")) ? "[\(host)]" : host
         if let port = components.port { out += ":\(port)" }
-        out += components.percentEncodedPath
+        out += redactSecretPath(components.percentEncodedPath)
         if components.percentEncodedQuery != nil { out += "?…" }
         if components.percentEncodedFragment != nil { out += "#…" }
         return out

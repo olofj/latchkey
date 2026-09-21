@@ -91,6 +91,20 @@ expectEqual(LogRedaction.scrub(plain), plain, "ordinary line is returned as-is")
 let socks = "socks[42] OK byskebox.example.ts.net:443 (14ms)"
 expectEqual(LogRedaction.scrub(socks), socks, "SOCKS CONNECT line (host:port only) is untouched")
 
+section("scrub: login links carry their secret in the path (M8.3)")
+let loginLine = "To start this tsnet server, restart with TS_AUTHKEY set, or go to: https://login.tailscale.com/a/4653479012c06"
+expectAbsent(LogRedaction.scrub(loginLine), "4653479012c06", "a Tailscale login code is removed")
+expectEqual(LogRedaction.scrub("go to: https://login.tailscale.com/a/4653479012c06"),
+            "go to: https://login.tailscale.com/a/…", "and the link keeps its shape")
+expectEqual(LogRedaction.scrub("opening http://127.0.0.1:8490/auth/0123456789abcdef0123"),
+            "opening http://127.0.0.1:8490/auth/…", "a control plane's /auth/<id> is removed")
+let dashPath = "loaded https://gw.example.ts.net/chat/a/b"
+expectEqual(LogRedaction.scrub(dashPath), dashPath, "only a LEADING /a/ or /auth/ is a login path")
+expectEqual(LogRedaction.scrub("https://login.tailscale.com/a/"), "https://login.tailscale.com/a/",
+            "nothing after the prefix: nothing to hide")
+expectEqual(LogRedaction.scrub("https://h.example/a/b"), "https://h.example/a/b",
+            "a short ordinary path under /a/ is not a login code")
+
 section("scrub: several URLs in one line")
 let two = "a https://a.example/x?token=AAA then https://b.example/y?token=BBB end"
 let scrubbedTwo = LogRedaction.scrub(two)

@@ -304,6 +304,11 @@ private struct DashboardContent: View {
     /// than chrome, and placed top-trailing where KiroCrew's own header has no
     /// controls. It sits inside the safe area, so it does not fight the status
     /// bar.
+    ///
+    /// The fade is on the label, not the button: over the web view, a button
+    /// with `.opacity` below 1 gets no taps at all (not even with a
+    /// `contentShape`), so this gear was dead from M1 until R29's diagnostics
+    /// test tapped it.
     private var settingsAffordance: some View {
         Button(action: onSettings) {
             Image(systemName: "gearshape.fill")
@@ -311,9 +316,9 @@ private struct DashboardContent: View {
                 .foregroundStyle(.secondary)
                 .padding(7)
                 .background(.thinMaterial, in: Circle())
+                .opacity(0.45)
         }
         .buttonStyle(.plain)
-        .opacity(0.45)
         .padding(.trailing, 10)
         .padding(.top, 4)
         .accessibilityIdentifier("settings-button")
@@ -322,6 +327,18 @@ private struct DashboardContent: View {
 
     private var gatewayContent: some View {
         VStack(spacing: 0) {
+            // R31, R33: the two clocks that end the app, warned about ahead.
+            ForEach(expiryWarnings, id: \.self) { message in
+                Label(message, systemImage: "clock.badge.exclamationmark")
+                    .font(.subheadline)
+                    .padding(.leading, 12)
+                    .padding(.trailing, 52)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.thinMaterial)
+                    .overlay(alignment: .bottom) { Divider() }
+                    .accessibilityIdentifier("expiry-warning")
+            }
             if homePageAvailability == .unavailable {
                 GatewayUnreachableBanner(onSettings: onSettings,
                                          onFindGateways: { showingGatewayPicker = true })
@@ -371,6 +388,12 @@ private struct DashboardContent: View {
         else { return }
         logger.log("Gateway \(gateway.redactedForLog) appeared in the tailnet; leaving the fallback page")
         tab.viewModel.load(url: gateway)
+    }
+
+    private var expiryWarnings: [String] {
+        Expiry.warnings(keyExpiry: Expiry.parseKeyExpiry(model.localStatus?.SelfStatus?.KeyExpiry),
+                        profileExpiry: DiagnosticsView.profileExpiry, now: Date())
+            .map(Expiry.message)
     }
 
     private var homePageAvailability: HomePageAvailability {

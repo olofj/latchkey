@@ -14,6 +14,8 @@ struct SettingsView: View {
     @State private var routeTestHost: String = ""
     @State private var showingLogs: Bool = false
     @State private var showingGatewayPicker = false
+    @State private var showingStatus = false
+    @State private var showingNodeLog = false
     /// Applied once the picker has gone (two sheets cannot overlap).
     @State private var pendingGateway: String?
     @ObservedObject private var diagnostics = AppDiagnostics.shared
@@ -85,6 +87,15 @@ struct SettingsView: View {
         .sheet(isPresented: $showingLogs) {
             LogViewer(dismissAction: { showingLogs = false })
         }
+        .sheet(isPresented: $showingStatus) {
+            let ws = viewModel.workspaceForSettings
+            DiagnosticsView(workspace: ws, model: ws.model, session: ws.session,
+                            discovery: ws.discovery, homePage: ws.homePage,
+                            dismissAction: { showingStatus = false })
+        }
+        .sheet(isPresented: $showingNodeLog) {
+            NodeLogView(dismissAction: { showingNodeLog = false })
+        }
         .sheet(isPresented: $showingGatewayPicker, onDismiss: {
             if let origin = pendingGateway {
                 pendingGateway = nil
@@ -151,6 +162,32 @@ struct SettingsView: View {
                 // §1.9 says to keep, and the only diagnostic available on a
                 // device that cannot be attached to a Mac.
                 Section(header: Text("Diagnostics")) {
+                    Button {
+                        showingStatus = true
+                    } label: {
+                        HStack {
+                            Text("Status")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .accessibilityIdentifier("status-button")
+
+                    Button {
+                        showingNodeLog = true
+                    } label: {
+                        HStack {
+                            Text("Node log (tsnet)")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .accessibilityIdentifier("node-log-button")
+
                     Button {
                         showingLogs = true
                     } label: {

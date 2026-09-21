@@ -153,15 +153,67 @@ final class TailnetHarnessTests: XCTestCase {
         try await assertJournaled(from: try await appNode())
     }
 
+    // MARK: - M8.2 / M8.3 (R29): diagnostics, before the device tests need them
+
+    /// With a real node on the fake tailnet: Status shows the node, the
+    /// gateway and the proxy as they are; the Node log shows tsnet's own
+    /// lines -- which, before M8.3, were drained and discarded.
+    func testDiagnosticsShowTheNodeAndItsLog() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestResetNodeLog"])
+        defer { app.terminate() }
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+
+        // Through the dashboard's gear, which was dead until this test: it
+        // was faded with .opacity on the button, and over the web view such
+        // a button takes no taps.
+        let list = app.openStatus()
+        func row(_ id: String) -> String { app.statusRow(id, in: list) }
+        XCTAssertTrue(row("diag-state").contains("Running"), row("diag-state"))
+        XCTAssertTrue(row("diag-tailnet").contains("tail-scale.ts.net"), row("diag-tailnet"))
+        XCTAssertTrue(row("diag-gateway").contains(Self.gatewayHost), row("diag-gateway"))
+        XCTAssertTrue(row("diag-in-the-tailnet").hasSuffix("yes"), row("diag-in-the-tailnet"))
+        XCTAssertTrue(row("diag-endpoint").contains("127.0.0.1:"), "the SOCKS endpoint, never the credential: \(row("diag-endpoint"))")
+        app.buttons["diagnostics-done-button"].tap()
+
+        let nodeLog = app.buttons["node-log-button"]
+        XCTAssertTrue(nodeLog.reveal(scrolling: app.collectionViews.firstMatch), "Settings has a Node log entry")
+        nodeLog.tap()
+        let filter = app.textFields["node-log-filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 10))
+        filter.tap()
+        filter.typeText("magicsock:")
+        // A line tsnet itself logged, from this launch (the logs were
+        // reset). The process's raw stderr -- which under XCTest echoes what
+        // the test types, filter text included -- never goes in tsnet.log.
+        let tsnetLine = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'magicsock:'")).firstMatch
+        XCTAssertTrue(tsnetLine.waitForExistence(timeout: 10),
+                      "tsnet's own magicsock lines reach the node log: \(app.staticTexts["node-log-count"].label)")
+        XCTAssertFalse(tsnetLine.label.contains("RAW-STDERR"), "raw stderr stays out of tsnet's log: \(tsnetLine.label)")
+
+        // Raw stderr: under XCTest, os_log is mirrored to it, so it is a copy
+        // of the unified log and is not kept (the vendored writer's rule).
+        // tsnet.log records the decision; the stderr source stays empty.
+        filter.tap()
+        filter.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "magicsock:".count))
+        filter.typeText("raw stderr")
+        let decision = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'raw stderr not kept'")).firstMatch
+        XCTAssertTrue(decision.waitForExistence(timeout: 10),
+                      "the node log says the mirrored stderr is not kept: \(app.staticTexts["node-log-count"].label)")
+        app.segmentedControls["node-log-source"].buttons["stderr"].tap()
+        XCTAssertTrue(app.staticTexts["Nothing on stderr"].waitForExistence(timeout: 10),
+                      "nothing of the unified log's mirror is on disk: \(app.staticTexts["node-log-count"].label)")
+    }
+
     // MARK: - Launch
 
-    private func launch() -> XCUIApplication {
+    private func launch(extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-UITestResetWorkspaces",
             "-UITestHomePage", Self.gateway,
             "-TestControlURL", Self.controlURL,
-        ]
+        ] + extra
         app.launch()
         return app
     }

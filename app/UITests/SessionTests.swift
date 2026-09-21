@@ -108,6 +108,14 @@ final class SessionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(counter(state, "app_auth_checks"), 1, "the app confirmed the session by API (R21, R38)")
         XCTAssertFalse(UIPasteboard.general.hasStrings, "the pasted sign-in link is cleared from the clipboard (R23)")
         XCTAssertFalse(element(app, "session-signin-button").exists)
+
+        // M8.2: Status shows when the session ends, from the cookies' expiry.
+        let list = app.openStatus()
+        let session = app.statusRow("diag-session-expires", in: list)
+        let access = app.statusRow("diag-access-expires", in: list)
+        XCTAssertTrue(session.contains("(in 29 days)") || session.contains("(in 30 days)"),
+                      "the refresh cookie's 30-day expiry: \(session)")
+        XCTAssertTrue(access.contains("(in "), "the access cookie's expiry: \(access)")
     }
 
     /// A dead link (expired, or for another gateway) says so, and the sheet

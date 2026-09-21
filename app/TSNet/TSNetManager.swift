@@ -68,6 +68,12 @@ final class TSNetManager {
     /// rewrite it in place, because ProxyConfiguration has reference
     /// semantics under its struct face (see ProxyConfigurationFactory).
     @MainActor private var proxyEndpoint: (host: String, port: Int, credential: String)?
+
+    /// `host:port` of the SOCKS5 endpoint WebKit uses, for the diagnostics
+    /// screen (Latchkey, M8.2). Never the credential.
+    @MainActor var proxyEndpointSummary: String? {
+        proxyEndpoint.map { "\($0.host):\($0.port)" }
+    }
     @MainActor private var didRunTCPChaosTest = false
 
     /// Creates a per-workspace tsnet controller. `config.path` is the

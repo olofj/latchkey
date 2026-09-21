@@ -93,7 +93,24 @@ $(XCFRAMEWORK): $(LIBTSCALE_SOURCES)
 	@echo
 	@echo "::: Building TailscaleKit.xcframework (vendored libtailscale) :::"
 	@echo "(needs Go; slow the first time)"
+	# libtailscale's own c-archive targets have no prerequisites: once built
+	# they are never rebuilt, so ios-fat re-linked the old Go code and a Go
+	# change was silently left out (R29's tsnet.log was). Remove them first.
+	cd ThirdParty/libtailscale && rm -f libtailscale_ios.a libtailscale_ios_sim.a \
+		libtailscale_ios_sim_arm64.a libtailscale_ios_sim_x86_64.a
 	cd $(LIBTSCALEDIR) && make ios-fat
+	@$(MAKE) --no-print-directory check-framework
+
+# Every Latchkey Go file in the vendored tree must be in both slices (Go
+# records each source path in the binary). Catches a stale archive.
+.PHONY: check-framework
+check-framework:
+	@for go in $$(git -C ThirdParty/libtailscale ls-files 'latchkey_*.go' | grep -v '_test\.go$$'); do \
+		for bin in $(XCFRAMEWORK)/*/TailscaleKit.framework/TailscaleKit; do \
+			strings "$$bin" | grep -q "libtailscale/$$go" \
+				|| { echo "STALE: $$bin lacks $$go -- rebuild with 'make framework'"; exit 1; }; \
+		done; \
+	done; echo "framework: every vendored latchkey_*.go is linked in"
 
 # ----- app -----
 .PHONY: app
@@ -157,6 +174,7 @@ test-policy:  ## Run the host-only unit tests (fast; no simulator, no framework)
 	@./scripts/test-control-plane.sh
 	@./scripts/test-token-input.sh
 	@./scripts/test-gateway-candidates.sh
+	@./scripts/test-diagnostics.sh
 
 .PHONY: test-ios-ui
 test-ios-ui: framework app  ## Run every required iOS UI test on the simulator

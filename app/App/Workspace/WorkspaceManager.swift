@@ -45,6 +45,17 @@ final class WorkspaceManager: ObservableObject {
         // App-level one-time setup — MUST run before any TailscaleNode is
         // created so all nodes share one logtail and Go runtime stderr is
         // captured by its persistent filch from the beginning.
+        //
+        // UI-test hook: start from empty node logs, so every line in them
+        // is this launch's (the node-log test must not pass on an earlier
+        // run's lines).
+        if TestHooks.flag("-UITestResetNodeLog") {
+            for source in NodeLog.Source.allCases {
+                for url in NodeLog.files(in: WorkspaceStore.logsDir, source: source) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+        }
         do {
             try TailscaleLogging.setup(directory: WorkspaceStore.logsDir.path)
         } catch {
