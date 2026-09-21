@@ -519,3 +519,103 @@ called `removeAllUserScripts()`, which would have wiped R2's and R3's scripts.
   still at the fork point (`git ls-remote`, 2026-09-20).
 
 Supersedes the M0 entry "Submodule URLs rewritten to an absolute URL".
+
+## 2026-09-20 — R3: main-frame navigation locked to the gateway (CHECK-FIRST)
+
+**Finding:** not satisfied — both navigation delegates ended in `.allow`,
+and `createWebViewWith` opened anything. **Applied** (`app/` `39af5c188`):
+new pure `App/Browser/NavigationPolicy.swift`, 25 host checks. The main
+frame may show the allowed origin, `about:blank` (the unreachable-gateway
+fallback) and same-origin `blob:` (downloads). Any other http(s) origin,
+`mailto:`, `tel:` and the like open outside the app. `data:`, `javascript:`
+and `file:` are cancelled — a `data:` document is exactly the shape a spoofed
+"paste your token" page would take. Sub-frames are left alone (widgets are
+same-origin `/sandbox-doc/` iframes, and a frame cannot take over the view).
+
+Decisions inside it:
+
+- **The allowed origin comes from the app's own resolved loads**, not the raw
+  setting and never from page navigations. A bare configured name is expanded
+  to its FQDN before loading, so checking the raw value would have sent the
+  app's own first load to Safari.
+- **Same-origin `window.open` loads in place.** KiroCrew's "pop out chat" uses
+  it. With one window, "open" can only mean "go there". **Known wrinkle:** a
+  popped-out chat has no link back and the app has no back button, so the way
+  home is a relaunch. Left for M8 polish.
+- **A scheme with an in-app `WKURLSchemeHandler` is the app's own content**
+  (upstream's bounce harness serves `bounce-test:`).
+- **The context menu's "Open" goes through the policy.** It called the
+  app-initiated `load(url:)`, which would have loaded a foreign link in place
+  *and* made its origin the trusted one.
+- **Cost, accepted:** any KiroCrew flow that navigates the main frame
+  cross-origin (an OAuth "connect Slack/GitHub" round trip) now completes in
+  Safari, not in the app. Those are desktop set-up flows.
+
+**Still open for M4.2:** the JS bridge must be main-frame only and check
+`frameInfo.securityOrigin` (PLAN M4.2 updated). The focus-script question is
+answered in the M1-cleanup entry above.
+
+## 2026-09-20 — R5: node keys and cookies excluded from backup
+
+**Applied** (`app/` `29fc4361d`): `App/Workspace/BackupExclusion.swift` runs
+at every launch, before any node exists. It excludes the app's data root
+under Application Support (node keys), `Library/WebKit` (identifier-based
+website data stores, including the 30-day refresh cookie), `Library/Cookies`
+and `Library/HTTPStorages`. It creates each directory if missing so the
+attribute is in place before anything is written inside, and re-applies it
+every launch. **Verified** in the simulator: all four carry the
+`com.apple.MobileBackup` exclusion attribute, and `Library/Preferences` (not
+targeted) does not, so the check can tell the difference.
+
+**Keychain:** not used anywhere — not in the app, TSNet, TailscaleKit or
+libtailscale — so the device-only rule holds by default and is recorded for
+any future item. **M4.6's redemption marker is dropped** (PLAN updated): the
+Keychain survives uninstall while cookies do not, so the two would desync.
+Session state comes from the page and `/api/auth/me`.
+
+## 2026-09-20 — R6: the node is named `latchkey-iphone`
+
+**Applied** (`app/` `715b1cc64`): `WorkspaceDefinition.makeDefault()` uses
+`latchkey-iphone` (`latchkey-ipad` on an iPad) instead of a random name.
+The name is fixed before the first sign-in because KiroCrew pins
+identity-bound sessions to `login|node name`, so a later rename signs the app
+out. Settings now warns about that under the hostname field. `ephemeral`
+stays off.
+
+**Confirmation asked:** R6 says "confirm with Olof". The name was put to him
+in a notification on 2026-09-20. If he picks another, it changes before the
+first sign-in, which is the only time it is free to change.
+
+**Known edge:** if a node with this name already exists (a reinstall whose
+old node was never logged out), control gives the new one a suffixed MagicDNS
+name (`latchkey-iphone-1`). R32's "reset app" logs the node out to avoid
+exactly that.
+
+## 2026-09-20 — R7: the page reloads after its content process dies
+
+**Applied** (`app/` `12de4960f`): `App/Browser/ContentProcessRecovery.swift`
+(13 host checks) allows at most 2 automatic reloads per 60 s, then falls
+back to the error page, now worded to say the page itself failed rather than
+the tailnet. Active: reload within budget. Backgrounded: flag it, and reload
+on `didBecomeActive` against the same budget. `AppDiagnostics` counts
+terminations, automatic reloads and give-ups apart from network errors, shown
+in Settings → Diagnostics.
+
+**Verified end to end:** the proxy-bounce harness gained a "kill web
+content" control (WebKit's private `_killWebContentProcess`, DEBUG-only until
+R15). `testWebContentProcessTerminationReloadsAutomatically` asserts the
+harness page loads a second time by itself and no error page appears. It
+passes. A forced-memory-pressure case on the device belongs to M6.6.
+
+## 2026-09-20 — R8: device bring-up before the device check
+
+**Applied:** `NSLocalNetworkUsageDescription` added (`app/` `1ee6f457e`).
+tsnet's direct LAN connections trigger the Local Network prompt, and upstream
+ties `-1000` behaviour to the permission state. `docs/DEVICE-CHECK.md` is the
+runbook: O1 → O2 → O3 → install and tailnet login → O3b → O5, the first token
+entered through the dashboard's own red banner, Local Network allowed *and*
+denied, and the phone's iOS version recorded. PLAN M1's AC now points at it.
+
+**Blocked on Olof:** O1, O2 and O3 were requested in a notification on
+2026-09-20. The check is not attempted until they are done (R8: "Do not
+attempt it before they are"). Work that does not need a phone continues.
