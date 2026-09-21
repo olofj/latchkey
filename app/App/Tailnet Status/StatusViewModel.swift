@@ -30,6 +30,10 @@ final class StatusViewModel:  ObservableObject {
     var authURL: String? = nil
     var observers: [AnyCancellable] = []
     var requestedInteractiveLogin = false
+    /// Ends a "Logged in. Connecting…" that never connects (R31 review): if
+    /// the backend still sits at NeedsLogin a minute after LoginFinished, the
+    /// login did not take, and the Login banner must come back.
+    private var connectingWatchdog: Task<Void, Never>?
 
     let manager: TSNetManager
 
@@ -129,6 +133,15 @@ final class StatusViewModel:  ObservableObject {
                 if manager.model.browseToURL != nil {
                     manager.model.browseToURL = nil
                 }
+                connectingWatchdog?.cancel()
+                connectingWatchdog = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(60))
+                    guard let self, !Task.isCancelled, loggedInConnecting,
+                          manager.model.state == .NeedsLogin else { return }
+                    logger.log("StatusViewModel: still NeedsLogin 60 s after LoginFinished; offering Login again")
+                    loggedInConnecting = false
+                    needsAuth = true
+                }
             }
             .store(in: &observers)
 
@@ -211,24 +224,16 @@ final class StatusViewModel:  ObservableObject {
                     // URL doesn't pop a sheet the user didn't expect.
                     logger.log("showAuth: startLoginInteractive failed: \(error)")
                     requestedInteractiveLogin = false
+                    // And stop the Login button's spinner now, not after its
+                    // 2-minute safety timeout (R31 review).
+                    authSessionEndedGeneration &+= 1
                 }
             }
         }
     }
 
-    func logout() {
-        Task {
-            do {
-                let currentUser = try await manager.localAPIClient?.currentProfile()
-                if let currentUser {
-                    try await manager.localAPIClient?.deleteProfile(profileID: currentUser.id)
-                    logger.log("Logout: deleted profile \(currentUser.id)")
-                } else {
-                    logger.log("Logout: no current profile; nothing to delete")
-                }
-            } catch {
-                logger.log("Logout failed: \(error)")
-            }
-        }
-    }
+    // Upstream's `logout()` -- `deleteProfile`, local only, control never
+    // told -- was removed in R32: a reset logs the node out through
+    // `Workspace.logOutOfTailnet` (TailnetLogout), which expires the key at
+    // the control plane first.
 }

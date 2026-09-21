@@ -45,11 +45,19 @@ protocol SessionHost: AnyObject {
     var sessionOrigin: URL? { get }
     /// Navigates the main frame to a same-origin URL (a sign-in link).
     func loadSessionURL(_ url: URL)
-    /// `fetch(path)`'s HTTP status, run in the app's content world with the
-    /// page's cookies. Nil when there is no page to ask.
-    func sessionFetchStatus(_ path: String) async -> Int?
+    /// `fetch(path, {method})`'s HTTP status, run in the app's content world
+    /// with the page's cookies (PageScriptSources.sessionFetch). Nil when
+    /// there is no page to ask, or none within `timeout` (nil: wait).
+    func sessionFetchStatus(_ path: String, method: String, timeout: Duration?) async -> Int?
     /// Removes the bridge's banner-hiding style (the R22 fallback).
     func revealSessionBanner()
+}
+
+extension SessionHost {
+    /// The M4 check: a GET, waited for.
+    func sessionFetchStatus(_ path: String) async -> Int? {
+        await sessionFetchStatus(path, method: "GET", timeout: nil)
+    }
 }
 
 @MainActor
@@ -85,6 +93,11 @@ final class SessionManager: NSObject, ObservableObject {
     static let redemptionTimeout: Duration = .seconds(30)
 
     private weak var host: SessionHost?
+    /// Called when `/api/auth/me` got no answer twice in a row (R30 review):
+    /// a page-world fetch that fails says nothing about why, and the tsnet
+    /// manager uses it as its cue to probe the SOCKS relay's listener, which
+    /// the page cannot report on. Changes nothing here.
+    var onUnansweredCheck: (() -> Void)?
     private var readySinceNavigationStart = false
     private var watchdog: Task<Void, Never>?
     private var redemption: Redemption?
@@ -102,16 +115,31 @@ final class SessionManager: NSObject, ObservableObject {
     /// The host name the sheet shows as the sign-in target.
     var gatewayHost: String? { host?.sessionOrigin?.host }
 
-    /// Forgets the current gateway's sign-in state (a new gateway was chosen).
-    func reset() {
+    /// Forgets the current gateway's sign-in state (a new gateway was chosen,
+    /// or the session was signed out, R32). `notice` is what the sheet shows
+    /// when the page next asks for a token: sign-out's "on this device only".
+    func reset(notice: String? = nil) {
         watchdog?.cancel()
         redemptionTimer?.cancel()
         redemption = nil
         isRedeeming = false
-        message = nil
+        message = notice
         state = .unknown
         isTokenSheetPresented = false
         authGeneration += 1
+    }
+
+    /// Asks the gateway to end the session (R32), as the page: the refresh
+    /// cookie is scoped to /api/auth and HttpOnly, and the CSRF check wants
+    /// the page's Origin, so only a page-world POST revokes the chain there.
+    /// The status, or nil when there is no page or it did not answer in time.
+    /// Local data is the caller's to clear; this changes no state here.
+    func requestLogout() async -> Int? {
+        guard let host else { return nil }
+        let status = await host.sessionFetchStatus("/api/auth/logout", method: "POST",
+                                                   timeout: DashboardSignOut.requestTimeout)
+        logger.log("Session: logout asked of the gateway: \(status.map(String.init) ?? "no answer")")
+        return status
     }
 
     // MARK: - Installation
@@ -254,7 +282,10 @@ final class SessionManager: NSObject, ObservableObject {
             try? await Task.sleep(for: .seconds(1))
             status = await host?.sessionFetchStatus("/api/auth/me")
         }
-        guard let status else { return }
+        guard let status else {
+            onUnansweredCheck?()
+            return
+        }
         if status == 200 {
             guard generation == authGeneration else {
                 logger.log("Session: ignoring a stale check; the page asked for a token since")

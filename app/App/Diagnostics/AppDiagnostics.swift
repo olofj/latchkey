@@ -31,6 +31,19 @@ final class AppDiagnostics: ObservableObject {
     /// Of those, how many hit the reload budget and fell back to the error
     /// page, so the user had to reload by hand.
     @Published var webContentGaveUp = 0
+    /// Times the SOCKS relay's listener was restarted because a page load
+    /// could not reach it, a probe found it dead, or it reported failure
+    /// (R30).
+    @Published var socksRelayRestarts = 0
+    /// Self-probes of the relay's listener (R30 review): a loopback connect
+    /// on the foreground, after an unanswered session check, and as the last
+    /// guard before a page-driven restart. And how many found it dead.
+    @Published var socksRelayProbes = 0
+    @Published var socksRelayProbesFailed = 0
+    /// Times WebKit was pointed at tsnet's proxy directly because no relay
+    /// listener could be started (R30 review): from then on the log has no
+    /// per-connection lines, which this row explains.
+    @Published var socksRelayFallbacks = 0
 
     private init() {}
 }

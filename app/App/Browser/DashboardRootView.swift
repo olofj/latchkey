@@ -64,10 +64,12 @@ struct DashboardRootView: View {
         .sheet(isPresented: $showingSettings, onDismiss: { tokenSheetAllowed = true }) {
             if let ws = presentedWorkspace {
                 SettingsView(
+                    // Evaluated once: SettingsView keeps it as a StateObject
+                    // across re-renders of this root (R32 review).
                     viewModel: SettingsViewModel(
                         workspace: ws,
                         deleteSession: {
-                            // Logout explicitly deletes the session.
+                            // A reset deletes the session (R32).
                             workspaceManager.deleteWorkspace(id: ws.id)
                         }
                     ),
@@ -218,7 +220,10 @@ private struct DashboardContent: View {
             // banner is hidden (R22), so this is the only sign-in control.
             // Keyed on the sheet being ON SCREEN, not requested: a deferred
             // request must not hide the only way in (M4 review).
-            if session.state == .needsToken, !session.isTokenSheetOnScreen {
+            // Not while the node itself is down: its banner comes first, and
+            // no dashboard sign-in can work until it is back (R31 review).
+            if session.state == .needsToken, !session.isTokenSheetOnScreen,
+               !statusViewModel.needsAuth, !statusViewModel.needsMachineAuth {
                 Button {
                     session.isTokenSheetPresented = true
                 } label: {
@@ -327,6 +332,19 @@ private struct DashboardContent: View {
 
     private var gatewayContent: some View {
         VStack(spacing: 0) {
+            // The node's own trouble first, in the layout rather than over it
+            // (R31 review): an overlay covered the gateway banner's buttons and
+            // was itself covered by the sign-in capsule.
+            if statusViewModel.needsAuth {
+                // Mid-session NeedsLogin -- the node key expired, or was
+                // expired by an admin (R31): Login re-authenticates in place.
+                LoginBanner(
+                    authSessionEndedGeneration: statusViewModel.authSessionEndedGeneration,
+                    onLogin: { statusViewModel.showAuth() }
+                )
+            } else if statusViewModel.needsMachineAuth {
+                MachineAuthBanner()
+            }
             if homePageAvailability == .unavailable {
                 GatewayUnreachableBanner(onSettings: onSettings,
                                          onFindGateways: { showingGatewayPicker = true })
@@ -346,18 +364,6 @@ private struct DashboardContent: View {
                     .background(.thinMaterial)
                     .overlay(alignment: .top) { Divider() }
                     .accessibilityIdentifier("expiry-warning")
-            }
-        }
-        .overlay(alignment: .top) {
-            if statusViewModel.needsAuth {
-                // Mid-session NeedsLogin -- the node key expired, or was
-                // expired by an admin (R31): Login re-authenticates in place.
-                LoginBanner(
-                    authSessionEndedGeneration: statusViewModel.authSessionEndedGeneration,
-                    onLogin: { statusViewModel.showAuth() }
-                )
-            } else if statusViewModel.needsMachineAuth {
-                MachineAuthBanner()
             }
         }
         .onChange(of: homePageAvailability) { _, availability in

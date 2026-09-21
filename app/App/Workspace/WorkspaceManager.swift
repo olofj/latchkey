@@ -50,11 +50,7 @@ final class WorkspaceManager: ObservableObject {
         // is this launch's (the node-log test must not pass on an earlier
         // run's lines).
         if TestHooks.flag("-UITestResetNodeLog") {
-            for source in NodeLog.Source.allCases {
-                for url in NodeLog.files(in: WorkspaceStore.logsDir, source: source) {
-                    try? FileManager.default.removeItem(at: url)
-                }
-            }
+            NodeLog.removeFiles(in: WorkspaceStore.logsDir)
         }
         do {
             try TailscaleLogging.setup(directory: WorkspaceStore.logsDir.path)

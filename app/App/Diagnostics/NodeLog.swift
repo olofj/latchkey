@@ -35,6 +35,19 @@ enum NodeLog {
             .filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
+    /// Deletes every source's files: a reset (R32; "everything stored on
+    /// this device" includes the hostnames and peers these hold), and the
+    /// `-UITestResetNodeLog` hook. tsnet's writer holds tsnet.log open, so
+    /// the running process keeps writing to the unlinked inode -- nothing
+    /// of this launch is kept -- and the next launch starts a fresh file.
+    nonisolated static func removeFiles(in dir: URL) {
+        for source in Source.allCases {
+            for url in files(in: dir, source: source) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
     /// Name, size and modification time of `source`'s files: when it has not
     /// changed there is nothing new to read.
     nonisolated static func signature(in dir: URL, source: Source = .tsnet) -> [String] {

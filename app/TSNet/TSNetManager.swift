@@ -60,6 +60,13 @@ final class TSNetManager {
     /// be attached to a Mac. See `SocksLogProxy`.
     @MainActor private var socksLogProxy: SocksLogProxy?
     @MainActor private var socksLogProxyPort: UInt16?
+    /// Restarts of the relay's listener allowed per minute (R30).
+    @MainActor private var relayRestartBudget = SocksRelayRecovery.Budget()
+    /// A listener restart is waiting for its new port (R30 review: the wait
+    /// is off the main actor now, so it has a duration).
+    @MainActor private var relayRestartInFlight = false
+    /// The one self-probe of the relay listener in flight, if any.
+    @MainActor private var relayProbeTask: Task<Void, Never>?
 
     /// The SOCKS5 endpoint WebKit talks to — the logging relay's port when
     /// the relay is on, tsnet's loopback listener otherwise — and tsnet's
@@ -163,6 +170,7 @@ final class TSNetManager {
     /// Upstream's L2 recovery hooks (R14 uses them). Test builds only (R15).
     nonisolated static func tcpChaosTestRequested() -> Bool {
         TestHooks.flag("-UITestDefunctLoopback") || TestHooks.flag("-UITestShutdownTCPConnections")
+            || TestHooks.flag("-UITestDefunctRelayListener")
     }
 
     nonisolated private func startTailscale() async {
@@ -192,7 +200,7 @@ final class TSNetManager {
         // `TailscaleNode` actor's serial executor INDEFINITELY — and since
         // `loopback()`, `close()`, `addrs()` are all on the same actor, EVERY
         // localAPI call (`backendStatus()` polling, `startLoginInteractive()`,
-        // logout's `currentProfile`/`deleteProfile`) queues behind it and hangs
+        // a reset's `/logout`, R32) queues behind it and hangs
         // for the whole login window. It also deadlocks `close()` on
         // background (close queues behind up() forever) → two tsnet servers
         // on the same state dir after a bg/fg cycle.
@@ -494,10 +502,15 @@ final class TSNetManager {
         if SocksLogProxy.isEnabled() {
             if socksLogProxy == nil,
                let upstreamPort = UInt16(exactly: port) {
-                let relay = SocksLogProxy(upstreamHost: ip, upstreamPort: upstreamPort)
+                let relay = SocksLogProxy(upstreamHost: ip, upstreamPort: upstreamPort,
+                                          onListenerFailed: { [weak self] in
+                    Task { @MainActor [weak self] in self?.relayListenerFailed() }
+                })
                 if let localPort = relay.start() {
                     socksLogProxy = relay
                     socksLogProxyPort = localPort
+                } else {
+                    recordRelayFallback(after: "no listener could be started")
                 }
             }
             if let localPort = socksLogProxyPort {
@@ -506,7 +519,7 @@ final class TSNetManager {
             }
         }
 
-        proxyEndpoint = (proxyHost, proxyPort, credential)
+        recordProxyEndpoint(host: proxyHost, port: proxyPort, credential: credential)
         let policy = StableProxyPolicy.make(from: model.localStatus,
                                              exitNodeEnabled: proxyEverythingRequested())
         guard let proxyConfig = ProxyConfigurationFactory.make(
@@ -559,6 +572,198 @@ final class TSNetManager {
         }
     }
 
+    /// The page reports a load that failed (R30). If it looks like WebKit could
+    /// not reach the logging relay -- a transport error while the node is
+    /// Running and tsnet's own loopback answers, with the relay having
+    /// accepted nothing for the navigation -- the relay's own port is probed,
+    /// and a listener that refuses the probe is restarted and the proxy
+    /// configuration republished, which the page takes as its cue to retry.
+    /// The verdict is `SocksRelayRecovery`'s; this gathers its evidence.
+    /// Failures the relay accepted (a dead gateway is also -1000) are left
+    /// alone: the relay's own log line says what tsnet replied, and a new
+    /// listener would change nothing. So is a listener that answers the
+    /// probe (R30 review): the accept inference misreads a pooled connection
+    /// WebKit reused, and a failure that never dialed the proxy.
+    @MainActor
+    func pageLoadFailed(_ failure: SocksRelayRecovery.PageFailure) {
+        guard let relay = socksLogProxy, let port = socksLogProxyPort,
+              SocksRelayRecovery.isTransportFailure(domain: failure.domain, code: failure.code)
+        else { return }
+        // Read before the loopback round trip: a connection accepted for
+        // something else meanwhile (the probe's own, for one) must not pass
+        // for this load's.
+        let accepted = relay.hasAcceptedSession(since: failure.navigationStartedAt)
+        Task { [weak self] in
+            guard let self else { return }
+            let answers = await self.refreshStatusNow()
+            var evidence = SocksRelayRecovery.Evidence(
+                failure: failure,
+                // A loopback recovery may have replaced the relay meanwhile.
+                relayInUse: self.socksLogProxy === relay && self.socksLogProxyPort == port,
+                nodeRunning: self.model.state == .Running,
+                loopbackRecoveryInFlight: self.loopbackRecoveryTask != nil,
+                upstreamAnswers: answers,
+                relayAcceptedSinceNavigation: accepted)
+            if case .probe = SocksRelayRecovery.decide(evidence) {
+                // The final guard, and the one that costs a connection: only
+                // once everything else points at the listener.
+                let outcome = await SocksLogProxy.probe(port: port)
+                self.countProbe(outcome)
+                evidence = evidence.probed(outcome)
+            }
+            switch SocksRelayRecovery.decide(evidence) {
+            case .restart:
+                self.restartSocksRelayWithinBudget(
+                    reason: "page failed with \(failure.domain) \(failure.code), nothing reached the relay, and its listener \(evidence.listener?.rawValue ?? "?") a probe")
+            case .leave(let reason):
+                logger.log("sockslog: relay listener kept after \(failure.domain) \(failure.code): \(reason)")
+            case .probe:
+                // Unreachable: the probe's finding is in the evidence now.
+                break
+            }
+        }
+    }
+
+    /// The dashboard session check got no answer twice in a row (R30
+    /// review). The page-world fetch says nothing about why -- the gateway,
+    /// the tailnet, or the relay's port under it -- so the relay's listener
+    /// is probed, and restarted only if it refuses.
+    @MainActor
+    func sessionCheckUnanswered() {
+        probeRelayListener(trigger: "session check unanswered twice")
+    }
+
+    /// A loopback connect to the relay's own port, off the main actor, when
+    /// nothing else can tell whether the listener survived (R30 review): on
+    /// return to the foreground, and after an unanswered session check. The
+    /// page's WebSocket reconnects and its own fetches fail at a dead port
+    /// without any main-frame navigation failing, so `pageLoadFailed` never
+    /// hears of it. Gathers evidence only: a listener that answers is left
+    /// alone, one that refuses is restarted within the budget. Never rebuilds
+    /// anything on the foreground itself (PLAN M6.1).
+    @MainActor
+    private func probeRelayListener(trigger: String) {
+        guard let relay = socksLogProxy, let port = socksLogProxyPort,
+              model.state == .Running, loopbackRecoveryTask == nil,
+              !relayRestartInFlight, relayProbeTask == nil
+        else { return }
+        relayProbeTask = Task { [weak self] in
+            let outcome = await SocksLogProxy.probe(port: port)
+            guard let self else { return }
+            self.relayProbeTask = nil
+            self.countProbe(outcome)
+            // Replaced or restarted meanwhile: the finding is about a port
+            // WebKit no longer uses.
+            guard self.socksLogProxy === relay, self.socksLogProxyPort == port else { return }
+            switch SocksRelayRecovery.decide(probe: outcome) {
+            case .restart:
+                self.restartSocksRelayWithinBudget(reason: "its listener \(outcome.rawValue) a probe (\(trigger))")
+            case .leave(let reason):
+                logger.log("sockslog: relay listener probed (\(trigger)): \(reason)")
+            case .probe:
+                break
+            }
+        }
+    }
+
+    @MainActor
+    private func countProbe(_ outcome: SocksRelayRecovery.ListenerProbe) {
+        AppDiagnostics.shared.socksRelayProbes += 1
+        if outcome != .answers { AppDiagnostics.shared.socksRelayProbesFailed += 1 }
+    }
+
+    /// The listener told the relay it failed after it had been ready (R30
+    /// review): the one case iOS reports a defuncted listener rather than
+    /// leaving it looking alive. Replace it, within the budget.
+    @MainActor
+    private func relayListenerFailed() {
+        guard socksLogProxy != nil else { return }
+        restartSocksRelayWithinBudget(reason: "its listener reported failure")
+    }
+
+    @MainActor
+    private func restartSocksRelayWithinBudget(reason: String) {
+        guard !relayRestartInFlight else {
+            logger.log("sockslog: relay listener restart already in flight; not restarting again for: \(reason)")
+            return
+        }
+        guard relayRestartBudget.allow(now: Date()) else {
+            logger.log("sockslog: relay listener restart refused (\(reason)): \(relayRestartBudget.maxRestarts) already in \(Int(relayRestartBudget.window))s")
+            return
+        }
+        restartSocksRelay(reason: reason)
+    }
+
+    /// Replaces the relay's listener and republishes the proxy configuration
+    /// on the new port (R30). The wait for the new port is on the relay's
+    /// queue, not the main actor (R30 review). If no listener can be started,
+    /// WebKit is pointed at tsnet directly rather than at a dead port; the
+    /// log then loses its per-connection lines until the next node start.
+    @MainActor
+    private func restartSocksRelay(reason: String) {
+        guard let relay = socksLogProxy, proxyEndpoint != nil, !relayRestartInFlight else { return }
+        relayRestartInFlight = true
+        logger.log("sockslog: restarting the relay listener: \(reason)")
+        Task { [weak self] in
+            let port = await relay.restartListener()
+            guard let self else { return }
+            self.relayRestartInFlight = false
+            // Replaced by a loopback recovery, or shut down, while waiting.
+            guard self.socksLogProxy === relay, let endpoint = self.proxyEndpoint else { return }
+            if let port {
+                self.socksLogProxyPort = port
+                self.publishProxyConfiguration(host: "127.0.0.1", port: Int(port), credential: endpoint.credential)
+                AppDiagnostics.shared.socksRelayRestarts += 1
+                self.model.tcpChaosTestStatus = "relay recovered"
+            } else {
+                self.socksLogProxy = nil
+                self.socksLogProxyPort = nil
+                self.recordRelayFallback(after: "no replacement listener could be started")
+                self.publishProxyConfiguration(host: relay.upstreamHost, port: Int(relay.upstreamPort),
+                                               credential: endpoint.credential)
+            }
+        }
+    }
+
+    /// WebKit is being pointed at tsnet's proxy directly because the relay
+    /// has no listener (R30 review): counted and said once, since from here
+    /// on the log has no per-connection lines to show it.
+    @MainActor
+    private func recordRelayFallback(after cause: String) {
+        AppDiagnostics.shared.socksRelayFallbacks += 1
+        logger.log("sockslog: \(cause); WebKit uses tsnet's proxy directly until the next node start (fallback \(AppDiagnostics.shared.socksRelayFallbacks))")
+    }
+
+    /// Records the SOCKS endpoint WebKit is about to be given, and bumps the
+    /// model's endpoint generation when the host or port changed (R30
+    /// review): that is what tells the page a transport was replaced, as
+    /// opposed to rescoped.
+    @MainActor
+    private func recordProxyEndpoint(host: String, port: Int, credential: String) {
+        if proxyEndpoint?.host != host || proxyEndpoint?.port != port {
+            model.proxyEndpointGeneration &+= 1
+        }
+        proxyEndpoint = (host, port, credential)
+    }
+
+    /// Publishes a configuration for a new SOCKS endpoint under the current
+    /// rules. Built fresh, not edited in place, for R12's reason.
+    @MainActor
+    private func publishProxyConfiguration(host: String, port: Int, credential: String) {
+        let policy = model.proxyPolicy
+            ?? StableProxyPolicy.make(from: model.localStatus, exitNodeEnabled: proxyEverythingRequested())
+        guard let updated = ProxyConfigurationFactory.make(
+            proxyHost: host, proxyPort: port, credential: credential, policy: policy)
+        else {
+            logger.log("proxyConfig: invalid proxy endpoint port \(port); not republishing")
+            return
+        }
+        recordProxyEndpoint(host: host, port: port, credential: credential)
+        model.proxyPolicy = policy
+        model.proxyConfiguration = updated
+        logger.log("proxyConfig: endpoint replaced, WebKit now uses \(host):\(port) (endpoint generation \(model.proxyEndpointGeneration))")
+    }
+
     /// Whether ALL traffic (not just tailnet) should go through the proxy.
     ///
     /// Upstream also returned true when an exit node was enabled, since that is
@@ -606,9 +811,26 @@ final class TSNetManager {
         Task { [weak self] in
             guard let self, let node = self.node else { return }
             // Let the first document and SOCKS diagnostics establish themselves
-            // before damaging all TCP sockets in the process.
-            try? await Task.sleep(for: .seconds(2))
+            // before damaging all TCP sockets in the process. Two seconds was
+            // upstream's fixed delay, measured from the poll that also starts
+            // the first load; a cold WebKit's first load can take longer, and
+            // the L2 lifecycle tests need the page provably up before the
+            // damage -- or, for a first-load test, the damage during it. So
+            // `-UITestTCPChaosDelay <seconds>` sets it (M6).
+            let delay = TestHooks.value("-UITestTCPChaosDelay").flatMap(Double.init) ?? 2
+            try? await Task.sleep(for: .seconds(delay))
             self.model.tcpChaosTestStatus = "damaging"
+#if LATCHKEY_TEST_HOOKS
+            if TestHooks.flag("-UITestDefunctRelayListener") {
+                // R30: only the app-owned relay listener dies. tsnet's stays
+                // up, so the status poll notices nothing; the next failed
+                // page load is what must bring it back.
+                logger.log("TCP chaos test: defuncting the relay listener")
+                self.socksLogProxy?.debugDefunctListener()
+                self.model.tcpChaosTestStatus = "relay damaged"
+                return
+            }
+#endif
             logger.log("TCP chaos test: defuncting the tsnet loopback listener")
             do {
                 if TestHooks.flag("-UITestDefunctLoopback") {
@@ -642,6 +864,8 @@ final class TSNetManager {
         prefsWatcher = nil
         processor?.cancel()
         processor = nil
+        relayProbeTask?.cancel()
+        relayProbeTask = nil
         socksLogProxy?.stop()
         socksLogProxy = nil
         socksLogProxyPort = nil
@@ -669,6 +893,10 @@ final class TSNetManager {
         // scene lifecycle: iOS can defunct sockets for reasons other than lock.
         logger.log("Foreground: no lifecycle recovery; awaiting actual socket errors")
         if node == nil { startTailscaleIfNeeded() }
+        // The relay listener is the one socket nothing polls (R30 review), so
+        // it is asked -- a loopback connect, off the main actor. A refusal is
+        // the socket error awaited above; an answer changes nothing.
+        probeRelayListener(trigger: "foreground")
     }
 
     /// Returns whether the node's loopback answered (Latchkey: discovery

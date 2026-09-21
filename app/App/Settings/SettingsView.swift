@@ -7,10 +7,22 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @ObservedObject var viewModel: SettingsViewModel
+    /// Made once, for this sheet's lifetime (R32 review). The root creates
+    /// the model inline in its sheet closure; owned as a plain observed
+    /// object, a root re-render during a reset -- the workspace list changes
+    /// under it -- would hand the sheet a fresh model with no activity and
+    /// no pending alert.
+    @StateObject private var viewModel: SettingsViewModel
     var dismissAction: () -> Void
 
-    @State private var showLogoutAlert: Bool = false
+    init(viewModel: @autoclosure @escaping () -> SettingsViewModel,
+         dismissAction: @escaping () -> Void) {
+        _viewModel = StateObject(wrappedValue: viewModel())
+        self.dismissAction = dismissAction
+    }
+
+    @State private var showSignOutAlert: Bool = false
+    @State private var showResetAlert: Bool = false
     @State private var routeTestHost: String = ""
     @State private var showingLogs: Bool = false
     @State private var showingGatewayPicker = false
@@ -53,11 +65,6 @@ struct SettingsView: View {
             settingsForm
                 .formStyle(.grouped)
         }
-        .alert("Logout", isPresented: $showLogoutAlert) {
-            logoutAlertActions
-        } message: {
-            logoutAlertMessage
-        }
 #else
         NavigationStack {
             settingsForm
@@ -72,17 +79,63 @@ struct SettingsView: View {
                 }
             }
         }
-        .alert("Logout", isPresented: $showLogoutAlert) {
-            logoutAlertActions
-        } message: {
-            logoutAlertMessage
-        }
 #endif
     }
 
     private var settingsForm: some View {
         Form {
             settingsSections
+        }
+        // The two ways out (R32), each behind a confirmation: getting back
+        // in costs a computer (`kirocrew token`), or that and a Tailscale
+        // login. Settings stays up, the button spinning, until the work is
+        // done, and only then closes: the sign-in sheet waits for Settings to
+        // go (M4), and a reset asks the control plane, which takes a moment.
+        .alert("Sign out of the dashboard?", isPresented: $showSignOutAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Sign out", role: .destructive) {
+                Task {
+                    await viewModel.signOutOfDashboard()
+                    dismissAction()
+                }
+            }
+        } message: {
+            Text("Your dashboard session ends on this device and at the gateway. Your tailnet node and gateway choice stay. To sign in again you need a new link from `kirocrew token` on a computer, or the dashboard's QR code.")
+        }
+        .alert("Reset Latchkey?", isPresented: $showResetAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Reset", role: .destructive) {
+                Task {
+                    await viewModel.resetApp()
+                    // A failed tailnet logout keeps Settings up: its alert
+                    // is next, and nothing has been deleted.
+                    if viewModel.resetBlocked == nil { dismissAction() }
+                }
+            }
+        } message: {
+            Text("Signs out of the dashboard, logs this node out of Tailscale, and deletes everything Latchkey stored on this device: the node, website data, logs and the gateway choice. The app starts over, as on first run. Logging out expires the node's key; it stays listed as expired in the Tailscale admin console until removed there, which frees its name.")
+        }
+        // The tailnet logout failed (R32 review): the choice is the user's.
+        // Deleting regardless would leave a node with a valid key in the
+        // admin console for good, and the key that could still expire it in
+        // the bin.
+        .alert(TailnetLogout.failureTitle,
+               isPresented: Binding(get: { viewModel.resetBlocked != nil },
+                                    set: { if !$0 { viewModel.resetBlocked = nil } }),
+               presenting: viewModel.resetBlocked) { _ in
+            Button("Retry") {
+                Task {
+                    await viewModel.retryReset()
+                    if viewModel.resetBlocked == nil { dismissAction() }
+                }
+            }
+            Button("Delete anyway", role: .destructive) {
+                viewModel.deleteAnyway()
+                dismissAction()
+            }
+            Button("Cancel", role: .cancel) { viewModel.cancelReset() }
+        } message: { reason in
+            Text(TailnetLogout.failureMessage(reason))
         }
         .sheet(isPresented: $showingLogs) {
             LogViewer(dismissAction: { showingLogs = false })
@@ -155,6 +208,29 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                // R32. Two ways out, named for what they end: the dashboard
+                // session (here), or all of it (Reset, below). Upstream's one
+                // "Logout" deleted the workspace and said nothing about which.
+                Section(header: Text("Dashboard")) {
+                    Button {
+                        showSignOutAlert = true
+                    } label: {
+                        HStack {
+                            Text("Sign out of the dashboard")
+                            if viewModel.activity == .signingOut {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    // Nothing to sign out of before a gateway is chosen.
+                    .disabled(viewModel.activity != nil || !viewModel.workspaceForSettings.homePage.hasGateway)
+                    .accessibilityIdentifier("signout-dashboard-button")
+                    Text("Ends your dashboard session, here and at the gateway. Your tailnet node and gateway choice stay.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 // The log viewer moved here when the browser toolbar was
                 // deleted (PLAN §1.5). It had been reachable only from that
                 // toolbar's "more" menu, which would have left an iPhone with
@@ -216,27 +292,23 @@ struct SettingsView: View {
                     .accessibilityIdentifier("diagnostics-web-content-restarts")
                 }
 
-                Section {
-                    StatusButton(text: "Logout",
-                                 action: { showLogoutAlert = true },
-                                 color: .red)
-                        .accessibilityIdentifier("logout-button")
+                // Reset is the one way to leave the tailnet (R32 review): a
+                // separate "Log out of Tailscale" deleted the same things
+                // but skipped the dashboard sign-out, leaving a live 30-day
+                // session at the gateway.
+                Section(header: Text("Reset")) {
+                    StatusButton(text: "Reset app",
+                                 action: { showResetAlert = true },
+                                 color: .red,
+                                 isLoading: viewModel.activity == .resetting)
+                        .disabled(viewModel.activity != nil)
+                        .accessibilityIdentifier("reset-app-button")
+                    Text("Signs out of the dashboard, logs this node out of Tailscale, and deletes everything stored on this device. Starts over as on first run.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 routingSection
-    }
-
-    @ViewBuilder
-    private var logoutAlertActions: some View {
-        Button("Cancel", role: .cancel) { }
-        Button("Logout", role: .destructive) {
-            viewModel.logout()
-            dismissAction()
-        }
-    }
-
-    private var logoutAlertMessage: some View {
-        Text("This will delete this session, including its tailnet identity and website data.")
     }
 
     // MARK: - Routing (split tunnel) diagnostic

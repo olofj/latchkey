@@ -6,8 +6,8 @@
 //
 //  Backs the Settings sheet for the ACTIVE workspace. Reads the workspace's
 //  hostname/home page from its `WorkspaceDefinition` and writes edits back
-//  through the workspace (which persists the definition). Logout is
-//  coordinated by WorkspaceManager because it deletes the complete session.
+//  through the workspace (which persists the definition). A reset ends in
+//  WorkspaceManager, because it deletes the complete session (R32).
 //
 //  Latchkey removed the exit-node UI (PLAN §1.8/§7.4): exit nodes and subnet
 //  routes are broken under tsnet, because `Dialer.UserDial` takes a plain
@@ -147,7 +147,98 @@ final class SettingsViewModel: ObservableObject {
         workspace.setHostName(hostName)
     }
 
-    func logout() {
+    // MARK: - Sign out and reset (R32)
+
+    /// Which of the two is running. Settings stays up with the button
+    /// spinning until it is done, then closes: the sign-in sheet waits for
+    /// Settings to go (M4), and a reset must not look like a hang while
+    /// control is asked to expire the key.
+    enum Activity: Equatable {
+        case signingOut, resetting
+    }
+    @Published private(set) var activity: Activity?
+
+    /// Why the reset stopped short of deleting anything: control could not
+    /// be asked to expire the node's key (the reason, for the alert). Deleting
+    /// regardless would make the orphan permanent -- the key that could still
+    /// be expired is in the state that would go (R32 review) -- so Settings
+    /// asks: Retry, Delete anyway, or Cancel. Nil once answered.
+    @Published var resetBlocked: String?
+    /// The dashboard sign-out of the reset in progress, kept for Cancel.
+    private var resetSignOut: DashboardSignOut.Outcome?
+
+    /// Sign out of the dashboard: the dashboard session only, on this device
+    /// and at the gateway. The node and the gateway choice stay.
+    func signOutOfDashboard() async {
+        guard activity == nil else { return }
+        activity = .signingOut
+        _ = await workspace.signOutOfDashboard()
+        activity = nil
+    }
+
+    /// Reset app: sign out of the dashboard first, while the tailnet is
+    /// still up to carry it; then log the node out of Tailscale (its key
+    /// expired at the control plane); then delete everything stored here --
+    /// node identity, web data, node logs, the gateway choice -- and start
+    /// over as on first run. The one way to leave the tailnet: a separate
+    /// "log out" that skipped the dashboard step left a live 30-day session
+    /// at the gateway (R32 review). Returns with `resetBlocked` set, and
+    /// nothing deleted, when the logout failed.
+    func resetApp() async {
+        guard activity == nil else { return }
+        activity = .resetting
+        resetSignOut = await workspace.signOutOfDashboard(reload: false)
+        await logOutThenFinish()
+    }
+
+    /// The alert's Retry: the tailnet logout again. Not the dashboard
+    /// sign-out -- its cookies are gone from here already, whatever the
+    /// gateway managed.
+    func retryReset() async {
+        guard activity == nil, resetSignOut != nil else { return }
+        activity = .resetting
+        await logOutThenFinish()
+    }
+
+    /// The alert's Delete anyway: the local state goes although the key is
+    /// still valid at control. The node stays in the admin console until it
+    /// is removed there (the alert said so).
+    func deleteAnyway() {
+        guard activity == nil, resetSignOut != nil else { return }
+        logger.log("Reset: deleting the node's state without a tailnet logout; it keeps its key at the control plane until removed there")
+        finishReset()
+    }
+
+    /// The alert's Cancel: the node stays. The dashboard session is already
+    /// gone, so the workspace ends up as after a sign-out -- the gateway
+    /// loaded afresh, asking for a token.
+    func cancelReset() {
+        guard activity == nil, let outcome = resetSignOut else { return }
+        resetSignOut = nil
+        resetBlocked = nil
+        logger.log("Reset cancelled after the tailnet logout failed; the node stays")
+        workspace.showGatewayAfterSignOut(outcome)
+    }
+
+    private func logOutThenFinish() async {
+        let outcome = await workspace.logOutOfTailnet()
+        activity = nil
+        switch outcome {
+        case .loggedOut, .noKey, .noNode:
+            finishReset()
+        case .failed(let reason):
+            resetBlocked = reason
+        }
+    }
+
+    /// Everything stored on this device goes: the node logs here (process-
+    /// wide, so not the workspace's to delete; tsnet keeps writing to the
+    /// unlinked file until the next launch), then the workspace -- node
+    /// state, web data, gateway -- through the manager.
+    private func finishReset() {
+        resetSignOut = nil
+        resetBlocked = nil
+        NodeLog.removeFiles(in: WorkspaceStore.logsDir)
         deleteSession()
     }
 }

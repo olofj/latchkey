@@ -123,6 +123,9 @@ struct DiagnosticsView: View {
                 Row(label: "Endpoint", value: workspace.manager.proxyEndpointSummary ?? "not published"),
                 Row(label: "Rules", value: (model.proxyPolicy?.matchDomains ?? []).joined(separator: "\n").nonEmpty ?? "none yet"),
                 Row(label: "Direct fallback", value: "off (a dead proxy fails the load)"),
+                Row(label: "Relay", value: relaySummary),
+                Row(label: "Relay restarts", value: "\(counters.socksRelayRestarts)"),
+                Row(label: "Relay probes", value: "\(counters.socksRelayProbes) (\(counters.socksRelayProbesFailed) found it dead)"),
             ]),
             Block(title: "Page", rows: [
                 Row(label: "Last error", value: workspace.tabManager.currentTab?.viewModel.navErrorMessage ?? "none"),
@@ -145,6 +148,17 @@ struct DiagnosticsView: View {
         case .unavailable: return "no"
         case .checking: return "checking"
         }
+    }
+
+    /// Whether WebKit talks to the logging relay or to tsnet directly, and
+    /// why (R30 review): a relay that never started, or lost its listener
+    /// for good, leaves the log without per-connection lines.
+    private var relaySummary: String {
+        guard SocksLogProxy.isEnabled() else { return "off (-NoSocksLog)" }
+        if counters.socksRelayFallbacks > 0 {
+            return "bypassed: no listener could be started (\(counters.socksRelayFallbacks)×)"
+        }
+        return "on"
     }
 
     private var discoverySummary: String {

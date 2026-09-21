@@ -47,6 +47,17 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private let dataStore: WKWebsiteDataStore
     private let configureWebView: ((WKWebViewConfiguration) -> Void)?
     private let openExternally: (URL) -> Void
+    /// Where a load that failed on transport is reported (R30): the tsnet
+    /// manager, which decides whether its SOCKS relay listener needs
+    /// restarting. Nil in harnesses that have no relay.
+    private let reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)?
+    /// When the current navigation began (R30). The relay is asked whether
+    /// it accepted anything since.
+    private var navigationStartedAt = Date()
+    /// `TSNetModel.proxyEndpointGeneration` as of the configuration last
+    /// applied (R30 review). The 5-s status poll republishes on any rule
+    /// change; only a publication that moved this replaced the transport.
+    private var appliedProxyEndpointGeneration: UInt64
     private var webView: WKWebView?
     /// The workspace's dashboard session (M4). Owned by the workspace.
     private weak var session: SessionManager?
@@ -85,7 +96,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
          isHomePage: Bool = false,
          configureWebView: ((WKWebViewConfiguration) -> Void)? = nil,
          session: SessionManager? = nil,
-         openExternally: @escaping (URL) -> Void = { _ in }) {
+         openExternally: @escaping (URL) -> Void = { _ in },
+         reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)? = nil) {
         self.tsnetModel = model
         self.initialURL = initialURL
         self.isHomePage = isHomePage
@@ -93,6 +105,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         self.configureWebView = configureWebView
         self.session = session
         self.openExternally = openExternally
+        self.reportLoadFailure = reportLoadFailure
+        self.appliedProxyEndpointGeneration = model.proxyEndpointGeneration
         super.init()
 
         if let proxy = model.proxyConfiguration {
@@ -233,7 +247,23 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     func applyProxy(_ proxy: ProxyConfiguration) {
         dataStore.proxyConfigurations = [proxy]
-        if !didLoadInitial { loadInitial() }
+        let generation = tsnetModel.proxyEndpointGeneration
+        let endpointReplaced = generation != appliedProxyEndpointGeneration
+        appliedProxyEndpointGeneration = generation
+        if !didLoadInitial {
+            loadInitial()
+            return
+        }
+        // The transport under the page was replaced: a relay listener restart
+        // (R30) or a loopback recovery. A page that failed on that transport
+        // gets the one retry the user would make; any other error page stays,
+        // and a republication that only rescoped the rules (the status poll,
+        // on a peer change) retries nothing (R30 review).
+        guard endpointReplaced else { return }
+        if let navError, SocksRelayRecovery.isTransportFailure(navError.err) {
+            logger.log("Proxy endpoint replaced (generation \(generation)); retrying the failed page")
+            reload()
+        }
     }
 
     func loadInitial() {
@@ -338,6 +368,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // Be deliberately patient with slow private services. This does not
         // delay explicit connection failures; it only extends how long an
         // otherwise-silent request may remain pending.
+        navigationStartedAt = Date()
         webView?.load(URLRequest(url: url, timeoutInterval: 120))
     }
 
@@ -496,6 +527,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // origin. Slow/in-flight loads still retain the committed URL.
         self.url = url
         failedInitialURL = url == initialURL ? url : nil
+        // Let the tsnet manager judge whether its relay listener is what
+        // failed (R30). Only the error's identity goes: no URL leaves here.
+        let ns = error as NSError
+        reportLoadFailure?(SocksRelayRecovery.PageFailure(
+            domain: ns.domain, code: ns.code, navigationStartedAt: navigationStartedAt))
     }
 
     func reportURLParseFailure(_ raw: String) {
@@ -660,6 +696,12 @@ extension BrowserViewModel: WKNavigationDelegate {
         // not alter the committed URL rendered in browser chrome.
         clearNavError()
         session?.navigationStarted()
+        // A page-initiated navigation has no `loadResolved` stamp. Taken a
+        // second early on purpose: the network process can open its
+        // connection before this callback reaches the main thread, and an
+        // accept dated before the navigation would read as a listener that
+        // never answered (R30). An app load's own, exact stamp is kept.
+        navigationStartedAt = max(navigationStartedAt, Date().addingTimeInterval(-1))
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -879,17 +921,18 @@ extension BrowserViewModel: SessionHost {
         loadResolved(url)
     }
 
-    func sessionFetchStatus(_ path: String) async -> Int? {
+    func sessionFetchStatus(_ path: String, method: String, timeout: Duration?) async -> Int? {
         guard let webView else { return nil }
         do {
+            // Whole seconds are all the callers use; 0 means no abort.
+            let timeoutMs = timeout.map { Int($0.components.seconds) * 1000 } ?? 0
             let result = try await webView.callAsyncJavaScript(
-                // The header only marks the app's own check, so the test gateway
-                // can tell it from the page's identical call; servers ignore it.
-                "const r = await fetch(path, {credentials: 'same-origin', cache: 'no-store', headers: {'X-Latchkey-Check': '1'}}); return r.status;",
-                arguments: ["path": path], in: nil, contentWorld: SessionManager.world)
+                PageScriptSources.sessionFetch,
+                arguments: ["path": path, "method": method, "timeoutMs": timeoutMs],
+                in: nil, contentWorld: SessionManager.world)
             return (result as? NSNumber)?.intValue
         } catch {
-            logger.log("Session: \(path) check failed: \(LogRedaction.describe(error))")
+            logger.log("Session: \(method) \(path) failed: \(LogRedaction.describe(error))")
             return nil
         }
     }

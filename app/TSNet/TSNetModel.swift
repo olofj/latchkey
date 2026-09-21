@@ -32,6 +32,13 @@ final class TSNetModel: ObservableObject {
     /// `TSNetManager.refreshProxyPolicyIfNeeded` can tell when the rules
     /// actually changed. See `TailnetProxyPolicy`.
     @Published var proxyPolicy: TailnetProxyPolicy?
+    /// Bumped by `TSNetManager` every time `proxyConfiguration` is published
+    /// for a DIFFERENT SOCKS endpoint (host or port): a relay listener
+    /// restart, a loopback recovery, the first publication. A rule change
+    /// republishes without bumping it. The page retries a transport-failed
+    /// load only when this moved (R30 review): the transport was replaced,
+    /// not merely rescoped. Read at apply time, so not `@Published`.
+    var proxyEndpointGeneration: UInt64 = 0
     /// Test-only state for the TCP-shutdown chaos recovery XCUITest.
     @Published var tcpChaosTestStatus: String?
 

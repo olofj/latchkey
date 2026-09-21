@@ -34,3 +34,13 @@ print(String(data: try! JSONSerialization.data(withJSONObject: payload), encodin
 EOF2
 xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-bridge"
 "$OUT/print-bridge" | node scripts/test-session-bridge.js
+
+# The app's own page-world requests (M4's check, R32's sign-out): the fetch
+# body, run against a fake fetch.
+cat > "$OUT/main.swift" <<'EOF3'
+import Foundation
+let payload = ["fetchBody": PageScriptSources.sessionFetch]
+print(String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!)
+EOF3
+xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-fetch"
+"$OUT/print-fetch" | node scripts/test-session-fetch.js

@@ -369,12 +369,172 @@ final class SessionTests: XCTestCase {
         try await signIn(app, kind: "cli")
     }
 
+    // MARK: - R32: sign out and reset
+
+    /// Settings → Sign out of the dashboard. The gateway is told, as the
+    /// page (so the refresh cookie goes along and the chain is revoked
+    /// there), the cookies are gone here, and the app asks for a token
+    /// again -- also after a relaunch, which is what proves the on-disk
+    /// cookies went too. The positive control comes first: a relaunch BEFORE
+    /// signing out restores the session from exactly those cookies, so the
+    /// relaunch afterwards is known to be able to.
+    func testSigningOutRevokesTheSessionHereAndAtTheGateway() async throws {
+        var app = launch()
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+        // The cookie store writes to disk on its own schedule; give it a
+        // moment before the process goes, so the control below tests the
+        // sign-out and not WebKit's flush timing. The floor is read right
+        // before the process goes: a check the page made during the pause
+        // must not count as the relaunch's (R32 review).
+        try await Task.sleep(for: .seconds(4))
+        let checks = counter(try await gatewayState(), "app_auth_checks")
+        app.terminate()
+
+        // Positive control: the same workspace again, cookies and all.
+        app = launch(reset: false)
+        let restored = try await waitForCounter("app_auth_checks", above: checks)
+        XCTAssertTrue(restored, "a relaunch restores the session from its cookies, and the app confirms it (positive control)")
+        XCTAssertFalse(element(app, "token-sheet").exists, "no token needed after a relaunch while signed in")
+
+        let before = try await gatewayState()
+        confirmInSettings(app, button: "signout-dashboard-button", action: "Sign out")
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+                      "signed out: the fresh page asks for a token, and the native sheet shows it")
+        let after = try await gatewayState()
+        XCTAssertEqual(counter(after, "logouts") - counter(before, "logouts"), 1,
+                       "the gateway saw one POST /api/auth/logout")
+        XCTAssertEqual(counter(after, "logout_revocations") - counter(before, "logout_revocations"), 1,
+                       "with the refresh cookie, so the chain is revoked there (credentials: same-origin)")
+        XCTAssertGreaterThan(counter(after, "denials"), counter(before, "denials"),
+                             "the fresh page had no cookies: refused")
+        XCTAssertFalse(element(app, "token-sheet-message").exists,
+                       "the gateway confirmed, so no 'this device only' notice")
+        app.terminate()
+
+        // The cookies are gone from disk too: a relaunch is still signed out.
+        app = launch(reset: false)
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30),
+                      "after a relaunch the app still asks for a token: no cookie survived")
+        let relaunched = try await gatewayState()
+        XCTAssertEqual(counter(relaunched, "auth_me_ok"), counter(after, "auth_me_ok"),
+                       "nothing has answered 200 since the sign-out")
+        XCTAssertEqual(counter(relaunched, "app_auth_checks"), counter(after, "app_auth_checks"),
+                       "the app's own checks were refused too")
+        XCTAssertEqual(violations(relaunched), 0)
+    }
+
+    /// The gateway cannot be reached. The sign-out must not hang on it:
+    /// local data is cleared anyway, and when the gateway is back the fresh
+    /// page asks for a token, with the sheet saying the sign-out was local
+    /// only. The gateway never heard, so a new token still signs in.
+    ///
+    /// Unreachable twice over: the gateway restarts and is down for a while
+    /// (every open connection dropped, new ones closed unanswered) AND the
+    /// proxy refuses new connections. The blackhole alone is not enough --
+    /// the page's pooled keep-alive connection could still carry the POST.
+    ///
+    /// This is also the test with teeth for the LOCAL clear (R32 review):
+    /// the gateway never revoked anything, so a cookie that survived on disk
+    /// WOULD sign the relaunched app in. (In the test above the chain is
+    /// revoked at the gateway, so its relaunch cannot tell a broken clear
+    /// from a working one.)
+    func testSigningOutWithTheGatewayUnreachableClearsThisDeviceAndSaysSo() async throws {
+        var app = launch()
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+
+        _ = try await Self.post("\(Self.gatewayControl)/__restart?down=8")
+        _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
+        let before = try await gatewayState()
+        confirmInSettings(app, button: "signout-dashboard-button", action: "Sign out")
+        // Settings closes when the sign-out is done: with connections
+        // refused that is at once, and never later than the page-world
+        // request's timeout.
+        XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 20),
+                      "the sign-out does not wait on a gateway it cannot reach")
+        // The fresh page's load failed the same way; the startup retry (20 s)
+        // picks it up once the proxy answers and the gateway is back.
+        _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+                      "once the gateway is back, the fresh page asks for a token")
+        let notice = element(app, "token-sheet-message")
+        XCTAssertTrue(notice.waitForExistence(timeout: 5), "the sheet says what happened")
+        XCTAssertTrue(notice.label.contains("this device only"), notice.label)
+        let after = try await gatewayState()
+        XCTAssertEqual(counter(after, "logouts"), counter(before, "logouts"), "the gateway never heard")
+        XCTAssertEqual(counter(after, "auth_me_ok"), counter(before, "auth_me_ok"),
+                       "and nothing answered 200 since: the cookies are gone")
+
+        // On disk too. The pause is for WebKit's cookie flush, as in the
+        // positive control above (a cookie a broken clear left behind must
+        // have every chance to reach disk); the floor is read right before
+        // the process goes.
+        try await Task.sleep(for: .seconds(4))
+        let floor = try await gatewayState()
+        app.terminate()
+        app = launch(reset: false)
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30),
+                      "after a relaunch the app still asks for a token: no cookie survived the local clear")
+        let relaunched = try await gatewayState()
+        XCTAssertEqual(counter(relaunched, "auth_me_ok"), counter(floor, "auth_me_ok"),
+                       "nothing answered 200 across the relaunch; the chain is still valid at the gateway, so a leftover cookie would have")
+        XCTAssertEqual(counter(relaunched, "app_auth_checks"), counter(floor, "app_auth_checks"),
+                       "the app's own check was refused too")
+
+        try await signIn(app, kind: "cli")
+        let redemptions = counter(try await gatewayState(), "redemptions")
+        XCTAssertEqual(redemptions, 2, "a new token signs in again")
+    }
+
+    /// Settings → Reset app: the dashboard session is ended at the gateway
+    /// first (the node's logout is L2's business; the fixture has no node,
+    /// which counts as nothing to log out), the workspace is deleted, and
+    /// the app starts over as on first run -- a fresh workspace with no
+    /// gateway chosen. Its picker sweeps the one peer, the fake gateway, and
+    /// being alone it is chosen and loaded (M5), so first run shows as the
+    /// picker or as that gateway's token sheet.
+    func testResetAppEndsTheSessionAndStartsOver() async throws {
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+
+        let before = try await gatewayState()
+        confirmInSettings(app, button: "reset-app-button", action: "Reset")
+        let firstRun = NSPredicate { object, _ -> Bool in
+            guard let app = object as? XCUIApplication else { return false }
+            return app.descendants(matching: .any).matching(identifier: "gateway-picker").firstMatch.exists
+                || app.descendants(matching: .any).matching(identifier: "token-sheet").firstMatch.exists
+        }
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: firstRun, object: app)], timeout: 60),
+                       .completed, "reset returns to first run: the gateway picker, or the re-found gateway's sign-in")
+        let after = try await gatewayState()
+        XCTAssertEqual(counter(after, "logouts") - counter(before, "logouts"), 1,
+                       "the dashboard session was ended at the gateway first")
+        XCTAssertEqual(counter(after, "logout_revocations") - counter(before, "logout_revocations"), 1,
+                       "with its refresh cookie: the chain is revoked")
+        // No cookie in the new workspace: nothing answers 200. A smoke check
+        // only -- the replacement workspace has a new dataStoreUUID, so its
+        // store is empty by construction; that the OLD store's cookies are
+        // gone from disk is proved by the unreachable-gateway test's
+        // relaunch and by test-session.sh's R1 scan (R32 review).
+        try await Task.sleep(for: .seconds(6))
+        let later = try await gatewayState()
+        XCTAssertEqual(counter(later, "auth_me_ok"), counter(after, "auth_me_ok"),
+                       "the old session is not restored after a reset")
+        XCTAssertEqual(violations(later), 0)
+    }
+
     // MARK: - Helpers
 
-    private func launch(extra: [String] = []) -> XCUIApplication {
+    /// `reset` false relaunches the SAME workspace -- its data store, cookies
+    /// and all -- as a user reopening the app does (R32's tests).
+    private func launch(extra: [String] = [], reset: Bool = true) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-UITestResetWorkspaces",
+        app.launchArguments = (reset ? ["-UITestResetWorkspaces"] : []) + [
             "-UITestHomePage", Self.gateway,
             "-TestStatusFixture", OfflineHarnessTests.fixture(suffix: "tail-scale.ts.net", peers: ["gw"]),
             "-TestProxyEndpoint", OfflineHarnessTests.proxyEndpoint,
@@ -385,6 +545,30 @@ final class SessionTests: XCTestCase {
         ] + extra
         app.launch()
         return app
+    }
+
+    /// Settings → a destructive row (below the fold of the half sheet, so
+    /// scrolled to) → its confirmation alert's destructive button (R32).
+    private func confirmInSettings(_ app: XCUIApplication, button id: String, action: String,
+                                   file: StaticString = #filePath, line: UInt = #line) {
+        app.buttons["settings-button"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "the gear opens Settings",
+                      file: file, line: line)
+        let row = element(app, id)
+        XCTAssertTrue(row.reveal(scrolling: app.collectionViews.firstMatch), "Settings has \(id)", file: file, line: line)
+        row.tap()
+        let confirm = app.alerts.buttons[action].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "a confirmation first: \(action)", file: file, line: line)
+        confirm.tap()
+    }
+
+    /// Polls the gateway until `name` exceeds `floor`.
+    private func waitForCounter(_ name: String, above floor: Int, timeout: Int = 30) async throws -> Bool {
+        for _ in 0..<timeout {
+            if counter(try await gatewayState(), name) > floor { return true }
+            try await Task.sleep(for: .seconds(1))
+        }
+        return false
     }
 
     private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {

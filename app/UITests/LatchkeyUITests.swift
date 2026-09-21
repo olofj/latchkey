@@ -136,25 +136,30 @@ final class LatchkeyUITests: XCTestCase {
         guard requireBrowserReady(app, timeout: 90) else { return }
         attachScreenshot(app, named: "login-success")
 
-        // --- Phase 2: logout from Settings ---
+        // --- Phase 2: reset from Settings (R32: the one way to leave the
+        // tailnet; the separate "Log out of Tailscale" was folded into it) ---
         XCTAssertTrue(openSettings(app), "Settings should open from the browser gear")
-        let logout = settingsLogoutButton(in: app)
-        scrollToElement(logout, in: app)
-        XCTAssertTrue(logout.waitForExistence(timeout: 10),
-                      "The (red) Logout button should be present on Settings")
-        logout.tap()
+        let reset = settingsResetButton(in: app)
+        scrollToElement(reset, in: app)
+        XCTAssertTrue(reset.waitForExistence(timeout: 10),
+                      "The (red) Reset app button should be present on Settings")
+        reset.tap()
 
-        // SwiftUI confirmation alert: title "Logout", destructive confirm "Logout".
-        let alertConfirm = app.alerts["Logout"].buttons["Logout"]
+        // SwiftUI confirmation alert (R32): title "Reset Latchkey?",
+        // destructive confirm "Reset".
+        let alertConfirm = app.alerts["Reset Latchkey?"].buttons["Reset"]
         XCTAssertTrue(alertConfirm.waitForExistence(timeout: 10),
-                      "Logout confirmation alert should appear")
+                      "Reset confirmation alert should appear")
         alertConfirm.tap()
 
-        // Logout deletes the whole (and currently only) session, then the
-        // workspace manager seeds a fresh session. That replacement reaches
-        // NeedsLogin and normally renders the connection gate. Accept the
-        // browser LoginBanner too in case the UI transition overlaps polling.
-        let needsLoginAgain = waitForNeedsLoginAgain(app, timeout: 40)
+        // A reset signs out of the dashboard, expires the node's key at the
+        // control plane (R32; control is reachable here, so no "couldn't
+        // reach Tailscale" alert), then deletes the whole (and currently
+        // only) session, and the workspace manager seeds a fresh one. That
+        // replacement reaches NeedsLogin and normally renders the connection
+        // gate. Accept the browser LoginBanner too in case the UI transition
+        // overlaps polling.
+        let needsLoginAgain = waitForNeedsLoginAgain(app, timeout: 60)
         if !needsLoginAgain { attachScreenshot(app, named: "logout-no-needslogin") }
         XCTAssertTrue(needsLoginAgain,
                       "After logout the app should need login again — either the " +
@@ -221,11 +226,11 @@ final class LatchkeyUITests: XCTestCase {
             "Settings screen should appear after tapping the gear"
         )
         // A connection-independent control that only lives on the Settings screen.
-        let logout = settingsLogoutButton(in: app)
-        scrollToElement(logout, in: app)
+        let reset = settingsResetButton(in: app)
+        scrollToElement(reset, in: app)
         XCTAssertTrue(
-            logout.waitForExistence(timeout: 5),
-            "Logout button should be present on the Settings screen"
+            reset.waitForExistence(timeout: 5),
+            "Reset app button should be present on the Settings screen"
         )
 
         // Done dismisses the cover.
@@ -815,7 +820,7 @@ final class LatchkeyUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10),
                       "Settings should open")
 
-        // Routing is the last section (below Logout, so the primary controls
+        // Routing is the last section (below Reset, so the primary controls
         // stay above the fold), and `Form` is lazy — its elements may not exist
         // at all until scrolled into view. Scroll until the test field appears.
         let field = app.textFields["routing-test-field"]
@@ -1037,9 +1042,9 @@ final class LatchkeyUITests: XCTestCase {
 
     /// Form rows are lazily materialized, so a query made before scrolling may
     /// have neither the custom identifier nor SwiftUI's visible-title identity.
-    private func settingsLogoutButton(in app: XCUIApplication) -> XCUIElement {
-        let identified = app.buttons["logout-button"]
-        return identified.exists ? identified : app.buttons["Logout"].firstMatch
+    private func settingsResetButton(in app: XCUIApplication) -> XCUIElement {
+        let identified = app.buttons["reset-app-button"]
+        return identified.exists ? identified : app.buttons["Reset app"].firstMatch
     }
 
     private func scrollToElement(_ element: XCUIElement, in app: XCUIApplication) {

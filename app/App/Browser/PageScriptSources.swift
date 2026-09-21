@@ -106,4 +106,29 @@ enum PageScriptSources {
       if (s) { s.remove(); }
     })();
     """#
+
+    /// The body of the async function the app runs in its own content world
+    /// to ask the gateway something AS THE PAGE: M4's `/api/auth/me` check,
+    /// and R32's `POST /api/auth/logout`. Arguments `path`, `method` and
+    /// `timeoutMs` (0: none). Returns the HTTP status.
+    ///
+    /// Why the page and not URLSession: the request must carry the page's
+    /// cookies (HttpOnly; the refresh cookie is scoped to /api/auth) and its
+    /// Origin, which the gateway's CSRF check compares. `same-origin`
+    /// credentials is the contract -- `omit` would make the logout a no-op
+    /// that still answers 200. The header only marks the app's own requests,
+    /// so the test gateway can tell them from the page's identical calls;
+    /// servers ignore it. The abort is what keeps a sign-out from hanging on
+    /// a gateway that is down.
+    static let sessionFetch = #"""
+    const controller = new AbortController();
+    const timer = timeoutMs > 0 ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
+    try {
+      const r = await fetch(path, {method: method, credentials: 'same-origin', cache: 'no-store',
+                                   headers: {'X-Latchkey-Check': '1'}, signal: controller.signal});
+      return r.status;
+    } finally {
+      if (timer !== null) { clearTimeout(timer); }
+    }
+    """#
 }

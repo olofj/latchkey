@@ -39,6 +39,18 @@
 //  set `APERTURE_NO_SOCKS_LOG=1` / `-NoSocksLog` to bypass it and point WebKit
 //  straight at tsnet.
 //
+//  ## Housekeeping (R30)
+//
+//  Being in the data path by default, the relay is bounded: `SocksRelayCapacity`
+//  caps concurrent sessions and picks who goes at the cap. And its own
+//  listener can be defuncted by iOS while tsnet's stays up (see
+//  `restartListener`); `TSNetManager` asks this object whether it accepted
+//  anything for a failed load, probes the port with a loopback connect
+//  (`probe`), and restarts the listener when the probe fails. Both decisions
+//  are in `App/Network/SocksRelayPolicy.swift`. Everything mutable here is
+//  confined to `queue`; a listener that reports failure after it was ready
+//  is handed to `onListenerFailed`, so the manager can replace it.
+//
 
 import Foundation
 import Network
@@ -63,60 +75,142 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
         return !TestHooks.flag("-NoSocksLog")
     }
 
-    private let upstreamHost: String
-    private let upstreamPort: UInt16
+    /// tsnet's loopback SOCKS5 listener. Read by the manager if a restart
+    /// cannot start a listener and WebKit has to be pointed at tsnet directly.
+    let upstreamHost: String
+    let upstreamPort: UInt16
+    private let capacity: SocksRelayCapacity
+    /// Called, on the relay's queue, when a listener that had reached
+    /// `.ready` reports `.failed` (R30 review): iOS reporting a defuncted
+    /// listener rather than leaving it looking alive. The manager replaces
+    /// it, within its restart budget. The listener is already gone by then.
+    private let onListenerFailed: (@Sendable () -> Void)?
     private let queue = DispatchQueue(label: "net.lixom.latchkey.sockslog")
+    /// Confined to `queue`, as is every other mutable thing here: `start`,
+    /// `stop`, `restartListener` and the state handlers all touch it there.
     private var listener: NWListener?
+    /// Listeners that reached `.ready` so far. The log carries it, and the
+    /// host tests tell a restarted listener from the old one by it: an
+    /// ephemeral port can be handed out twice.
+    private var listenerGeneration: UInt64 = 0
     /// Monotonic id so a CONNECT and its reply can be correlated in the log.
     private var nextID: UInt64 = 1
     private var activeClients: [UInt64: NWConnection] = [:]
     private var activeUpstreams: [UInt64: NWConnection] = [:]
+    /// Parse state and last activity per admitted session (R30).
+    private var sessions: [UInt64: Session] = [:]
     private var lifecycleEvents: UInt64 = 0
+    /// When the listener last accepted a client: the evidence a failed page
+    /// load is judged against (R30).
+    private var lastAcceptedAt: Date?
+    private var refusals: UInt64 = 0
+    private var evictions: UInt64 = 0
 
-    init(upstreamHost: String, upstreamPort: UInt16) {
+    init(upstreamHost: String, upstreamPort: UInt16,
+         capacity: SocksRelayCapacity = SocksRelayCapacity(),
+         onListenerFailed: (@Sendable () -> Void)? = nil) {
         self.upstreamHost = upstreamHost
         self.upstreamPort = upstreamPort
+        self.capacity = capacity
+        self.onListenerFailed = onListenerFailed
     }
+
+    /// How long a listener may take to reach `.ready` before it is given up
+    /// on. Loopback takes microseconds; this is the pathological bound.
+    nonisolated static let startTimeout: TimeInterval = 3
 
     /// Starts listening and returns the local port WebKit should point at, or
     /// nil if the listener couldn't start (caller then uses tsnet directly).
+    /// Waits for the port (see `startListener`): the proxy configuration is
+    /// built synchronously from it when the node comes up.
     func start() -> UInt16? {
+        let result = Box<UInt16?>(nil)
+        let done = DispatchSemaphore(value: 0)
+        queue.async { [self] in
+            startListener { port in
+                result.value = port
+                done.signal()
+            }
+        }
+        _ = done.wait(timeout: .now() + Self.startTimeout + 1)
+        return result.value
+    }
+
+    /// Creates a listener on `queue` and hands `completion` (also on `queue`)
+    /// its port once it is `.ready`, or nil if it failed, was cancelled, or
+    /// took longer than `startTimeout`. Exactly one completion.
+    ///
+    /// The OS assigns the port asynchronously: `listener.port` is 0 (or nil)
+    /// until the listener actually reaches `.ready`, so that state is waited
+    /// for rather than `.port` polled — otherwise WebKit gets pointed at
+    /// port 0 and every load fails.
+    private func startListener(completion: @escaping @Sendable (UInt16?) -> Void) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        let l: NWListener
         do {
             let params = NWParameters.tcp
             params.requiredInterfaceType = .loopback
             params.allowLocalEndpointReuse = true
-            let l = try NWListener(using: params)
-            l.newConnectionHandler = { [weak self] conn in
-                self?.handle(client: conn)
-            }
-
-            // The OS assigns the port asynchronously: `listener.port` is 0 (or
-            // nil) until the listener actually reaches `.ready`, so we must wait
-            // for that state rather than polling `.port` — otherwise WebKit gets
-            // pointed at port 0 and every load fails.
-            let ready = DispatchSemaphore(value: 0)
-            l.stateUpdateHandler = { state in
-                switch state {
-                case .ready, .failed, .cancelled:
-                    ready.signal()
-                default:
-                    break
-                }
-            }
-            l.start(queue: queue)
-            _ = ready.wait(timeout: .now() + 3)
-
-            guard case .ready = l.state, let port = l.port?.rawValue, port != 0 else {
-                logger.log("sockslog: listener not ready (state=\(l.state), port=\(l.port?.rawValue.description ?? "nil")); using tsnet proxy directly")
-                l.cancel()
-                return nil
-            }
-            listener = l
-            logger.log("sockslog: relay listening on 127.0.0.1:\(port) -> tsnet \(upstreamHost):\(upstreamPort)")
-            return port
+            l = try NWListener(using: params)
         } catch {
             logger.log("sockslog: failed to start (\(error)); using tsnet proxy directly")
-            return nil
+            completion(nil)
+            return
+        }
+        l.newConnectionHandler = { [weak self] conn in
+            self?.handle(client: conn)
+        }
+
+        let progress = StartProgress()
+        l.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                guard !progress.settled else { return }
+                progress.settled = true
+                guard let port = l.port?.rawValue, port != 0 else {
+                    logger.log("sockslog: listener ready without a port; using tsnet proxy directly")
+                    l.cancel()
+                    completion(nil)
+                    return
+                }
+                progress.ready = true
+                self.listener = l
+                self.listenerGeneration &+= 1
+                logger.log("sockslog: relay listening on 127.0.0.1:\(port) -> tsnet \(self.upstreamHost):\(self.upstreamPort) (listener \(self.listenerGeneration))")
+                completion(port)
+            case .failed(let error):
+                if progress.ready {
+                    // After `.ready`: iOS reporting the defuncted listener.
+                    // It is dead; say so to the manager (R30 review).
+                    logger.log("sockslog: listener failed after ready: \(error); asking for a replacement")
+                    if self.listener === l { self.listener = nil }
+                    self.onListenerFailed?()
+                } else if !progress.settled {
+                    progress.settled = true
+                    logger.log("sockslog: listener failed: \(error); using tsnet proxy directly")
+                    completion(nil)
+                }
+            case .cancelled:
+                // Our own doing (stop, restart, the test hook), unless it
+                // happened before ready, when it ends the start.
+                if !progress.settled {
+                    progress.settled = true
+                    completion(nil)
+                }
+            case .waiting(let error):
+                logger.log("sockslog: listener waiting: \(error)")
+            default:
+                break
+            }
+        }
+        l.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + Self.startTimeout) {
+            guard !progress.settled else { return }
+            progress.settled = true
+            logger.log("sockslog: listener not ready after \(Int(Self.startTimeout))s (state=\(l.state)); using tsnet proxy directly")
+            l.cancel()
+            completion(nil)
         }
     }
 
@@ -131,46 +225,195 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
     /// Existing relay sessions keep using this object and are not disturbed.
     /// Apple may defunct a loopback listener while leaving its NWListener object
     /// apparently alive; a fresh OS-assigned port is therefore required.
-    func restartListener() -> UInt16? {
+    /// Called by `TSNetManager.restartSocksRelay` on `SocksRelayRecovery`'s
+    /// verdict (R30); the caller republishes the proxy configuration.
+    /// Asynchronous: nothing waits on the main actor for the new port (R30
+    /// review). `completion` runs on the relay's queue.
+    func restartListener(completion: @escaping @Sendable (UInt16?) -> Void) {
+        queue.async { [self] in
+            listener?.cancel()
+            listener = nil
+            startListener(completion: completion)
+        }
+    }
+
+    /// `restartListener(completion:)`, awaited.
+    func restartListener() async -> UInt16? {
+        await withCheckedContinuation { continuation in
+            restartListener { continuation.resume(returning: $0) }
+        }
+    }
+
+    /// Whether the listener accepted a client at or after `since`: for a page
+    /// load that failed, whether the load reached the relay at all (R30).
+    func hasAcceptedSession(since: Date) -> Bool {
+        queue.sync { lastAcceptedAt.map { $0 >= since } ?? false }
+    }
+
+    /// Sessions being relayed right now.
+    var activeSessionCount: Int {
+        queue.sync { sessions.count }
+    }
+
+    /// How many listeners have reached `.ready` in this relay's life.
+    var listenerStarts: UInt64 {
+        queue.sync { listenerGeneration }
+    }
+
+    // MARK: - The self-probe (R30 review)
+
+    /// How long a probe waits for the connect to be accepted or refused. A
+    /// live loopback listener answers in microseconds; a defuncted socket
+    /// refuses at once or, at worst, drops the SYN.
+    nonisolated static let probeTimeout: TimeInterval = 2
+    nonisolated private static let probeQueue = DispatchQueue(label: "net.lixom.latchkey.sockslog.probe")
+
+    /// Whether anything accepts a TCP connection on 127.0.0.1:`port`: the
+    /// relay's own listener, asked directly. A connect that completes is
+    /// accepted by the relay like any client (one accept/finish pair in the
+    /// log; no bytes are sent) and closed at once. Never blocks the caller:
+    /// the connect runs on its own queue, `completion` too.
+    nonisolated static func probe(port: UInt16, timeout: TimeInterval = probeTimeout,
+                                  completion: @escaping @Sendable (SocksRelayRecovery.ListenerProbe) -> Void) {
+        let params = NWParameters.tcp
+        params.requiredInterfaceType = .loopback
+        let connection = NWConnection(host: "127.0.0.1",
+                                      port: NWEndpoint.Port(rawValue: port) ?? .any,
+                                      using: params)
+        let progress = StartProgress()
+        let finish: @Sendable (SocksRelayRecovery.ListenerProbe) -> Void = { outcome in
+            guard !progress.settled else { return }
+            progress.settled = true
+            connection.cancel()
+            completion(outcome)
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                finish(.answers)
+            case .waiting(let error):
+                // A refused loopback connect parks the connection here, "for
+                // a better path", rather than failing it.
+                logger.log("sockslog: probe of 127.0.0.1:\(port) refused: \(error)")
+                finish(.refused)
+            case .failed(let error):
+                logger.log("sockslog: probe of 127.0.0.1:\(port) failed: \(error)")
+                finish(.refused)
+            default:
+                break
+            }
+        }
+        connection.start(queue: probeQueue)
+        probeQueue.asyncAfter(deadline: .now() + timeout) {
+            finish(.timedOut)
+        }
+    }
+
+    /// `probe(port:timeout:completion:)`, awaited.
+    nonisolated static func probe(port: UInt16, timeout: TimeInterval = probeTimeout) async
+        -> SocksRelayRecovery.ListenerProbe {
+        await withCheckedContinuation { continuation in
+            probe(port: port, timeout: timeout) { continuation.resume(returning: $0) }
+        }
+    }
+
+    /// One start's progress, confined to the queue its callbacks run on.
+    private final class StartProgress: @unchecked Sendable {
+        var settled = false
+        var ready = false
+    }
+
+    /// A value handed across a semaphore.
+    private final class Box<T>: @unchecked Sendable {
+        var value: T
+        init(_ value: T) { self.value = value }
+    }
+
+#if LATCHKEY_TEST_HOOKS
+    /// Test hook (R30): kills the app-owned listener and every session the
+    /// way iOS does after a suspension. The port WebKit was given stops
+    /// answering; tsnet's own listener is untouched, so the status poll sees
+    /// nothing and only a failed page load can notice. Lets the L2 harness
+    /// exercise the page-driven restart end to end.
+    func debugDefunctListener() {
         queue.sync {
             listener?.cancel()
             listener = nil
+            for id in Array(sessions.keys) {
+                close(id: id, reason: "test hook: listener defuncted")
+            }
         }
-        return start()
     }
+#endif
 
     // MARK: - Relay
 
     private func handle(client: NWConnection) {
+        let now = Date()
+        // The cap (R30). Refusals and evictions are logged sparingly, as
+        // accepts are: a storm of them must not become its own log storm
+        // (LogRing aborts the process at 1000 lines/s).
+        let active = sessions.map { SocksRelayCapacity.Session(id: $0.key, lastActivity: $0.value.lastActivity) }
+        switch capacity.admit(active, now: now) {
+        case .accept:
+            break
+        case .acceptEvicting(let victim, let idle):
+            evictions &+= 1
+            if evictions <= 3 || evictions.isMultiple(of: 100) {
+                logger.log("sockslog: at capacity (\(sessions.count)); evicting socks[\(victim)], silent for \(Int(idle))s (evicted \(evictions) so far)")
+            }
+            close(id: victim, reason: "evicted at capacity after \(Int(idle))s idle")
+        case .refuse:
+            refusals &+= 1
+            if refusals <= 3 || refusals.isMultiple(of: 100) {
+                logger.log("sockslog: at capacity (\(sessions.count)), every session live; refusing a connection (refused \(refusals) so far)")
+            }
+            client.cancel()
+            return
+        }
+
         let id = nextID
         nextID += 1
         activeClients[id] = client
+        lastAcceptedAt = now
         lifecycleEvents &+= 1
         if lifecycleEvents <= 20 || lifecycleEvents.isMultiple(of: 100) {
             logger.log("socks[\(id)] relay accepted; active=\(activeClients.count), lifecycle=\(lifecycleEvents)")
         }
         client.start(queue: queue)
-        beginRelay(client: client, id: id)
+        beginRelay(client: client, id: id, acceptedAt: now)
     }
 
-    private func beginRelay(client: NWConnection, id: UInt64) {
+    private func beginRelay(client: NWConnection, id: UInt64, acceptedAt: Date) {
         client.stateUpdateHandler = nil
         let upstream = NWConnection(
             host: NWEndpoint.Host(upstreamHost),
             port: NWEndpoint.Port(rawValue: upstreamPort) ?? .any,
             using: .tcp)
-        let session = Session(id: id)
+        let session = Session(id: id, lastActivity: acceptedAt)
+        sessions[id] = session
         activeUpstreams[id] = upstream
         upstream.start(queue: queue)
 
         // client -> upstream (parse the CONNECT request out of a copy)
         pump(from: client, to: upstream, id: id) { [weak self] data in
+            session.lastActivity = Date()
             self?.inspectClientBytes(data, session: session)
         }
         // upstream -> client (parse the reply code out of a copy)
         pump(from: upstream, to: client, id: id) { [weak self] data in
+            session.lastActivity = Date()
             self?.inspectServerBytes(data, session: session)
         }
+    }
+
+    /// Ends a session from outside its pumps: eviction, or the test hook.
+    /// The pumps then finish on their cancelled connections, which the
+    /// idempotent `finishRelay` ignores.
+    private func close(id: UInt64, reason: String) {
+        activeClients[id]?.cancel()
+        activeUpstreams[id]?.cancel()
+        finishRelay(id: id, reason: reason)
     }
 
     /// Copies bytes one direction, handing each chunk to `observe` first.
@@ -222,6 +465,7 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
         let existed = activeClients.removeValue(forKey: id) != nil
             || activeUpstreams.removeValue(forKey: id) != nil
         activeUpstreams.removeValue(forKey: id)
+        sessions.removeValue(forKey: id)
         guard existed else { return }
         lifecycleEvents &+= 1
         logger.log("socks[\(id)] relay finished (\(reason)); active=\(activeClients.count), lifecycle=\(lifecycleEvents)")
@@ -241,8 +485,14 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
         var pendingServer = Data()
         var target = "?"
         var requestedAt = Date()
+        /// The last byte in either direction, or the accept; what the cap
+        /// evicts by (R30).
+        var lastActivity: Date
 
-        init(id: UInt64) { self.id = id }
+        init(id: UInt64, lastActivity: Date) {
+            self.id = id
+            self.lastActivity = lastActivity
+        }
 
         enum ClientPhase { case greeting, auth, request, done }
         enum ServerPhase { case methodSelect, authReply, connectReply, done }

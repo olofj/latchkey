@@ -42,7 +42,8 @@ final class BrowserTab: Identifiable, ObservableObject {
          dataStore: WKWebsiteDataStore,
          isHomePage: Bool = false,
          session: SessionManager? = nil,
-         openExternally: @escaping (URL) -> Void = { _ in }) {
+         openExternally: @escaping (URL) -> Void = { _ in },
+         reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)? = nil) {
         self.id = id
         self.initialURL = initialURL
         self.model = model
@@ -58,7 +59,8 @@ final class BrowserTab: Identifiable, ObservableObject {
                                           dataStore: dataStore,
                                           isHomePage: isHomePage,
                                           session: session,
-                                          openExternally: openExternally)
+                                          openExternally: openExternally,
+                                          reportLoadFailure: reportLoadFailure)
 
         viewModel.$title
             .combineLatest(viewModel.$url)

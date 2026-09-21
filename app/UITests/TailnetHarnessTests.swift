@@ -244,7 +244,10 @@ final class TailnetHarnessTests: XCTestCase {
         let app = launch()
         defer { app.terminate() }
         _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
-        let warning = app.descendants(matching: .any).matching(identifier: "expiry-warning").firstMatch
+        // The KEY's warning: on a device a near-expiry provisioning profile
+        // adds a warning of its own (R31 review).
+        let warning = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier == 'expiry-warning' AND label CONTAINS 'Tailscale key'")).firstMatch
         XCTAssertFalse(warning.exists, "no key expiry yet: no warning")
 
         let node = try await appNode()
@@ -308,11 +311,60 @@ final class TailnetHarnessTests: XCTestCase {
         XCTAssertTrue(state.hasSuffix("Running"), "and the node is back: \(state)")
     }
 
+    // MARK: - R32: a reset removes the node, not just the app's copy
+
+    /// Settings → Reset expires the node's key AT CONTROL (LocalAPI /logout)
+    /// before deleting anything, so no orphan with a valid key stays behind
+    /// in the admin console. Upstream's logout (a local-only deleteProfile)
+    /// would pass every app-side check and fail this one.
+    ///
+    /// Named to sort EARLY (XCTest orders case-insensitively): a reset deletes
+    /// the node logs, and scripts/test-tailnet.sh's login-link scan proves
+    /// itself on the redacted link the LAST test (a login) leaves in tsnet.log.
+    func testAResetExpiresTheNodeAtControl() async throws {
+        try await resetHarness()
+        let app = launch()
+        defer { app.terminate() }
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        let node = try await appNode()
+        let expiredBefore = try await nodeKeyExpired(hostname: node.hostname)
+        XCTAssertFalse(expiredBefore, "a fresh node's key is valid")
+
+        app.buttons["settings-button"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10))
+        let reset = app.buttons["reset-app-button"]
+        XCTAssertTrue(reset.reveal(scrolling: app.collectionViews.firstMatch), "Settings offers Reset")
+        reset.tap()
+        let confirm = app.alerts.buttons["Reset"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "a reset asks first")
+        confirm.tap()
+
+        var expired = false
+        for _ in 0..<30 where !expired {
+            try await Task.sleep(for: .seconds(1))
+            expired = try await nodeKeyExpired(hostname: node.hostname)
+        }
+        XCTAssertTrue(expired, "the reset node's key is expired at control, not just forgotten here")
+    }
+
+    /// Whether control holds an EXPIRED key for a node of this name (a node
+    /// that logged out; a new one of the same name may have joined since).
+    private func nodeKeyExpired(hostname: String) async throws -> Bool {
+        let nodes = try await harnessState()["nodes"] as? [[String: Any]] ?? []
+        return nodes.contains { $0["hostname"] as? String == hostname && $0["keyExpired"] as? Bool == true }
+    }
+
     /// The node's state as the app itself reports it (Settings → Status):
     /// the harness can see registrations and approvals, not a client's state.
+    /// Waits for Running, up to the join timeout -- after a re-login the node
+    /// needs its new netmap and a fresh DERP connection first (R31 review) --
+    /// and returns what the row last said.
     private func nodeState(_ app: XCUIApplication) -> String {
         let list = app.openStatus()
-        let state = app.statusRow("diag-state", in: list)
+        let row = list.descendants(matching: .any).matching(identifier: "diag-state").firstMatch
+        var state = app.statusRow("diag-state", in: list)
+        let running = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label ENDSWITH 'Running'"), object: row)
+        if XCTWaiter().wait(for: [running], timeout: Self.joinTimeout) == .completed { state = row.label }
         app.buttons["diagnostics-done-button"].tap()
         app.buttons["settings-done-button"].firstMatch.tap()
         return state

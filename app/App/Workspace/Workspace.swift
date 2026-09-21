@@ -54,7 +54,10 @@ final class Workspace: ObservableObject, Identifiable {
                                      model: model,
                                      homePage: homePage,
                                      dataStore: dataStore,
-                                     session: session)
+                                     session: session,
+                                     // A load that failed on transport goes to the
+                                     // manager, which may restart its relay (R30).
+                                     reportLoadFailure: { [manager] in manager.pageLoadFailed($0) })
     lazy var statusViewModel = StatusViewModel(manager: manager)
     /// Finds KiroCrew gateways on this workspace's tailnet (M5).
     lazy var discovery = GatewayDiscovery(model: model) { [manager] in
@@ -97,6 +100,11 @@ final class Workspace: ObservableObject, Identifiable {
         // sign-in URL here; the observer below writes the cleaned value back.
         self.homePage = HomePage(url: GatewayAddress.persistable(definition.homePageURL))
         self.dataStore = WKWebsiteDataStore(forIdentifier: definition.dataStoreUUID)
+
+        // A session check the page could not answer twice is the manager's
+        // cue to probe its relay listener (R30 review).
+        let manager = self.manager
+        session.onUnansweredCheck = { manager.sessionCheckUnanswered() }
 
         // Persist home-page edits back into the definition.
         homePage.$url
@@ -162,6 +170,105 @@ final class Workspace: ObservableObject, Identifiable {
         // reach the definition (R2); the committed value is reduced to an
         // origin by SettingsViewModel.qualifyHomePage.
         homePage.url = GatewayAddress.stripParameters(url)   // observer persists
+    }
+
+    // MARK: - Sign out and reset (R32)
+
+    /// Ends the dashboard session. The gateway is asked to revoke it as the
+    /// page (DashboardSignOut: only a page-world POST carries the refresh
+    /// cookie and the Origin its CSRF check wants); then this workspace's web
+    /// data -- cookies, storage, caches -- is cleared whatever the gateway
+    /// said; then the gateway is loaded afresh, so its page asks for a token
+    /// again and the native sheet appears (M4). The node and the gateway
+    /// choice are untouched. `reload` false when the workspace is about to
+    /// be deleted anyway (reset).
+    func signOutOfDashboard(reload: Bool = true) async -> DashboardSignOut.Outcome {
+        let outcome = DashboardSignOut.outcome(logoutStatus: await session.requestLogout())
+        // No page may set a cookie between the wipe and the fresh load: the
+        // page is stopped first, then released.
+        await blankCurrentPage()
+        tabManager.unloadAllWebViews()
+        await dataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+                                   modifiedSince: .distantPast)
+        logger.log("Sign out: \(outcome); web data cleared")
+        if reload { showGatewayAfterSignOut(outcome) }
+        return outcome
+    }
+
+    /// The end of a sign-out that keeps this workspace: the gateway loaded
+    /// afresh, so its page asks for a token again and the native sheet
+    /// appears (M4), saying what the sign-out managed. Also where a reset
+    /// that stopped at the tailnet logout and was cancelled ends up (R32
+    /// review): the dashboard session is gone by then, the node stays.
+    func showGatewayAfterSignOut(_ outcome: DashboardSignOut.Outcome) {
+        session.reset(notice: DashboardSignOut.notice(for: outcome))
+        tabManager.reopenHomeTab()
+    }
+
+    /// Navigates the page to about:blank and waits for the commit. Unloading
+    /// alone does not stop a page (R32 review): the WKWebView stays in the
+    /// view hierarchy, its scripts keep running, and `RawWebView.updateUIView`
+    /// re-attaches it, so the gateway's page could set a cookie between the
+    /// wipe and the fresh load. A committed about:blank has no script left
+    /// to do that. Bounded: a page that will not commit is left to the wipe.
+    private func blankCurrentPage() async {
+        guard let tab = tabManager.currentTab, tab.hasWebView else { return }
+        let blank = URL(string: "about:blank")!
+        guard tab.viewModel.url != blank else { return }
+        tab.viewModel.load(url: blank)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while tab.viewModel.url != blank, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        if tab.viewModel.url != blank {
+            logger.log("Sign out: the page did not commit about:blank in time; releasing it as it is")
+        }
+    }
+
+    /// Logs the node out of the tailnet (TailnetLogout): control expires its
+    /// key first, so that deleting the local state afterwards leaves no node
+    /// with a valid key behind (R32). Bounded. On `.failed` the caller must
+    /// NOT delete the local state: the key that could still be expired is in
+    /// it (R32 review).
+    func logOutOfTailnet() async -> TailnetLogout.Outcome {
+        guard let node = manager.node else {
+            logger.log("Tailnet logout: no node to log out")
+            return .noNode
+        }
+        // Whether control holds a key this can expire: a node past
+        // NeedsLogin. At NeedsLogin (never logged in, or the key already
+        // expired) LocalAPI still answers 204, with nothing to orphan.
+        let state = model.state
+        let hadKey = state.map { [.NeedsMachineAuth, .Starting, .Running, .Stopped].contains($0) } ?? false
+        do {
+            // The session TailscaleKit's own LocalAPI calls use (ephemeral;
+            // R29 review), and the loopback they are addressed to.
+            let (config, loopback) = try await URLSessionConfiguration.tailscaleSession(node)
+            guard let ip = loopback.ip, let port = loopback.port,
+                  let request = TailnetLogout.request(ip: ip, port: port, localAPIKey: loopback.localAPIKey)
+            else {
+                logger.log("Tailnet logout: no loopback address; the node keeps its key at the control plane")
+                return .failed("no loopback address")
+            }
+            let urlSession = URLSession(configuration: config)
+            defer { urlSession.finishTasksAndInvalidate() }
+            let (_, response) = try await urlSession.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let outcome = TailnetLogout.outcome(status: status, hadKey: hadKey)
+            switch outcome {
+            case .loggedOut:
+                logger.log("Tailnet logout: LocalAPI answered \(status); the node's key is expired at the control plane and its profile is gone here")
+            case .noKey:
+                logger.log("Tailnet logout: LocalAPI answered \(status); the node was at \(state.map { "\($0)" } ?? "no state") with no valid key, so there was nothing at the control plane to expire")
+            case .failed, .noNode:
+                logger.log("Tailnet logout: LocalAPI answered \(status); the node keeps its key at the control plane")
+            }
+            return outcome
+        } catch {
+            let reason = LogRedaction.describe(error)
+            logger.log("Tailnet logout failed: \(reason); the node keeps its key at the control plane")
+            return .failed(reason)
+        }
     }
 
     /// Stops this workspace and removes all session-owned data. The manager
