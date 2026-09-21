@@ -8,6 +8,8 @@
 	<string>Latchkey</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>Latchkey uses the camera only to scan the sign-in QR code shown on your Kiro Crew dashboard.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Latchkey talks directly to your other Tailscale devices on the same network when it can, which is faster than relaying through Tailscale's servers. It still works if you decline, just more slowly.</string>
 	<key>NSAppTransportSecurity</key>

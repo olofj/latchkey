@@ -32,6 +32,7 @@ final class TabManager: ObservableObject {
     private let model: TSNetModel
     private let homePage: HomePage
     private let dataStore: WKWebsiteDataStore
+    private let session: SessionManager?
 
     /// Set by native macOS windows so closing the last tab closes the window
     /// (and, on reopen, a fresh home-page tab is created) instead of silently
@@ -48,11 +49,12 @@ final class TabManager: ObservableObject {
     var canOpenNewTab: Bool { tabs.count < Self.maximumTabCount }
 
     init(workspaceID: UUID, model: TSNetModel, homePage: HomePage,
-         dataStore: WKWebsiteDataStore) {
+         dataStore: WKWebsiteDataStore, session: SessionManager? = nil) {
         self.workspaceID = workspaceID
         self.model = model
         self.homePage = homePage
         self.dataStore = dataStore
+        self.session = session
 
         // A build before R2 may have left a tabs.json holding a sign-in URL.
         // Delete it rather than read it.
@@ -139,6 +141,7 @@ final class TabManager: ObservableObject {
         BrowserTab(model: model, initialURL: url,
                    dataStore: dataStore,
                    isHomePage: isHomePage,
+                   session: session,
                    openExternally: { url in Self.openExternally(url) })
     }
 

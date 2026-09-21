@@ -56,4 +56,54 @@ enum PageScriptSources {
       }
     })();
     """#
+
+    /// The id of the `<style>` element `sessionBridge` adds.
+    static let bannerStyleID = "latchkey-session-banner-hidden"
+
+    /// The session bridge (M4.2, R21, R22). Runs in the app's own content
+    /// world, main frame only, at document start — so it is re-injected on
+    /// every navigation, including the `location.assign('/')` KiroCrew does
+    /// when a refresh chain is revoked, after which `mc-auth-required` fires.
+    ///
+    /// Three jobs:
+    ///  1. Forward KiroCrew's `mc-auth-required` / `mc-auth-cleared` window
+    ///     events to native. DOM events reach listeners in every content
+    ///     world; the message handler exists only in the app's world, so the
+    ///     page (or anything it loads from a CDN) cannot post to it.
+    ///  2. Hide the page's own `#mc-session-expired` banner with CSS ONLY
+    ///     (R22): the native sheet replaces it. Never remove the element or
+    ///     click its ✕ — a startup gate reads it, and ✕ clears the client's
+    ///     latches. `display:none` also keeps its input from autofocusing and
+    ///     popping the keyboard.
+    ///  3. Say `ready`. If native does not hear it, it removes the style again
+    ///     (`revealSessionBanner`), so a broken bridge leaves the page's own
+    ///     banner as the way to sign in. With no message handler at all the
+    ///     style is never added in the first place.
+    static let sessionBridge = #"""
+    (function () {
+      var handlers = window.webkit && window.webkit.messageHandlers;
+      var handler = handlers && handlers.kiroSession;
+      if (!handler) { return; }
+      function post(event) {
+        try { handler.postMessage({ event: event }); } catch (e) {}
+      }
+      try {
+        var style = document.createElement('style');
+        style.id = 'latchkey-session-banner-hidden';
+        style.textContent = '#mc-session-expired{display:none!important}';
+        (document.head || document.documentElement).appendChild(style);
+      } catch (e) {}
+      window.addEventListener('mc-auth-required', function () { post('auth-required'); });
+      window.addEventListener('mc-auth-cleared', function () { post('auth-cleared'); });
+      post('ready');
+    })();
+    """#
+
+    /// Undoes `sessionBridge`'s banner hiding: the handshake's fallback (R22).
+    static let revealSessionBanner = #"""
+    (function () {
+      var s = document.getElementById('latchkey-session-banner-hidden');
+      if (s) { s.remove(); }
+    })();
+    """#
 }

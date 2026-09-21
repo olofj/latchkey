@@ -102,6 +102,7 @@ private struct WorkspaceRoot: View {
                     model: workspace.model,
                     tab: tab,
                     statusViewModel: statusViewModel,
+                    session: workspace.session,
                     onSettings: { showingSettings = true }
                 )
             } else {
@@ -143,6 +144,7 @@ private struct DashboardContent: View {
     @ObservedObject var model: TSNetModel
     @ObservedObject var tab: BrowserTab
     @ObservedObject var statusViewModel: StatusViewModel
+    @ObservedObject var session: SessionManager
     let onSettings: () -> Void
 
     var body: some View {
@@ -164,6 +166,27 @@ private struct DashboardContent: View {
             // observes the BrowserTab, which does not republish the view
             // model's changes, so reading the flag here would never update.
             ReturnToDashboardAffordance(model: tab.viewModel)
+        }
+        .overlay(alignment: .top) {
+            // The way back to the sheet after closing it: the page's own
+            // banner is hidden (R22), so this is the only sign-in control.
+            if session.state == .needsToken, !session.isTokenSheetPresented {
+                Button {
+                    session.isTokenSheetPresented = true
+                } label: {
+                    Label("Signed out — Sign in", systemImage: "person.crop.circle.badge.exclamationmark")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.thinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+                .accessibilityIdentifier("session-signin-button")
+            }
+        }
+        .sheet(isPresented: $session.isTokenSheetPresented) {
+            TokenEntrySheet(session: session)
         }
         .overlay(alignment: .bottomTrailing) {
             // A concrete accessibility element for UI automation. An

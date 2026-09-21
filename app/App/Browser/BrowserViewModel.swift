@@ -48,6 +48,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private let configureWebView: ((WKWebViewConfiguration) -> Void)?
     private let openExternally: (URL) -> Void
     private var webView: WKWebView?
+    /// The workspace's dashboard session (M4). Owned by the workspace.
+    private weak var session: SessionManager?
 
     /// The only origin the main frame may show (revision R3). Set from the
     /// app's own resolved loads in `loadResolved`, never from page-initiated
@@ -82,12 +84,14 @@ final class BrowserViewModel: NSObject, ObservableObject {
     init(model: TSNetModel, initialURL: URL, dataStore: WKWebsiteDataStore,
          isHomePage: Bool = false,
          configureWebView: ((WKWebViewConfiguration) -> Void)? = nil,
+         session: SessionManager? = nil,
          openExternally: @escaping (URL) -> Void = { _ in }) {
         self.tsnetModel = model
         self.initialURL = initialURL
         self.isHomePage = isHomePage
         self.dataStore = dataStore
         self.configureWebView = configureWebView
+        self.session = session
         self.openExternally = openExternally
         super.init()
 
@@ -135,6 +139,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         configuration.upgradeKnownHostsToHTTPS = false
         // Before any navigation, so they run at every document start.
         PageScripts.install(into: configuration.userContentController)
+        session?.install(into: configuration.userContentController, host: self)
         configureWebView?(configuration)
 
         let view = WKWebView(frame: .zero, configuration: configuration)
@@ -651,6 +656,7 @@ extension BrowserViewModel: WKNavigationDelegate {
         // A new attempt supersedes any old failure UI, but deliberately does
         // not alter the committed URL rendered in browser chrome.
         clearNavError()
+        session?.navigationStarted()
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -659,6 +665,7 @@ extension BrowserViewModel: WKNavigationDelegate {
         startupLoad = nil
         refreshState(from: webView, includeCommittedURL: true)
         failedInitialURL = nil
+        session?.navigationCommitted()
         // Back on the dashboard's root: the way-back control has done its job.
         if showsReturnToDashboard, webView.url?.path == "/" || webView.url?.path == "" {
             showsReturnToDashboard = false
@@ -704,6 +711,7 @@ extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         refreshState(from: webView, includeCommittedURL: true)
         maybeDumpLoadedPage(webView)
+        session?.navigationFinished()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -847,5 +855,40 @@ extension BrowserViewModel {
             didLoadInitial = false
             loadInitial()
         }
+    }
+}
+
+// MARK: - The dashboard session (M4)
+
+extension BrowserViewModel: SessionHost {
+    var sessionOrigin: URL? { allowedOrigin.flatMap { URL(string: $0) } }
+
+    /// Only ever the gateway's own origin: the session layer navigates to
+    /// sign-in links, and a sign-in link for anywhere else is refused (R23).
+    func loadSessionURL(_ url: URL) {
+        guard let allowedOrigin, GatewayAddress.origin(of: url.absoluteString) == allowedOrigin else {
+            logger.log("Session: refusing a sign-in navigation outside the gateway origin")
+            return
+        }
+        clearNavError()
+        loadResolved(url)
+    }
+
+    func sessionFetchStatus(_ path: String) async -> Int? {
+        guard let webView else { return nil }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "const r = await fetch(path, {credentials: 'same-origin', cache: 'no-store'}); return r.status;",
+                arguments: ["path": path], in: nil, contentWorld: SessionManager.world)
+            return (result as? NSNumber)?.intValue
+        } catch {
+            logger.log("Session: \(path) check failed: \(LogRedaction.describe(error))")
+            return nil
+        }
+    }
+
+    func revealSessionBanner() {
+        webView?.evaluateJavaScript(PageScriptSources.revealSessionBanner, in: nil,
+                                    in: SessionManager.world) { _ in }
     }
 }

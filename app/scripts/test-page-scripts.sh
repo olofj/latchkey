@@ -23,3 +23,14 @@ print(PageScriptSources.stripSignInToken)
 EOF
 xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-scripts"
 "$OUT/print-scripts" | node scripts/test-page-scripts.js
+
+# The session bridge (M4.2, R22): both scripts as JSON, run against a fake page.
+cat > "$OUT/main.swift" <<'EOF2'
+import Foundation
+let payload = ["bridge": PageScriptSources.sessionBridge,
+               "reveal": PageScriptSources.revealSessionBanner,
+               "styleID": PageScriptSources.bannerStyleID]
+print(String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!)
+EOF2
+xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-bridge"
+"$OUT/print-bridge" | node scripts/test-session-bridge.js

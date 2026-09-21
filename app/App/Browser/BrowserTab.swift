@@ -41,6 +41,7 @@ final class BrowserTab: Identifiable, ObservableObject {
     init(id: UUID = UUID(), model: TSNetModel, initialURL: URL,
          dataStore: WKWebsiteDataStore,
          isHomePage: Bool = false,
+         session: SessionManager? = nil,
          openExternally: @escaping (URL) -> Void = { _ in }) {
         self.id = id
         self.initialURL = initialURL
@@ -56,6 +57,7 @@ final class BrowserTab: Identifiable, ObservableObject {
         self.viewModel = BrowserViewModel(model: model, initialURL: initialURL,
                                           dataStore: dataStore,
                                           isHomePage: isHomePage,
+                                          session: session,
                                           openExternally: openExternally)
 
         viewModel.$title

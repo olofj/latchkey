@@ -19,6 +19,7 @@
 import Combine
 import SwiftUI
 import TailscaleKit
+import WebKit
 
 @MainActor
 final class WorkspaceManager: ObservableObject {
@@ -74,6 +75,12 @@ final class WorkspaceManager: ObservableObject {
             let d = WorkspaceDefinition.makeDefault()
             defs = [d]
             activeId = d.id
+            // The web data too. Removing only the workspace dirs left every
+            // earlier test's WKWebsiteDataStore on disk — 111 of them after
+            // a few suite runs — and scripts/test-offline.sh's R1 disk scan
+            // then read other suites' caches (M4). The new store is not
+            // created yet and is never in the list removed here.
+            Self.removeWebsiteDataStores(except: d.dataStoreUUID)
         }
 
         // UI-test hook: wipe every workspace's tsnet state dir so the next
@@ -301,4 +308,22 @@ final class WorkspaceManager: ObservableObject {
         WorkspaceStore.save(workspaces.map { $0.definition }, activeId: activeId)
     }
 
+}
+
+extension WorkspaceManager {
+    /// Test hook support: deletes every web data store except `keep`.
+    /// Asynchronous, because WebKit's removal is; stores still in use (none
+    /// should be, at launch) are skipped and logged.
+    static func removeWebsiteDataStores(except keep: UUID) {
+        Task { @MainActor in
+            let ids = await WKWebsiteDataStore.allDataStoreIdentifiers
+            for id in ids where id != keep {
+                do {
+                    try await WKWebsiteDataStore.remove(forIdentifier: id)
+                } catch {
+                    logger.log("UITest reset: could not remove a web data store: \(LogRedaction.describe(error))")
+                }
+            }
+        }
+    }
 }

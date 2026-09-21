@@ -43,6 +43,9 @@ final class Workspace: ObservableObject, Identifiable {
     /// the SOCKS5 proxy is applied here, in place, on reconnect).
     let dataStore: WKWebsiteDataStore
 
+    /// The dashboard session: sign-in state and the token sheet (M4).
+    let session = SessionManager()
+
     /// Browser/session state is lazy so its first WKWebView is still created
     /// from `WorkspaceRoot.init`, after a window exists. Unlike a view-local
     /// StateObject, workspace ownership keeps tabs alive while another account
@@ -50,7 +53,8 @@ final class Workspace: ObservableObject, Identifiable {
     lazy var tabManager = TabManager(workspaceID: id,
                                      model: model,
                                      homePage: homePage,
-                                     dataStore: dataStore)
+                                     dataStore: dataStore,
+                                     session: session)
     lazy var statusViewModel = StatusViewModel(manager: manager)
 
     /// Called whenever the definition changes, so `WorkspaceManager` can

@@ -130,8 +130,19 @@ this machine.
   at `~/.aperture-ios-authkey`. Three tests are connection-independent:
   `testAppLaunchesAndShowsStatus`, `testOpenAndCloseSettings`,
   `testHomePageSettingPersistsAcrossSettingsReopen`.
-- Milestones M2 and M3 exist to remove that tailnet dependency. Prefer adding
-  coverage there over adding another tailnet-dependent XCUITest.
+- The suites that need **no** tailnet, all driven from the parent repo:
+  - `scripts/test-offline.sh` — L1: the real app and WKWebView against a stub
+    SOCKS5 proxy and a fake dashboard, including the anti-leak tests.
+  - `scripts/test-tailnet.sh` — L2: the app's real tsnet node against a
+    host-side fake control plane (`testing/tsnet-harness`), with login and
+    device approval.
+  - `scripts/test-session.sh` — M4: the dashboard session against KiroCrew's
+    real 0.6.0 frontend, served by `testing/harness/fake_gateway.py`. It is
+    pinned to that bundle and refuses to run against another.
+
+  Each takes `--build`. Each fails unless every test in its file passed; a
+  stale build that runs nothing is not a pass. Add coverage there, not to
+  the tailnet-dependent suite.
 
 Xcode 27 specifics worth knowing: `xcresulttool get object` is deprecated and
 needs `--legacy`; use `xcrun xcresulttool get test-results summary|tests`
@@ -162,5 +173,12 @@ network loss, blackhole the stub proxy.
   certificate, so M8.6 revisits whether to tighten it — do not remove it
   casually before then; `chonk` is reached over plain HTTP on :5476.
 - One-shot surgery scripts live in `scripts/strip-*.py`, `scripts/prune-*.py`
-  and `scripts/repoint-*.py`. They are kept, not deleted, because a future
-  `git merge upstream/main` will re-add what they removed.
+  and `scripts/repoint-*.py`. They are kept as the record of what was removed
+  from upstream and why. Upstream is tracked by cherry-pick only (R16), so
+  they are not something to re-run after a merge.
+- **Swift 6.4 `-O` hazard:** never pass an unapplied `someCharacterSet.contains`
+  as a predicate (`allSatisfy(set.contains)`). Under `-O` the compiler merged
+  two such thunks, and a whitespace check silently tested another set. Debug
+  and Testing (`-Onone`) were correct, so only Release would have broken.
+  Write the closure: `{ set.contains($0) }`. Host tests build with `-O` so
+  they catch this class of bug.
