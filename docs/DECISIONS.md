@@ -790,3 +790,54 @@ Part of the harness work predates Olof's pause. These are not comparable to
 the plan's engineer-hour estimates (M2 10–16 h after R36): an agent with the
 toolchain warm is a different instrument. They are recorded because R36 asks
 for actuals, not as a claim about human effort.
+
+## 2026-09-20 — M2 review
+
+Adversarial review of `app/` `d7fcfffa7..99d1bdaba` plus the parent's harness
+and script (code-review skill, high). **Confirmed sound:** the core anti-leak
+pair can genuinely detect a direct leak; no test hook reaches a non-Testing
+build; the fixture path orders `.Running` and the proxy publication
+correctly; rebuild-on-rescope is right. **Six findings, all places a check
+could pass without checking, all fixed** (`app/` `dad4189c5`, parent
+`158a2ce`):
+
+1. **(high)** The sign-in test could pass on the *old* page's last report. The
+   page now stamps a per-document id, and the test waits for a new one.
+2. **(medium)** `make check`'s `! curl …` negatives could never fail under
+   `set -e` (POSIX exempts `!` commands). They are explicit `if … exit 1` now.
+   **Demonstrated** both ways.
+3. **(medium)** R1's disk scan missed WebKit storage, and a later test's reset
+   erased the evidence (alphabetical order). The sign-in test now runs last
+   and alone, and the scan covers all of `Library` + `tmp` with `grep -a`.
+   **Instrument validated:** a token planted in a binary file under
+   `Library/WebKit` was found.
+4. **(low)** The error-page tests passed on any failure. They now pin the
+   cause (journal CONNECT plus certificate text; `upstream_fail`).
+5. **(low)** `/away-target` served a live page, so Safari could impersonate
+   the app. It is inert now, and the test closes Safari.
+6. **(low)** `harness-down` did not wait for exit before `harness-up`
+   re-checked the ports.
+
+## 2026-09-20 — R35 stop gate after M2: open on the device conditions
+
+R35: stop and reassess if any of these holds.
+
+| Condition | Status |
+|---|---|
+| UI tests cannot run from the agent shell | **Does not hold** (R9) |
+| The dashboard renders blank on the device (#9399) | **Unknown** — needs the device check (O1–O3 pending) |
+| The embedded node cannot reach byskebox | **Unknown** — needs O3/O3b and the device check |
+| Cold start to an interactive dashboard > 15 s | **Unknown** — device-only. The simulator's fixture path is not a measure of it (no real node, no DERP) |
+
+**Decision:** none is known to hold, so work continues into M3 — as Olof
+asked ("keep on executing … without waiting on my approvals"). The gate is
+**not passed**, only not triggered: the three device conditions are evaluated
+at the device check, and the check's result can still stop the project. M3 is
+chosen deliberately as the next work because it stays useful whichever way
+the device check goes. It is test infrastructure for the node and login
+path, independent of how the dashboard renders.
+
+**If #9399 bites** (R35's fallbacks, since Olof does not control KiroCrew
+releases): the reporter's published fix patched into byskebox's gateway venv,
+or a client-side `WKUserScript` carrying the same fix. Either is a small,
+contained change. Neither is started speculatively.
