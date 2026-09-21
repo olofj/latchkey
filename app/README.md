@@ -59,13 +59,13 @@ The xcframework is **not in git** and must exist at
 before the project will build. A missing-framework error means you skipped
 `make framework`.
 
-### Submodules
+### Vendored libtailscale
 
-Clone through [`../scripts/bootstrap.sh`](../scripts/bootstrap.sh) rather than
-by hand. Upstream declares both submodules with `url = .` and stores their
-commits inside the aperture-plus repository itself, which breaks a plain
-`git submodule update --init --recursive` once `origin` has been renamed to
-`upstream`. The bootstrap script handles both levels.
+`ThirdParty/libtailscale/` (with `tailscale-patched/` inside it) is plain
+source committed into this repository, not a submodule — see
+[`ThirdParty/VENDORED.md`](ThirdParty/VENDORED.md) for provenance, the pinned
+upstream revisions, and how to diff against upstream. Every Latchkey change
+to it is a separate commit after the pristine import.
 
 ### If the build fails with `sandbox_apply: Operation not permitted`
 

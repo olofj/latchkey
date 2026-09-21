@@ -49,9 +49,13 @@ non-goals, not omissions.
   27 SDK; keep newer APIs behind availability guards.
 - **The app embeds `TailscaleKit.xcframework`**, which is not in git. Run
   `make framework` first. A missing-framework error means only that.
-- **Submodules are two levels deep and their URLs are booby-trapped.** Use
-  `../scripts/bootstrap.sh`. See `../docs/DECISIONS.md` for why `url = .` does
-  not survive renaming `origin` to `upstream`.
+- **libtailscale is vendored source, not a submodule** (revision R16). It
+  lives in `ThirdParty/libtailscale/`, with the patched tailscale tree at
+  `ThirdParty/libtailscale/tailscale-patched/`. The first commit touching it
+  is a pristine, import-only copy; every change since is its own commit, so
+  `git log -- ThirdParty/libtailscale` is the complete delta from upstream.
+  Keep it that way: never fold a vendored-tree change into an unrelated
+  commit. Provenance and diff recipes are in `ThirdParty/VENDORED.md`.
 
 ## Git workflow
 
@@ -63,13 +67,20 @@ Single-developer repositories with no outside contributors, so:
 - `app/` and the parent are **two separate git repositories** (the parent
   gitignores `app/`). A milestone usually touches both: code here, docs and
   the offline harness there. Commit each one.
-- `upstream` is tailscale/aperture-plus. Local `main` deliberately does not
-  track it, so a bare `git pull` cannot drag in upstream changes and a bare
-  `git push` does not try to write to Tailscale's repository. Bring upstream
-  in on purpose with `git fetch upstream && git merge upstream/main`, and
-  expect to rerun the `scripts/strip-*.py` surgery afterwards.
-- Keep deletions and additions in separate commits where practical, so that
-  merge has the best chance (PLAN §4.2).
+- `upstream` is tailscale/aperture-plus, kept only as a read-only fetch
+  source. Local `main` does not track it. Upstream is tracked by
+  **cherry-pick only** (revision R16) — never a merge. After the pbxproj
+  rewrites, the project rename and the vendoring, a merge would come back as
+  a wall of modify/delete conflicts, and merge compares tips rather than
+  commits, so careful commit hygiene here does not make it easier. Review
+  upstream commits touching `TSNet/` or the vendored tree and bring over the
+  ones worth having; record the last upstream SHA reviewed in
+  `../docs/DECISIONS.md`.
+- There are no remotes of our own: commits are local, and there is nothing to
+  push to.
+- New code goes in `App/`, not `TSNet/` — `TSNet/` is the upstream-shared
+  layer that cherry-picks land in, and new files there also need a
+  `membershipExceptions` pbxproj edit.
 
 ## Adding source files (do NOT hand-edit project.pbxproj for new files)
 
@@ -112,9 +123,9 @@ this machine.
 
 `../docs/PLAN.md` §6 is the strategy. The short version:
 
-- `make test-policy` — 102 split-tunnel + 17 hostname-qualifier checks, ~2s,
-  no simulator. Run it after anything touching routing or hostname
-  qualification.
+- `make test-policy` — the host-only unit tests (split tunnel, hostname
+  qualification, log redaction), ~2s, no simulator. Run it after anything
+  touching routing, hostnames or logging.
 - The inherited XCUITest suite mostly needs a **real tailnet plus an auth key**
   at `~/.aperture-ios-authkey`. Three tests are connection-independent:
   `testAppLaunchesAndShowsStatus`, `testOpenAndCloseSettings`,

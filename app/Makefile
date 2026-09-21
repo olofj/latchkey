@@ -4,8 +4,7 @@
 #   make test       build, then run the UI tests on the simulator
 #   make ipa        archive + export a dev-signed .ipa for a real device
 #   make look       screenshot the booted sim + describe it with a vision sub-pi
-#   make subtrac    preserve HEAD + nested submodule commits in main.trac
-#   make clean      remove app build artifacts (not the libtailscale submodule)
+#   make clean      remove app build artifacts (keeps the TailscaleKit xcframework)
 #
 # The libtailscale build needs Go and the iOS SDK; the app build needs Xcode.
 # Latchkey builds both on Go 1.27.1 / Xcode 27 (docs/DECISIONS.md). Both are
@@ -22,11 +21,15 @@ DERIVED      := build/DerivedData
 XCFRAMEWORK  := ThirdParty/libtailscale/swift/build/Build/Products/Release-iphonefat/TailscaleKit.xcframework
 # Rebuild the generated framework when a tracked libtailscale source changes.
 # Depending only on the xcframework's existence silently packaged stale native
-# code into new archives (especially dangerous for local submodule edits).
+# code into new archives (especially dangerous for local edits to the vendored
+# tree).
+#
+# Since the R16 vendoring this list also covers tailscale-patched/: when it was
+# a nested submodule, `git ls-files` here did not descend into it, so an edit
+# to the patched Go tree never triggered a rebuild -- a latent stale-binary
+# bug that the vendoring fixes for free.
 LIBTSCALE_SOURCES := $(shell git -C ThirdParty/libtailscale ls-files '*.go' '*.c' '*.h' 'swift/TailscaleKit/*.swift' 'swift/TailscaleKit/**/*.swift' | sed 's|^|ThirdParty/libtailscale/|')
 LIBTSCALEDIR := ThirdParty/libtailscale/swift
-SUBTRAC       := go tool git-subtrac
-SUBTRAC_BRANCH := $(shell git branch --show-current)
 
 # Device IPA build (see `make ipa`). Archive + export live under build/.
 ARCHIVE      := build/Latchkey.xcarchive
@@ -84,8 +87,8 @@ framework: $(XCFRAMEWORK)  ## Build TailscaleKit.xcframework (skipped if it exis
 
 $(XCFRAMEWORK): $(LIBTSCALE_SOURCES)
 	@echo
-	@echo "::: Building TailscaleKit.xcframework (libtailscale submodule) :::"
-	@echo "(needs Go 1.26.5; slow the first time)"
+	@echo "::: Building TailscaleKit.xcframework (vendored libtailscale) :::"
+	@echo "(needs Go; slow the first time)"
 	cd $(LIBTSCALEDIR) && make ios-fat
 
 # ----- app -----
@@ -155,24 +158,6 @@ test-ios-ui: framework app  ## Run every required iOS UI test on the simulator
 
 .PHONY: test
 test: test-policy test-ios-ui  ## Run the complete required iOS suite
-
-# ----- commit/submodule history preservation -----
-# Run after EVERY commit. git-subtrac is content-addressed/idempotent, so this
-# is cheap when HEAD is already represented. The moving refs make detached
-# nested-submodule commits fetchable while subtrac recursively records them.
-.PHONY: subtrac
-subtrac:  ## Preserve HEAD and all nested submodule commits in <branch>.trac
-	@test -n "$(SUBTRAC_BRANCH)" || { echo "error: top-level HEAD is detached" >&2; exit 1; }
-	@git -C ThirdParty/libtailscale/tailscale-patched update-ref \
-		refs/heads/aperture-subtrac HEAD
-	@git -C ThirdParty/libtailscale update-ref refs/heads/aperture-subtrac HEAD
-	@$(SUBTRAC) update
-	@want="$$($(SUBTRAC) cid HEAD)"; \
-	 got="$$(git rev-parse '$(SUBTRAC_BRANCH).trac')"; \
-	 test "$$want" = "$$got" || { \
-	   echo "error: $(SUBTRAC_BRANCH).trac=$$got, expected $$want" >&2; exit 1; \
-	 }; \
-	 echo "::: $(SUBTRAC_BRANCH).trac -> $$got (HEAD and nested submodules preserved) :::"
 
 # ----- vision helper (manual / for debugging) -----
 .PHONY: look
