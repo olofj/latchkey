@@ -1,0 +1,246 @@
+// Copyright (c) 2026 Olof Johansson
+// SPDX-License-Identifier: BSD-3-Clause
+
+//
+//  TailnetHarnessTests.swift
+//  LatchkeyUITests
+//
+//  L2: the real tsnet node against a fake control plane (PLAN M3, R17).
+//
+//  Nothing in the app is faked. `-TestControlURL` points the embedded node at
+//  testing/tsnet-harness (parent repo), a host process running Tailscale's
+//  testcontrol with MagicDNS for tail-scale.ts.net, DERP/STUN on loopback and
+//  two real tsnet peers: "dash", which forwards tailnet :443 to the fake
+//  dashboard, and "plain", which serves nothing. The node logs in, gets its
+//  netmap and DNS config, and WebKit reaches https://dash.tail-scale.ts.net
+//  through the node's own loopback SOCKS5 listener.
+//
+//  Observation is server-side, as in L1 (R13): the page reports to the fake
+//  dashboard, and the dash peer journals every tailnet connection with its
+//  source address. A journal entry from the APP node's tailnet address is
+//  the proof the load crossed the tailnet — dash.tail-scale.ts.net is NXDOMAIN
+//  in public DNS, so there is no other way for it to load.
+//
+//  Needs both harnesses up and the test CA trusted: `scripts/test-tailnet.sh`
+//  (parent repo). Endpoints must match testing/tsnet-harness/Makefile.
+//
+
+import XCTest
+
+@MainActor
+final class TailnetHarnessTests: XCTestCase {
+
+    static let controlURL = "http://127.0.0.1:8490"
+    static let harnessAPI = "http://127.0.0.1:8491"
+    static let dashboardControl = "http://127.0.0.1:8480"
+    static let gateway = "https://dash.tail-scale.ts.net"
+    static let gatewayHost = "dash.tail-scale.ts.net"
+
+    /// A cold node's first join takes a few seconds against a loopback
+    /// control plane; the page then needs its WebSocket up.
+    static let joinTimeout: TimeInterval = 60
+
+    override func setUp() async throws {
+        continueAfterFailure = false
+        guard (try? await Self.get("\(Self.harnessAPI)/healthz")) != nil,
+              (try? await Self.get("\(Self.dashboardControl)/__state")) != nil
+        else {
+            XCTFail("The L2 harness is not running. Use scripts/test-tailnet.sh (parent repo).")
+            return
+        }
+        _ = try await Self.post("\(Self.dashboardControl)/__reset")
+    }
+
+    // MARK: - M3.4 / M3.5: join and load over the tailnet
+
+    /// Open mode: the node joins with no interaction, receives the netmap and
+    /// MagicDNS config, and the dashboard loads by name through the node's
+    /// loopback SOCKS5 proxy — WebSocket and SSE included.
+    func testNodeJoinsTheFakeTailnetAndLoadsTheDashboard() async throws {
+        try await resetHarness()
+        let app = launch()
+        defer { app.terminate() }
+
+        let report = try await waitForReport(timeout: Self.joinTimeout) {
+            $0["ws"] as? String == "ws:open" && ($0["echo"] as? String)?.hasPrefix("echo:") == true
+        }
+        XCTAssertEqual(report["title"] as? String, "FAKE DASHBOARD")
+
+        let node = try await appNode()
+        XCTAssertTrue(node.hostname.hasPrefix("latchkey-"), "the app's node registers under its own name; got \(node.hostname)")
+        XCTAssertTrue(node.machineAuthorized)
+        try await assertJournaled(from: node)
+    }
+
+    // MARK: - R17: login and device approval
+
+    /// RequireAuth: the node stops at NeedsLogin, the gate offers Login, and
+    /// the harness's login page (reached through the app's real
+    /// ASWebAuthenticationSession) completes it. Nothing loads before that.
+    func testRequireAuthLoginCompletesThroughTheLoginPage() async throws {
+        try await resetHarness(auth: true)
+        let app = launch()
+        defer { app.terminate() }
+
+        let login = app.buttons["login-button"]
+        XCTAssertTrue(login.waitForExistence(timeout: Self.joinTimeout), "the gate offers Login at NeedsLogin")
+        try await assertNoDashboardLoad(for: 2, "nothing may load before the login")
+
+        login.tap()
+        acceptSignInPromptIfShown()
+
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        let logins = try await harnessState()["logins"] as? [[String: Any]] ?? []
+        XCTAssertTrue(logins.contains { $0["completed"] as? Bool == true },
+                      "the login completed through the harness's login page; got \(logins)")
+        try await assertJournaled(from: try await appNode())
+    }
+
+    /// RequireMachineAuth: logged in, but held at NeedsMachineAuth. The gate
+    /// says so (no Login button: there is nothing to do in the app), nothing
+    /// loads, and approving the device lets the app continue by itself.
+    func testNeedsMachineAuthWaitsForApproval() async throws {
+        try await resetHarness(machine: true)
+        let app = launch()
+        defer { app.terminate() }
+
+        let gate = app.descendants(matching: .any).matching(identifier: "needs-machine-auth").firstMatch
+        XCTAssertTrue(gate.waitForExistence(timeout: Self.joinTimeout), "the gate explains the pending approval")
+        XCTAssertFalse(app.buttons["login-button"].exists, "approval is not a login; no Login button")
+        try await assertNoDashboardLoad(for: 3, "nothing may load before approval")
+
+        let node = try await appNode()
+        XCTAssertFalse(node.machineAuthorized)
+        let approved = try await Self.post("\(Self.harnessAPI)/approve?hostname=\(node.hostname)")
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: approved) as? [String: Any])?["approved"] as? Int, 1)
+
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        try await assertJournaled(from: try await appNode())
+    }
+
+    // MARK: - Launch
+
+    private func launch() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-UITestResetWorkspaces",
+            "-UITestHomePage", Self.gateway,
+            "-TestControlURL", Self.controlURL,
+        ]
+        app.launch()
+        return app
+    }
+
+    /// With prefersEphemeralWebBrowserSession iOS normally skips the "wants to
+    /// use … to Sign In" prompt; accept it if a release shows it anyway.
+    private func acceptSignInPromptIfShown() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let proceed = springboard.buttons["Continue"]
+        if proceed.waitForExistence(timeout: 3) { proceed.tap() }
+    }
+
+    // MARK: - Harness (testing/tsnet-harness)
+
+    private func resetHarness(auth: Bool = false, machine: Bool = false) async throws {
+        let data = try await Self.post("\(Self.harnessAPI)/reset?auth=\(auth ? 1 : 0)&machine=\(machine ? 1 : 0)",
+                                       timeout: 90)
+        let state = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        XCTAssertNotNil(state["generation"], "reset failed: \(String(decoding: data, as: UTF8.self))")
+    }
+
+    private func harnessState() async throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: try await Self.get("\(Self.harnessAPI)/state")) as? [String: Any] ?? [:]
+    }
+
+    private struct Node {
+        let hostname: String
+        let addresses: [String]
+        let machineAuthorized: Bool
+    }
+
+    /// The one node that is not the harness's own: the app's. Waits for it to
+    /// register.
+    private func appNode() async throws -> Node {
+        var last: [[String: Any]] = []
+        for _ in 0..<60 {
+            last = try await harnessState()["nodes"] as? [[String: Any]] ?? []
+            let apps = last.filter { $0["harnessPeer"] as? Bool == false }
+            if apps.count > 1 {
+                XCTFail("expected one app node, found \(apps.count): \(apps)")
+            }
+            if let n = apps.first {
+                return Node(hostname: n["hostname"] as? String ?? "",
+                            addresses: n["addresses"] as? [String] ?? [],
+                            machineAuthorized: n["machineAuthorized"] as? Bool ?? false)
+            }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        throw HarnessError("the app's node never registered with the harness; nodes: \(last)")
+    }
+
+    private struct HarnessError: Error, CustomStringConvertible {
+        let description: String
+        init(_ description: String) { self.description = description }
+    }
+
+    /// The dash peer saw a connection from the app node's tailnet address:
+    /// the load went through the node, not around it.
+    private func assertJournaled(from node: Node,
+                                 file: StaticString = #filePath, line: UInt = #line) async throws {
+        let journal = try await harnessState()["journal"] as? [[String: Any]] ?? []
+        let fromApp = journal.filter { e in
+            e["peer"] as? String == "dash" && e["error"] == nil
+                && node.addresses.contains { addr in
+                    let from = e["from"] as? String ?? ""
+                    return from.hasPrefix("\(addr):") || from.hasPrefix("[\(addr)]:")
+                }
+        }
+        XCTAssertFalse(fromApp.isEmpty,
+                       "the dash peer must journal a connection from the app node \(node.addresses); journal: \(journal)",
+                       file: file, line: line)
+    }
+
+    // MARK: - Dashboard (testing/harness/dashboard.py)
+
+    private func assertNoDashboardLoad(for seconds: Double, _ message: String,
+                                       file: StaticString = #filePath, line: UInt = #line) async throws {
+        try await Task.sleep(for: .seconds(seconds))
+        let state = try JSONSerialization.jsonObject(
+            with: try await Self.get("\(Self.dashboardControl)/__state")) as? [String: Any] ?? [:]
+        let requests = state["requests"] as? [String: Int] ?? [:]
+        XCTAssertEqual(requests[Self.gatewayHost] ?? 0, 0, "\(message); saw \(requests)", file: file, line: line)
+    }
+
+    private func waitForReport(timeout: TimeInterval,
+                               until predicate: ([String: Any]) -> Bool) async throws -> [String: Any] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var last: [String: Any] = [:]
+        while Date() < deadline {
+            let state = try JSONSerialization.jsonObject(
+                with: try await Self.get("\(Self.dashboardControl)/__state")) as? [String: Any] ?? [:]
+            if let r = (state["reports"] as? [String: [String: Any]])?[Self.gatewayHost] {
+                last = r
+                if predicate(r) { return r }
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        XCTFail("no matching report from \(Self.gatewayHost) within \(Int(timeout))s; last: \(last)")
+        return last
+    }
+
+    private static func get(_ url: String) async throws -> Data {
+        var request = URLRequest(url: URL(string: url)!, timeoutInterval: 5)
+        request.httpMethod = "GET"
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+        return data
+    }
+
+    @discardableResult
+    private static func post(_ url: String, timeout: TimeInterval = 5) async throws -> Data {
+        var request = URLRequest(url: URL(string: url)!, timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return data
+    }
+}

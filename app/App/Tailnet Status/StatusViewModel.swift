@@ -15,6 +15,8 @@ final class StatusViewModel:  ObservableObject {
     @Published var needsAuth: Bool = false
     @Published var running: Bool = false
     @Published var tsnetState: Ipn.State?
+    /// Logged in, waiting for an admin to approve the device (R17, R31).
+    var needsMachineAuth: Bool { tsnetState == .NeedsMachineAuth }
     /// True after the backend explicitly confirms authentication but before it
     /// reaches Running. During this interval the backend can legitimately keep
     /// reporting NeedsLogin while control finishes registration/netmap work;
@@ -152,6 +154,11 @@ final class StatusViewModel:  ObservableObject {
             return ("Connected\n\(name ?? "--")", "checkmark.circle.fill")
         case .some(.NeedsLogin):
             return ("Login Required", "person.crop.circle.badge.exclamationmark")
+        case .some(.NeedsMachineAuth):
+            // Logged in, but the tailnet requires an admin to approve new
+            // devices (R17, R31). Nothing to do in the app: it continues on
+            // its own once approved. StatusView says where to approve it.
+            return ("Waiting for Approval", "clock.badge.exclamationmark")
         case .some(.Stopped):
             return ("Stopped", "stop.circle.fill")
         case .some(.Starting):

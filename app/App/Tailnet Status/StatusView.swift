@@ -53,6 +53,14 @@ struct StatusView: View {
                         .foregroundStyle(.secondary)
                 }
                 .accessibilityIdentifier("logged-in-connecting")
+            } else if viewModel.needsMachineAuth {
+                // No button: approval happens in the tailnet's admin console,
+                // not here, and the node continues by itself once approved.
+                Text("This device is logged in but waiting for a tailnet admin to approve it. Approve it in the Tailscale admin console under Machines. Latchkey connects by itself once it is approved.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("needs-machine-auth")
             } else if viewModel.needsAuth {
                 StatusButton(text: "Login",
                              action: {
@@ -82,7 +90,7 @@ struct StatusView: View {
         switch viewModel.statusIconName {
         case "checkmark.circle.fill":
             return .green
-        case "person.crop.circle.badge.exclamationmark":
+        case "person.crop.circle.badge.exclamationmark", "clock.badge.exclamationmark":
             return .orange
         case "stop.circle.fill":
             return .red

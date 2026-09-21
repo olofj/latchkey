@@ -74,10 +74,13 @@ final class Workspace: ObservableObject, Identifiable {
             ?? WorkspaceIdentity(hostname: definition.hostname)
         self.onChange = onChange
 
+        // A test launch may point the node at the L2 harness's control plane
+        // (R17). Never written back into the definition.
         let config = Configuration(hostName: definition.hostname,
                                     path: WorkspaceStore.stateDir(definition.id).path,
                                     authKey: authKey,
-                                    controlURL: definition.controlURL,
+                                    controlURL: TestControlPlane.controlURLOverride()
+                                        ?? definition.controlURL,
                                     ephemeral: definition.ephemeral)
         self.manager = TSNetManager(config: config)
 
