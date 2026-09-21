@@ -287,6 +287,7 @@ final class TailnetHarnessTests: XCTestCase {
         XCTAssertGreaterThan(loginsAfter, loginsBefore, "a NEW login completed through the harness's login page")
         let state = nodeState(app)
         XCTAssertTrue(state.hasSuffix("Running"), "and the node is back on the tailnet: \(state)")
+        try await assertThePageReconnects()
     }
 
     /// An admin revokes the device's approval mid-session: the dashboard says
@@ -309,6 +310,7 @@ final class TailnetHarnessTests: XCTestCase {
         XCTAssertTrue(banner.waitForNonExistence(timeout: 30), "approved again: the banner goes by itself")
         let state = nodeState(app)
         XCTAssertTrue(state.hasSuffix("Running"), "and the node is back: \(state)")
+        try await assertThePageReconnects()
     }
 
     // MARK: - R32: a reset removes the node, not just the app's copy
@@ -352,6 +354,20 @@ final class TailnetHarnessTests: XCTestCase {
     private func nodeKeyExpired(hostname: String) async throws -> Bool {
         let nodes = try await harnessState()["nodes"] as? [[String: Any]] ?? []
         return nodes.contains { $0["hostname"] as? String == hostname && $0["keyExpired"] as? Bool == true }
+    }
+
+    /// The PAGE is back, not just the node (R31 review): cut the page's
+    /// WebSocket at the dashboard, as a gateway restart does, and require a
+    /// reconnect received after the cut. The dashboard is reachable only
+    /// through the tailnet, so the report crossed the recovered node.
+    private func assertThePageReconnects(file: StaticString = #filePath, line: UInt = #line) async throws {
+        let cutAt = Date().timeIntervalSince1970
+        _ = try await Self.post("\(Self.dashboardControl)/__drop_ws")
+        let back = try await waitForReport(timeout: 30) {
+            $0["ws"] as? String == "ws:open" && ($0["received_at"] as? Double ?? 0) > cutAt
+        }
+        XCTAssertGreaterThan(back["received_at"] as? Double ?? 0, cutAt,
+                             "the page reconnected through the tailnet after the recovery", file: file, line: line)
     }
 
     /// The node's state as the app itself reports it (Settings → Status):
