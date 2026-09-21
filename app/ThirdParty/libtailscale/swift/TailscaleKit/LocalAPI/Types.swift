@@ -274,6 +274,10 @@ public struct IpnState: Sendable {
         public var OS: String?
         /// The peer's owner. Latchkey: added for gateway discovery (R26).
         public var UserID: Int64?
+        /// When the node key expires, as RFC 3339 (Go's time.Time), or nil
+        /// when key expiry is disabled. Latchkey: added for the diagnostics
+        /// screen and the expiry warning (R29, R31).
+        public var KeyExpiry: String?
     }
 
     public  struct PeerStatusLite: Codable, Sendable, Equatable {
