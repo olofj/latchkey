@@ -11,7 +11,7 @@ import (
 
 func TestLocalLogStampsAndRotates(t *testing.T) {
 	dir := t.TempDir()
-	w := latchkeyLocalLog(dir)
+	w := newLocalLog(dir, true)
 	s, ok := w.(*splitLog)
 	if !ok {
 		t.Fatalf("expected a file-backed writer, got %T", w)
@@ -24,6 +24,9 @@ func TestLocalLogStampsAndRotates(t *testing.T) {
 	}
 	b, _ := os.ReadFile(dir + "/tsnet.log")
 	got := string(b)
+	if !strings.HasPrefix(got[strings.Index(got, " ")+1:], "latchkey: raw stderr (a Go panic from the last run) is kept") {
+		t.Fatalf("the first line should say where raw stderr goes: %q", got)
+	}
 	if !strings.HasSuffix(got, " magicsock: first line\n") || !strings.Contains(got, "T") || !strings.Contains(got, "Z ") {
 		t.Fatalf("line not timestamped as expected: %q", got)
 	}
@@ -57,7 +60,7 @@ func TestLocalLogStampsAndRotates(t *testing.T) {
 }
 
 func TestLocalLogUnopenableIsDiscard(t *testing.T) {
-	w := latchkeyLocalLog("/nonexistent-dir-for-latchkey-test")
+	w := newLocalLog("/nonexistent-dir-for-latchkey-test", true)
 	if _, ok := w.(*splitLog); ok {
 		t.Fatal("an unopenable log must fall back to io.Discard")
 	}
@@ -68,7 +71,7 @@ func TestLocalLogUnopenableIsDiscard(t *testing.T) {
 // tsnet's own lines a hundred to one and pushed them out.
 func TestLocalLogSplitsRawStderr(t *testing.T) {
 	dir := t.TempDir()
-	w := latchkeyLocalLog(dir)
+	w := newLocalLog(dir, true)
 	w.Write([]byte("magicsock: a tsnet line\n"))
 	w.Write([]byte("RAW-STDERR: ***\n"))
 	w.Write([]byte("RAW-STDERR: panic: from the last run\n"))
@@ -80,11 +83,11 @@ func TestLocalLogSplitsRawStderr(t *testing.T) {
 	if err != nil {
 		t.Fatal("no stderr.log:", err)
 	}
-	if strings.Contains(string(ts), "RAW-STDERR") || strings.Contains(string(ts), "panic") {
+	if strings.Contains(string(ts), "RAW-STDERR") || strings.Contains(string(ts), "panic: from the last run") {
 		t.Fatalf("a raw line reached tsnet.log:\n%s", ts)
 	}
-	if strings.Count(string(ts), "\n") != 2 || !strings.Contains(string(ts), " magicsock: a tsnet line\n") {
-		t.Fatalf("tsnet.log should hold exactly the two tsnet lines:\n%s", ts)
+	if strings.Count(string(ts), "\n") != 3 || !strings.Contains(string(ts), " magicsock: a tsnet line\n") {
+		t.Fatalf("tsnet.log should hold the header and exactly the two tsnet lines:\n%s", ts)
 	}
 	if strings.Contains(string(raw), "RAW-STDERR") || !strings.Contains(string(raw), "Z panic: from the last run\n") ||
 		strings.Contains(string(raw), "magicsock") || strings.Count(string(raw), "\n") != 3 {
@@ -92,5 +95,31 @@ func TestLocalLogSplitsRawStderr(t *testing.T) {
 	}
 	if st, _ := os.Stat(dir + "/stderr.log"); st.Mode().Perm() != 0o600 {
 		t.Fatalf("stderr.log is %v, want 0600", st.Mode().Perm())
+	}
+}
+
+// With os_log mirrored to stderr (Xcode, XCTest), raw stderr is a copy of
+// the unified log and is not kept; tsnet's lines still are.
+func TestLocalLogDropsRawWhenOSLogIsMirrored(t *testing.T) {
+	dir := t.TempDir()
+	w := newLocalLog(dir, false)
+	w.Write([]byte("RAW-STDERR: 2026-09-21 09:58:37.001160-0700 Latchkey[1:2] [Default] https://gw/?t=x\n"))
+	w.Write([]byte("magicsock: a tsnet line\n"))
+	if _, err := os.Stat(dir + "/stderr.log"); err == nil {
+		t.Fatal("stderr.log must not be created when os_log is mirrored")
+	}
+	ts, _ := os.ReadFile(dir + "/tsnet.log")
+	if strings.Contains(string(ts), "RAW-STDERR") || strings.Contains(string(ts), "gw/?t=") ||
+		!strings.Contains(string(ts), "raw stderr not kept") || !strings.Contains(string(ts), " magicsock: a tsnet line\n") {
+		t.Fatalf("tsnet.log: %s", ts)
+	}
+}
+
+func TestOSLogMirroredReadsTheEnvironment(t *testing.T) {
+	for v, want := range map[string]bool{"": false, "0": false, "NO": false, "false": false, "YES": true, "1": true, "enable": true} {
+		t.Setenv("OS_ACTIVITY_DT_MODE", v)
+		if got := osLogMirrored(); got != want {
+			t.Errorf("OS_ACTIVITY_DT_MODE=%q: got %v, want %v", v, got, want)
+		}
 	}
 }

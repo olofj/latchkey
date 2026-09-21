@@ -17,10 +17,14 @@
 // StderrLevel, 0), which is what a person debugging wants.
 //
 // logtail also re-emits, prefixed "RAW-STDERR: ", every line the process
-// wrote to its raw stderr (which filch captures): a Go panic from the
-// previous run, but also -- under Xcode or XCTest -- everything the process
-// prints, thousands of lines a minute. Those go to their own stderr.log,
-// capped the same way, so they can never push tsnet's lines out of tsnet.log.
+// wrote to its raw stderr (which filch captures). Launched normally that is
+// Go's own output -- a panic from the previous run -- and it goes to its own
+// stderr.log, capped the same way, so it can never push tsnet's lines out.
+// Launched by Xcode or XCTest, os_log is mirrored to stderr
+// (OS_ACTIVITY_DT_MODE): raw stderr is then a copy of the unified log, every
+// subsystem's messages -- thousands of lines a minute, other components' URLs
+// among them -- and is not kept at all. The first line of each launch in
+// tsnet.log says which.
 //
 // It never leaves the device: they are local files, the directory is
 // excluded from backup (App/Workspace/BackupExclusion.swift), and the app
@@ -32,6 +36,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -55,11 +60,32 @@ type localLog struct {
 // cannot be opened (logging must never stop the node); raw lines are dropped
 // if stderr.log cannot be.
 func latchkeyLocalLog(root string) io.Writer {
+	return newLocalLog(root, !osLogMirrored())
+}
+
+func newLocalLog(root string, keepRaw bool) io.Writer {
 	tsnet := openLocalLog(root + "/tsnet.log")
 	if tsnet == nil {
 		return io.Discard
 	}
-	return &splitLog{tsnet: tsnet, raw: openLocalLog(root + "/stderr.log")}
+	s := &splitLog{tsnet: tsnet}
+	if keepRaw {
+		s.raw = openLocalLog(root + "/stderr.log")
+		tsnet.Write([]byte("latchkey: raw stderr (a Go panic from the last run) is kept in stderr.log\n"))
+	} else {
+		tsnet.Write([]byte("latchkey: raw stderr not kept: os_log is mirrored to it (OS_ACTIVITY_DT_MODE)\n"))
+	}
+	return s
+}
+
+// osLogMirrored reports whether os_log also writes to stderr, as it does in
+// launches by Xcode and XCTest.
+func osLogMirrored() bool {
+	switch strings.ToLower(os.Getenv("OS_ACTIVITY_DT_MODE")) {
+	case "", "0", "no", "false":
+		return false
+	}
+	return true
 }
 
 func openLocalLog(path string) *localLog {
