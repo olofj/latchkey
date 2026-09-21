@@ -2145,3 +2145,9 @@ That, and M6's AC numbers, need the phone (O1–O3).
 - `testAResetExpiresTheNodeAtControl` is named to sort early. The L2
   login-link scan proves itself on the last test's login, and a reset
   deletes the node logs.
+
+**R31 review, open item closed (2026-09-21):** now that M6's fake page
+reconnects like KiroCrew's, the two mid-session tests end by cutting the
+page's WebSocket at the dashboard and requiring a reconnect received after
+the cut. The dashboard is reachable only through the tailnet, so the PAGE
+recovered through the node, not just the node's state. L2 9/9.
