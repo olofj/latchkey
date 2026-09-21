@@ -150,7 +150,8 @@ final class SettingsViewModel: ObservableObject {
         let trimmed = URLInputNormalizer.trimmed(homePage)
         guard !trimmed.isEmpty else { return }
         homePageNormalizationTask?.cancel()
-        let normalized = URLInputNormalizer.normalized(from: trimmed)
+        // The gateway is an origin: never a path, query or fragment (R2).
+        let normalized = GatewayAddress.persistable(URLInputNormalizer.normalized(from: trimmed))
         logger.log("Settings: normalized home page \(LogRedaction.scrub(trimmed)) -> \(LogRedaction.scrub(normalized))")
         if homePage != normalized {
             homePage = normalized

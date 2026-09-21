@@ -5,8 +5,9 @@
 //  BrowserTab.swift
 //  Latchkey
 //
-//  A lightweight tab record. Its WKWebView is created only when selected and
-//  can be released again while the persisted URL/title remain available.
+//  The page record for the dashboard. Its WKWebView is created when shown
+//  and can be released again; the URL and title are kept in memory only
+//  (revision R2 — never written to disk).
 //
 
 import SwiftUI
@@ -20,7 +21,6 @@ final class BrowserTab: Identifiable, ObservableObject {
     let viewModel: BrowserViewModel
     let initialURL: URL
     private let model: TSNetModel
-    private let onMetadataChange: () -> Void
 
     @Published private(set) var displayTitle: String
     @Published private(set) var displayURL: String
@@ -39,20 +39,18 @@ final class BrowserTab: Identifiable, ObservableObject {
     private var titleDebounceTask: Task<Void, Never>?
 
     init(id: UUID = UUID(), model: TSNetModel, initialURL: URL,
-         restoredTitle: String? = nil, dataStore: WKWebsiteDataStore,
+         dataStore: WKWebsiteDataStore,
          isHomePage: Bool = false,
-         openExternally: @escaping (URL) -> Void = { _ in },
-         onMetadataChange: @escaping () -> Void = {}) {
+         openExternally: @escaping (URL) -> Void = { _ in }) {
         self.id = id
         self.initialURL = initialURL
         self.model = model
-        self.onMetadataChange = onMetadataChange
         // Default to the hostname (not the app name) so a no-title page shows
         // where it is rather than "Latchkey".
         let initialHost = initialURL.host?.isEmpty == false
             ? initialURL.host!
             : initialURL.absoluteString
-        self.displayTitle = restoredTitle?.isEmpty == false ? restoredTitle! : initialHost
+        self.displayTitle = initialHost
         self.displayURL = initialURL.absoluteString
         self.displayHost = initialURL.host ?? initialURL.absoluteString
         self.viewModel = BrowserViewModel(model: model, initialURL: initialURL,
@@ -82,16 +80,10 @@ final class BrowserTab: Identifiable, ObservableObject {
             .store(in: &cancellables)
     }
 
-    var stored: StoredBrowserTab {
-        StoredBrowserTab(id: id, url: displayURL, title: displayTitle)
-    }
-
     var hasWebView: Bool { viewModel.hasWebView }
     func unloadWebView() { viewModel.unloadWebView() }
 
     private func refreshDisplayed() {
-        let previousURL = displayURL
-
         // Hold the latest trimmed title and commit it on a debounce while the
         // page is loading (the title churns during load and would jiggle the
         // tab bar), or immediately once the page is no longer loading.
@@ -102,9 +94,6 @@ final class BrowserTab: Identifiable, ObservableObject {
         displayURL = newURL
         displayHost = viewModel.url?.host ?? URL(string: displayURL)?.host ?? ""
         refreshConnectionType()
-        if displayURL != previousURL {
-            onMetadataChange()
-        }
     }
 
     /// Commits `pendingTitle` to `displayTitle` now if the page is not loading,
@@ -128,7 +117,6 @@ final class BrowserTab: Identifiable, ObservableObject {
     }
 
     private func commitTitle() {
-        let previous = displayTitle
         let trimmed = pendingTitle
         if !trimmed.isEmpty {
             displayTitle = trimmed
@@ -140,9 +128,6 @@ final class BrowserTab: Identifiable, ObservableObject {
             displayTitle = host
         } else {
             displayTitle = "Latchkey"
-        }
-        if displayTitle != previous {
-            onMetadataChange()
         }
     }
 

@@ -519,7 +519,8 @@ final class LatchkeyUITests: XCTestCase {
         // connected tests are hermetic. The two are deliberately independent
         // in production: resetting only HomePage does not rewrite a persisted
         // current tab left by an earlier bad-URL test.
-        app.launchArguments += ["-UITestResetHomePage", "-UITestResetTabs"]
+        // No tab reset needed: nothing about the page is restored (R2).
+        app.launchArguments += ["-UITestResetHomePage"]
         app.launch()
     }
 

@@ -20,7 +20,9 @@
 //        workspaces.json                 # [WorkspaceDefinition] + activeId
 //        Workspaces/<id>/
 //            state/                       # tsnet state dir (tailscale_set_dir)
-//            tabs.json                    # the restored page's URL and title
+//
+//  No page URL is stored anywhere (revision R2); `tabs.json` from earlier
+//  builds is deleted on sight.
 //
 //  Auth keys are NEVER stored here — they come from launch args/env (tests) or
 //  persist implicitly inside each workspace's tsnet state dir (real logins).
@@ -41,17 +43,6 @@ struct WorkspaceIdentity: Codable, Equatable {
     var displayName: String?
     var tailnetName: String?
     var hostname: String?
-}
-
-struct StoredBrowserTab: Codable, Equatable, Identifiable {
-    var id: UUID
-    var url: String
-    var title: String
-}
-
-struct StoredBrowserSession: Codable, Equatable {
-    var tabs: [StoredBrowserTab]
-    var selectedIndex: Int
 }
 
 /// The persisted definition of a workspace. The in-memory `Workspace` object is
@@ -170,16 +161,8 @@ enum WorkspaceStore {
         workspaceDir(id).appending(path: "tabs.json")
     }
 
-    static func loadTabs(_ id: UUID) -> StoredBrowserSession? {
-        guard let data = try? Data(contentsOf: tabsURL(id)) else { return nil }
-        return try? JSONDecoder().decode(StoredBrowserSession.self, from: data)
-    }
-
-    static func saveTabs(_ session: StoredBrowserSession, workspaceID: UUID) {
-        guard let data = try? JSONEncoder().encode(session) else { return }
-        try? data.write(to: tabsURL(workspaceID), options: .atomic)
-    }
-
+    /// Deletes a `tabs.json` left by a build before revision R2, which
+    /// persisted the page URL — and so, after a sign-in, the token.
     static func removeTabs(_ workspaceID: UUID) {
         try? FileManager.default.removeItem(at: tabsURL(workspaceID))
     }

@@ -95,22 +95,12 @@ final class WorkspaceManager: ObservableObject {
             }
         }
 
-        // The home-page value and the restored tab session are intentionally
-        // separate in normal use: changing the home page must not rewrite open
-        // tabs. Connected UI tests, however, need their first tab to start at
-        // the known home page even when an earlier test persisted a bad URL.
-        // Keep this a distinct test-only hook so tab-persistence coverage can
-        // continue to relaunch with `-UITestResetHomePage` without losing tabs.
-        if args.contains("-UITestResetTabs") {
-            for d in defs { WorkspaceStore.removeTabs(d.id) }
-        }
-
         // UI-test-only override for flows that exercise authentication rather
         // than a particular tailnet web service. Keeping those tests on a
         // direct HTTPS page prevents an unrelated private-service outage from
         // masquerading as a login failure.
         if let index = args.firstIndex(of: "-UITestHomePage"), index + 1 < args.count {
-            let testURL = args[index + 1]
+            let testURL = GatewayAddress.persistable(args[index + 1])
             defs = defs.map {
                 var d = $0
                 d.homePageURL = testURL

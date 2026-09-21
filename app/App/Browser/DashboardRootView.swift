@@ -15,9 +15,8 @@
 //  with an address bar, bookmarks and a tab overview. Latchkey is
 //  single-purpose (PLAN §1.3) — one window, one destination, no chrome.
 //
-//  `TabManager` survives the tab removal on purpose. It owns the persistence
-//  that restores the page you were last looking at, which is exactly what a
-//  phone app wants after being jetsammed; it is now capped at one tab.
+//  `TabManager` still owns the one page's WKWebView lifecycle. It no longer
+//  persists anything: every cold start opens the gateway origin (R2).
 //
 
 import SwiftUI

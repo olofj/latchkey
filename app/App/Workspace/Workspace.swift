@@ -81,7 +81,10 @@ final class Workspace: ObservableObject, Identifiable {
                                     ephemeral: definition.ephemeral)
         self.manager = TSNetManager(config: config)
 
-        self.homePage = HomePage(url: definition.homePageURL)
+        // Reduce whatever was stored to something that cannot carry a
+        // credential (R2). A build before R2 could have persisted a pasted
+        // sign-in URL here; the observer below writes the cleaned value back.
+        self.homePage = HomePage(url: GatewayAddress.persistable(definition.homePageURL))
         self.dataStore = WKWebsiteDataStore(forIdentifier: definition.dataStoreUUID)
 
         // Persist home-page edits back into the definition.
@@ -89,6 +92,8 @@ final class Workspace: ObservableObject, Identifiable {
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] url in
+                // Never a query or fragment on disk (R2), whatever set it.
+                let url = GatewayAddress.stripParameters(url)
                 guard let self, self.definition.homePageURL != url else { return }
                 self.definition.homePageURL = url
                 self.onChange?(self.definition)
@@ -132,7 +137,11 @@ final class Workspace: ObservableObject, Identifiable {
     }
 
     func setHomePage(_ url: String) {
-        homePage.url = url   // observer persists into the definition
+        // Called on every keystroke of the Settings field, where a pasted
+        // sign-in URL is the natural input. Cut its parameters before they can
+        // reach the definition (R2); the committed value is reduced to an
+        // origin by SettingsViewModel.qualifyHomePage.
+        homePage.url = GatewayAddress.stripParameters(url)   // observer persists
     }
 
     /// Stops this workspace and removes all session-owned data. The manager

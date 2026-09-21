@@ -5,14 +5,15 @@
 //  TabManager.swift
 //  Latchkey
 //
-//  Owns one workspace's persisted page record. Latchkey has no tabs
-//  (PLAN §1.4), so the cap is 1 — but the type survives the tab removal
-//  because it owns something the app genuinely wants: the persistence that
-//  restores the page you were last looking at, which is exactly the behaviour
-//  a phone app needs after iOS jetsams it.
+//  Owns the workspace's single page and its WKWebView lifecycle. Latchkey
+//  has no tabs (PLAN §1.4), so the cap is 1.
 //
-//  Collapsing this to a bare `BrowserTab` would mean reimplementing that, and
-//  would make a future merge from upstream much harder for no gain.
+//  Nothing here is persisted (revision R2, finding H1). Upstream saved each
+//  tab's URL to `tabs.json` and reopened it on cold launch, so a sign-in URL
+//  — `https://<gateway>/?token=…` — was written to disk and replayed on the
+//  next start. The page URL is not worth restoring anyway: the dashboard is a
+//  single-page app that restores its own state from the server, and the
+//  gateway origin is the only safe place to land. Every cold start opens it.
 //
 
 import Combine
@@ -53,25 +54,10 @@ final class TabManager: ObservableObject {
         self.homePage = homePage
         self.dataStore = dataStore
 
-        if let session = WorkspaceStore.loadTabs(workspaceID), !session.tabs.isEmpty {
-            let records = Array(session.tabs.prefix(Self.maximumTabCount))
-            // Restored tabs are resumed exactly where the user left them. A
-            // restored tab is treated as the home page only when it still has
-            // the configured home-page URL; a tab the user navigated away from
-            // must not be unexpectedly redirected on the next launch.
-            tabs = records.compactMap { record in
-                guard let url = URL(string: record.url) else { return nil }
-                return makeTab(id: record.id, url: url, restoredTitle: record.title,
-                               isHomePage: record.url == homePage.url)
-            }
-            selectedIndex = min(max(session.selectedIndex, 0), max(tabs.count - 1, 0))
-        }
-        if tabs.isEmpty {
-            _ = openChatTab(select: true)
-        } else {
-            unloadHiddenTabs()
-        }
-        persist()
+        // A build before R2 may have left a tabs.json holding a sign-in URL.
+        // Delete it rather than read it.
+        WorkspaceStore.removeTabs(workspaceID)
+        _ = openChatTab(select: true)
     }
 
     @discardableResult
@@ -91,7 +77,6 @@ final class TabManager: ObservableObject {
             selectedIndex = tabs.count - 1
             unloadHiddenTabs()
         }
-        persist()
         return tab
     }
 
@@ -99,7 +84,6 @@ final class TabManager: ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         selectedIndex = index
         unloadHiddenTabs()
-        persist()
     }
 
     func closeTab(_ tab: BrowserTab) {
@@ -109,10 +93,6 @@ final class TabManager: ObservableObject {
 
         if tabs.isEmpty {
             if let onLastTabClosed {
-                // Persist the now-empty tab list so reopening the workspace
-                // window creates a fresh home-page tab rather than restoring
-                // the closed one, then hand the close to the window.
-                persist()
                 onLastTabClosed()
                 return
             }
@@ -125,7 +105,6 @@ final class TabManager: ObservableObject {
             selectedIndex -= 1
         }
         unloadHiddenTabs()
-        persist()
     }
 
     func closeCurrentTab() {
@@ -137,14 +116,12 @@ final class TabManager: ObservableObject {
         guard !tabs.isEmpty else { return }
         selectedIndex = (selectedIndex - 1 + tabs.count) % tabs.count
         unloadHiddenTabs()
-        persist()
     }
 
     func selectNextTab() {
         guard !tabs.isEmpty else { return }
         selectedIndex = (selectedIndex + 1) % tabs.count
         unloadHiddenTabs()
-        persist()
     }
 
     /// Called when its workspace leaves the visible pane.
@@ -158,14 +135,11 @@ final class TabManager: ObservableObject {
         }
     }
 
-    private func makeTab(id: UUID = UUID(), url: URL,
-                         restoredTitle: String? = nil,
-                         isHomePage: Bool = false) -> BrowserTab {
-        BrowserTab(id: id, model: model, initialURL: url,
-                   restoredTitle: restoredTitle, dataStore: dataStore,
+    private func makeTab(url: URL, isHomePage: Bool = false) -> BrowserTab {
+        BrowserTab(model: model, initialURL: url,
+                   dataStore: dataStore,
                    isHomePage: isHomePage,
-                   openExternally: { url in Self.openExternally(url) },
-                   onMetadataChange: { [weak self] in self?.persist() })
+                   openExternally: { url in Self.openExternally(url) })
     }
 
     /// Handles a link the page asked to open in another browsing context —
@@ -193,10 +167,4 @@ final class TabManager: ObservableObject {
 #endif
     }
 
-    private func persist() {
-        WorkspaceStore.saveTabs(
-            StoredBrowserSession(tabs: tabs.map(\.stored), selectedIndex: selectedIndex),
-            workspaceID: workspaceID
-        )
-    }
 }

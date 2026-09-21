@@ -102,6 +102,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = dataStore
         configuration.upgradeKnownHostsToHTTPS = false
+        // Before any navigation, so they run at every document start.
+        PageScripts.install(into: configuration.userContentController)
         configureWebView?(configuration)
 
         let view = WKWebView(frame: .zero, configuration: configuration)
