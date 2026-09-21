@@ -165,6 +165,7 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
         try await signIn(app, kind: "cli")
         let asked = authRequiredCount(app)
+        XCTAssertGreaterThanOrEqual(asked, 1, "the event counter is there, and counted the signed-out start")
         let before = try await gatewayState()
 
         _ = try await Self.post("\(Self.gatewayControl)/__expire")
@@ -320,6 +321,7 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
         try await signIn(app, kind: "cli")
         let asked = authRequiredCount(app)
+        XCTAssertGreaterThanOrEqual(asked, 1, "the event counter is there, and counted the signed-out start")
 
         _ = try await Self.post("\(Self.gatewayControl)/__drop-next-refresh")
         var state: [String: Any] = [:]

@@ -28,6 +28,14 @@ expect(GatewayCandidates.exclusion(peer("a.ts.net", os: nil, user: nil), selfUse
        "unknown OS and owner do not exclude")
 expect(GatewayCandidates.exclusion(peer("a.ts.net", user: 8), selfUserID: nil) == nil,
        "no owner filter when this node's owner is unknown")
+// What the status JSON actually carries for "unknown" (M5 review).
+expect(GatewayCandidates.exclusion(peer("a.ts.net", os: ""), selfUserID: 7) == nil, "an empty OS is unknown, not excluded")
+expect(GatewayCandidates.exclusion(peer("a.ts.net", user: 0), selfUserID: 7) == nil, "owner 0 is unknown, not another owner")
+expect(GatewayCandidates.exclusion(peer("a.ts.net", user: 8), selfUserID: 0) == nil, "this node's owner 0 is unknown: no filter")
+expect(GatewayCandidates.exclusion(peer("a.ts.net", os: "tvOS"), selfUserID: 7) != nil, "tvOS is not a server OS")
+expect(GatewayCandidates.exclusion(GatewayPeer(host: "byskebox.ts.net", online: true, os: "linux", userID: 99, tagged: true),
+                                   selfUserID: 7) == nil,
+       "a TAGGED server passes the owner filter (it reports the tagged-devices user)")
 expect(GatewayCandidates.exclusion(peer(""), selfUserID: 7) != nil, "no MagicDNS name is excluded")
 
 print("== order")

@@ -151,6 +151,8 @@ final class Workspace: ObservableObject, Identifiable {
     func selectGateway(_ origin: String) {
         logger.log("Gateway chosen: \(origin)")
         setHomePage(origin)
+        // The old gateway's sign-in state means nothing for the new one.
+        session.reset()
         tabManager.reopenHomeTab()
     }
 

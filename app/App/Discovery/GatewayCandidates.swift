@@ -14,11 +14,14 @@
 //  R26's filters, and why:
 //   - Online, not Expired: an offline node cannot answer, and a probe to it
 //     only burns the deadline.
-//   - Not a ShareeNode: a node shared INTO the tailnet belongs to someone
-//     else; a gateway there is not Olof's.
+//   - Not a ShareeNode: a node owned by someone this tailnet shared a device
+//     TO, which may connect to us; not Olof's, and hidden by Tailscale's own
+//     UI too (ipnstate.go:313-316).
 //   - OS linux / macOS / windows: gateways run on computers. Phones and
 //     tablets are the bulk of a personal tailnet's peers.
-//   - Same owner as this node.
+//   - Same owner as this node -- unless the peer is tagged. A tagged server
+//     is owned by the tailnet, not a user, and reports the tagged-devices
+//     user; a tagged byskebox must not be filtered out (M5 review).
 //  The saved gateway is always probed, and first.
 //
 
@@ -33,9 +36,10 @@ struct GatewayPeer: Equatable, Sendable {
     /// As Tailscale reports it ("linux", "macOS", ...), or nil if unknown.
     let os: String?
     let userID: Int64?
+    let tagged: Bool
 
     init(host: String, online: Bool, expired: Bool = false, sharee: Bool = false,
-         os: String?, userID: Int64?) {
+         os: String?, userID: Int64?, tagged: Bool = false) {
         var h = host.lowercased()
         while h.hasSuffix(".") { h.removeLast() }
         self.host = h
@@ -44,6 +48,7 @@ struct GatewayPeer: Equatable, Sendable {
         self.sharee = sharee
         self.os = os
         self.userID = userID
+        self.tagged = tagged
     }
 }
 
@@ -52,13 +57,17 @@ enum GatewayCandidates {
 
     /// Why `peer` is not worth probing, or nil if it is. An unknown OS or
     /// owner does not exclude: a missing field is not evidence of a phone.
+    /// "Unknown" arrives as "" and 0, not as absent: Go's ipnstate.PeerStatus
+    /// has no omitempty on OS or UserID (M5 review).
     static func exclusion(_ peer: GatewayPeer, selfUserID: Int64?) -> String? {
         if peer.host.isEmpty { return "no MagicDNS name" }
         if !peer.online { return "offline" }
         if peer.expired { return "key expired" }
-        if peer.sharee { return "shared in from another tailnet" }
-        if let os = peer.os, !serverOSes.contains(os.lowercased()) { return "OS \(os)" }
-        if let mine = selfUserID, let theirs = peer.userID, mine != theirs { return "another owner" }
+        if peer.sharee { return "a node of someone this tailnet shares with" }
+        if let os = peer.os, !os.isEmpty, !serverOSes.contains(os.lowercased()) { return "OS \(os)" }
+        if !peer.tagged, let mine = selfUserID, mine != 0, let theirs = peer.userID, theirs != 0, mine != theirs {
+            return "another owner"
+        }
         return nil
     }
 

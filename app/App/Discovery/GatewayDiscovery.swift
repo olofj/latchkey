@@ -19,9 +19,13 @@
 //  12 probes at a time, 1.5 s per request, 5 s for the whole sweep; results
 //  stream into `gateways` as they arrive. HTTPS only (R26): a plain-http
 //  origin fails KiroCrew's /api/ws origin check, and HSTS upgrades it anyway.
-//  If every probe fails the way a dead proxy fails (-1000 / -1004), that is
-//  reported as `proxyUnhealthy` — not "no gateways" — and the node's status
-//  is refreshed.
+//  Redirects are never followed: the probe session has no route for a host
+//  outside the tailnet, and a gateway does not redirect its manifest (M5
+//  review). Only hosts the published proxy policy routes are probed.
+//  If no probe gets an answer, the node's loopback (which serves both the
+//  SOCKS5 proxy and LocalAPI, R18) is asked directly: silent there means
+//  `proxyUnhealthy`; alive means nothing answered. Error codes cannot tell
+//  the two apart -- -1000 is every SOCKS failure reply (M5 review).
 //
 
 import Combine
@@ -54,24 +58,38 @@ final class GatewayDiscovery: ObservableObject {
     static let concurrency = 12
 
     private let model: TSNetModel
-    private let refreshStatus: () async -> Void
+    /// Asks the node's loopback for its status; true if it answered.
+    private let loopbackAnswers: () async -> Bool
     private var run: Task<Void, Never>?
+    /// Bumped by every start(): a superseded sweep must not write its result
+    /// over a newer one's (M5 review).
+    private var generation = 0
 
-    init(model: TSNetModel, refreshStatus: @escaping () async -> Void) {
+    init(model: TSNetModel, loopbackAnswers: @escaping () async -> Bool) {
         self.model = model
-        self.refreshStatus = refreshStatus
+        self.loopbackAnswers = loopbackAnswers
     }
 
-    /// Starts a sweep, cancelling any in progress.
-    func start(savedHost: String?) {
+    /// When the picker appeared: R26's clock starts there, not when the
+    /// sweep does -- a wait for the node's status before it is part of what
+    /// the user waits for (M5 review).
+    private var shownAt: ContinuousClock.Instant?
+
+    /// Starts a sweep, cancelling any in progress. `shownAt` is when the
+    /// picker appeared, if a picker is waiting for this.
+    func start(savedHost: String?, shownAt: ContinuousClock.Instant? = nil) {
         run?.cancel()
-        run = Task { [weak self] in await self?.sweep(savedHost: savedHost) }
+        generation += 1
+        let mine = generation
+        self.shownAt = shownAt
+        run = Task { [weak self] in await self?.sweep(savedHost: savedHost, generation: mine) }
     }
 
     func cancel() {
         run?.cancel()
         run = nil
-        if phase == .probing { phase = .finished }
+        generation += 1
+        if phase == .probing { phase = .idle }
     }
 
     // MARK: - The sweep
@@ -83,7 +101,7 @@ final class GatewayDiscovery: ObservableObject {
         case deadline
     }
 
-    private func sweep(savedHost: String?) async {
+    private func sweep(savedHost: String?, generation mine: Int) async {
         gateways = []
         guard let proxy = model.proxyConfiguration, let status = model.localStatus else {
             logger.log("Discovery: no proxy or status yet; nothing to probe")
@@ -92,8 +110,13 @@ final class GatewayDiscovery: ObservableObject {
             return
         }
         let peers = (status.Peer ?? [:]).values.map(GatewayPeer.init(peer:))
+        // Never probe a host the proxy would not carry: its probe would go
+        // direct, off the tailnet (M5 review). The policy covers every peer
+        // name, so this only ever drops a malformed one.
+        let policy = model.proxyPolicy
         let candidates = GatewayCandidates.select(peers, selfUserID: status.SelfStatus?.UserID,
                                                   savedHost: savedHost)
+            .filter { policy?.matchingRule(for: $0.host) != nil }
         candidateCount = candidates.count
         phase = .probing
         let started = ContinuousClock.now
@@ -124,7 +147,7 @@ final class GatewayDiscovery: ObservableObject {
                 inFlight += 1
             }
             while let outcome = await group.next() {
-                if Task.isCancelled { group.cancelAll(); break }
+                if Task.isCancelled || mine != generation { group.cancelAll(); break }
                 switch outcome {
                 case .deadline:
                     pastDeadline = true
@@ -153,13 +176,18 @@ final class GatewayDiscovery: ObservableObject {
             }
         }
 
+        guard mine == generation, !Task.isCancelled else { return }
         let elapsed = ContinuousClock.now - started
-        let proxyDead = !candidates.isEmpty && answered == 0 && !failures.isEmpty
-            && failures.allSatisfy { $0 == NSURLErrorBadURL || $0 == NSURLErrorCannotConnectToHost }
-        logger.log("Discovery: \(gateways.count) gateway(s); first after \(firstFound.map { "\($0.milliseconds) ms" } ?? "—"), sweep \(elapsed.milliseconds) ms; \(answered) answered, \(failures.count) failed")
+        let fromShown = firstFound.flatMap { first in shownAt.map { (started + first) - $0 } }
+        // Nothing answered: ask the loopback itself whether the proxy is up.
+        var proxyDead = false
+        if answered == 0, !failures.isEmpty {
+            proxyDead = !(await loopbackAnswers())
+        }
+        guard mine == generation else { return }
+        logger.log("Discovery: \(gateways.count) gateway(s); first after \(firstFound.map { "\($0.milliseconds) ms" } ?? "—"), sweep \(elapsed.milliseconds) ms; \(answered) answered, \(failures.count) failed; shown to first \(fromShown.map { "\($0.milliseconds) ms" } ?? "—")")
         if proxyDead {
             phase = .proxyUnhealthy
-            await refreshStatus()
         } else {
             phase = .finished
         }
@@ -176,7 +204,7 @@ final class GatewayDiscovery: ObservableObject {
         config.httpCookieAcceptPolicy = .never
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: config)
+        return URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
     }
 
     nonisolated private static func probe(_ host: String, session: URLSession) async -> Outcome {
@@ -186,6 +214,7 @@ final class GatewayDiscovery: ObservableObject {
         do {
             let (body, response) = try await session.data(from: manifestURL)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            // A 3xx arrives unfollowed (NoRedirects): not a gateway.
             guard GatewayCandidates.manifestIsKiroCrew(status: status, body: body) else {
                 return .notGateway(host)
             }
@@ -204,7 +233,22 @@ final class GatewayDiscovery: ObservableObject {
 extension GatewayPeer {
     init(peer: IpnState.PeerStatus) {
         self.init(host: peer.DNSName, online: peer.Online, expired: peer.Expired ?? false,
-                  sharee: peer.ShareeNode ?? false, os: peer.OS, userID: peer.UserID)
+                  sharee: peer.ShareeNode ?? false, os: peer.OS, userID: peer.UserID,
+                  tagged: !(peer.Tags ?? []).isEmpty)
+    }
+}
+
+/// Refuses every redirect: a probe must never be carried to a host outside
+/// the tailnet (M5 review). The 3xx itself is returned to the caller.
+/// (The completion-handler form: Swift 6.4's SILGen crashed on the async one.)
+private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    nonisolated override init() { super.init() }
+
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask,
+                                willPerformHTTPRedirection response: HTTPURLResponse,
+                                newRequest request: URLRequest,
+                                completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }
 

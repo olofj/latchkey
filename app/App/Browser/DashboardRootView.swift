@@ -178,13 +178,27 @@ private struct DashboardContent: View {
     @ObservedObject var session: SessionManager
     let onSettings: () -> Void
     @State private var showingGatewayPicker = false
+    /// A gateway chosen in the Find sheet, applied once the sheet is gone:
+    /// the new gateway's page may ask for a token at once, and two sheets
+    /// cannot overlap (M5 review; the same rule as Settings, M4).
+    @State private var pendingGateway: String?
 
     var body: some View {
-        NavigationStack {
-            dashboardContent
+        Group {
+            if homePage.hasGateway {
+                NavigationStack {
+                    gatewayContent
 #if canImport(UIKit)
-                .toolbar(.hidden, for: .navigationBar)
+                        .toolbar(.hidden, for: .navigationBar)
 #endif
+                }
+            } else {
+                // First run (M5): no gateway yet. Its own navigation stack,
+                // not nested in the dashboard's toolbar-less one (M5 review).
+                GatewayPickerView(discovery: workspace.discovery, model: model, savedHost: nil,
+                                  autoSelectSingle: true,
+                                  onSelect: { workspace.selectGateway($0) })
+            }
         }
         // The page owns the full screen, including the bottom safe area.
         // Without this the root layout leaves an app-background strip beneath
@@ -220,13 +234,19 @@ private struct DashboardContent: View {
             }
         }
         // M5.5: re-probe when the chosen gateway is unreachable.
-        .sheet(isPresented: $showingGatewayPicker) {
+        .sheet(isPresented: $showingGatewayPicker, onDismiss: {
+            if let origin = pendingGateway {
+                pendingGateway = nil
+                workspace.selectGateway(origin)
+            }
+        }) {
             GatewayPickerView(discovery: workspace.discovery, model: model,
                               savedHost: URL(string: homePage.url)?.host(),
                               autoSelectSingle: false,
+                              sweepOnAppear: true,
                               onSelect: { origin in
+                                  pendingGateway = origin
                                   showingGatewayPicker = false
-                                  workspace.selectGateway(origin)
                               },
                               onCancel: { showingGatewayPicker = false })
         }
@@ -300,19 +320,6 @@ private struct DashboardContent: View {
         .accessibilityLabel("Settings")
     }
 
-    @ViewBuilder
-    private var dashboardContent: some View {
-        if homePage.hasGateway {
-            gatewayContent
-        } else {
-            // First run (M5): no gateway yet. Discovery picks the only one
-            // found, or the user chooses.
-            GatewayPickerView(discovery: workspace.discovery, model: model, savedHost: nil,
-                              autoSelectSingle: true,
-                              onSelect: { workspace.selectGateway($0) })
-        }
-    }
-
     private var gatewayContent: some View {
         VStack(spacing: 0) {
             if homePageAvailability == .unavailable {
@@ -334,6 +341,10 @@ private struct DashboardContent: View {
         .onChange(of: homePageAvailability) { _, availability in
             loadGatewayIfRecovered(availability)
         }
+        // State, not only transitions: if the gateway became available before
+        // this view existed, onChange never fires and the fallback page would
+        // stay (M5: a relaunch hit exactly that).
+        .onAppear { loadGatewayIfRecovered(homePageAvailability) }
     }
 
     /// Recovers from the unreachable-gateway fallback when the gateway shows
@@ -418,10 +429,16 @@ private struct GatewayUnreachableBanner: View {
                 .font(.subheadline.weight(.semibold))
                 .accessibilityIdentifier("gateway-unreachable-settings-button")
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 12)
+        // Room for the settings gear, which floats over the top-trailing
+        // corner and covered "Change" (seen in an M5 test screenshot).
+        .padding(.trailing, 52)
         .padding(.vertical, 8)
         .background(.thinMaterial)
         .overlay(alignment: .bottom) { Divider() }
+        // `.contain`: without it the banner's identifier replaced its buttons'
+        // own, and a UI test could not find Find (M5).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home-page-warning-banner")
     }
 }

@@ -53,6 +53,11 @@ enum HomePageAvailabilityChecker {
         }
 
         guard let status else { return .checking }
+        // A status that lists no peers at all is one fetched before the
+        // netmap arrived (right after a relaunch): not evidence that the
+        // gateway is gone. Judging it "unavailable" sent the first load to
+        // the blank fallback (M5).
+        guard let peers = status.Peer, !peers.isEmpty else { return .checking }
         let records = hostRecords(from: status)
         let targetHost: String
         if isBareHostname(host) {

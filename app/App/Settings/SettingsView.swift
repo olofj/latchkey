@@ -13,6 +13,9 @@ struct SettingsView: View {
     @State private var showLogoutAlert: Bool = false
     @State private var routeTestHost: String = ""
     @State private var showingLogs: Bool = false
+    @State private var showingGatewayPicker = false
+    /// Applied once the picker has gone (two sheets cannot overlap).
+    @State private var pendingGateway: String?
     @ObservedObject private var diagnostics = AppDiagnostics.shared
 
     var body: some View {
@@ -59,8 +62,11 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismissAction() }
-                        .accessibilityIdentifier("settings-done-button")
+                    Button("Done") {
+                        viewModel.commitGateway()
+                        dismissAction()
+                    }
+                    .accessibilityIdentifier("settings-done-button")
                 }
             }
         }
@@ -79,6 +85,26 @@ struct SettingsView: View {
         .sheet(isPresented: $showingLogs) {
             LogViewer(dismissAction: { showingLogs = false })
         }
+        .sheet(isPresented: $showingGatewayPicker, onDismiss: {
+            if let origin = pendingGateway {
+                pendingGateway = nil
+                viewModel.choose(origin)
+            }
+        }) {
+            GatewayPickerView(discovery: viewModel.workspaceForSettings.discovery,
+                              model: viewModel.workspaceForSettings.model,
+                              savedHost: URL(string: viewModel.homePage)?.host(),
+                              autoSelectSingle: false,
+                              sweepOnAppear: true,
+                              onSelect: { origin in
+                                  pendingGateway = origin
+                                  showingGatewayPicker = false
+                              },
+                              onCancel: { showingGatewayPicker = false })
+        }
+        // However Settings goes away (Done, a swipe), the field is applied.
+        // Idempotent: Done has already committed.
+        .onDisappear { viewModel.commitGateway() }
     }
 
     @ViewBuilder
@@ -102,19 +128,20 @@ struct SettingsView: View {
                         .accessibilityIdentifier("hostname-rename-warning")
                 }
 
-                Section(header: Text("Home Page")) {
-                    TextField("Home Page", text: $viewModel.homePage)
+                Section(header: Text("Gateway")) {
+                    TextField("byskebox, or byskebox.example.ts.net", text: $viewModel.homePage)
 #if canImport(UIKit)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
 #endif
                         .accessibilityIdentifier("home-page-field")
-                        .onChange(of: viewModel.homePage) { _, newValue in
-                            viewModel.setHomePage(newValue)
-                        }
-                        .onSubmit {
-                            viewModel.qualifyHomePage()
-                        }
+                        .onSubmit { viewModel.commitGateway() }
+                    Button("Find gateways…") { showingGatewayPicker = true }
+                        .disabled(viewModel.workspaceForSettings.model.proxyConfiguration == nil)
+                        .accessibilityIdentifier("settings-find-gateways")
+                    Text("Applied when you press Return or close Settings.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 // The log viewer moved here when the browser toolbar was

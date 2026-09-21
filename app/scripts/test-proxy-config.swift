@@ -114,6 +114,21 @@ expect(!stable.matchDomains.contains(""), "no empty rule (an empty rule would pr
 let unknown = StableProxyPolicy.make(from: nil)
 expect(unknown.matchDomains == [TailnetProxyPolicy.tailscaleIPv4CIDR, TailnetProxyPolicy.tailscaleIPv6CIDR]
        && !unknown.hasPeerData, "no status yet: the ranges only, and no peer data")
+// Shared-in nodes keep their own tailnet's name (M5 review): still proxied.
+let shared = status(suffix: "tail-scale.ts.net",
+                    peers: [("dash", "dash.tail-scale.ts.net."), ("buddy-gw", "buddy-gw.other-net.ts.net.")])
+let sharedPolicy = StableProxyPolicy.make(from: shared)
+expect(sharedPolicy.matchingRule(for: "buddy-gw.other-net.ts.net") != nil,
+       "a shared-in node outside our suffix is proxied, as upstream's policy did")
+expect(sharedPolicy.matchDomains.contains("buddy-gw.other-net.ts.net") && !sharedPolicy.matchDomains.contains("dash.tail-scale.ts.net"),
+       "only names OUTSIDE the suffix are listed: \(sharedPolicy.matchDomains)")
+expect(StableProxyPolicy.make(from: status(suffix: "tail-scale.ts.net",
+                                           peers: [("dash", "dash.tail-scale.ts.net."), ("buddy-gw", "buddy-gw.other-net.ts.net."),
+                                                   ("new-phone", "new-phone.tail-scale.ts.net.")])) == sharedPolicy,
+       "own-tailnet churn still does not change it")
+let noSuffix = status(suffix: nil, peers: [("dash", "dash.tail-scale.ts.net.")])
+expect(StableProxyPolicy.make(from: noSuffix) == TailnetProxyPolicy.make(from: noSuffix),
+       "no suffix known: upstream's own policy, unchanged")
 expect(StableProxyPolicy.make(from: tailnet, exitNodeEnabled: true).proxiesEverything,
        "the proxy-everything test mode is unchanged")
 expect(ProxyConfigurationFactory.make(proxyHost: "127.0.0.1", proxyPort: 1080,

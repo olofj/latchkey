@@ -665,14 +665,20 @@ final class TSNetManager {
         if node == nil { startTailscaleIfNeeded() }
     }
 
-    func refreshStatusNow() async {
-        guard let client = localAPIClient else { return }
+    /// Returns whether the node's loopback answered (Latchkey: discovery
+    /// uses that as its proxy-health signal, since the same listener serves
+    /// SOCKS5 and LocalAPI).
+    @discardableResult
+    func refreshStatusNow() async -> Bool {
+        guard let client = localAPIClient else { return false }
         do {
             let status = try await client.backendStatus()
             model.localStatus = status
             refreshProxyPolicyIfNeeded()
+            return true
         } catch {
             logger.log("Immediate status refresh failed: \(error)")
+            return false
         }
     }
 

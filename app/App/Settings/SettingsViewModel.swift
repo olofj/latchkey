@@ -84,7 +84,6 @@ final class SettingsViewModel: ObservableObject {
     private let deleteSession: () -> Void
     var workspaceForSettings: Workspace { workspace }
     private var observers: Set<AnyCancellable> = []
-    private var homePageNormalizationTask: Task<Void, Never>?
 
     init(workspace: Workspace,
          deleteSession: @escaping () -> Void) {
@@ -118,48 +117,30 @@ final class SettingsViewModel: ObservableObject {
             .store(in: &observers)
     }
 
-    func setHomePage(_ url: String) {
-        workspace.setHomePage(url)
-
-        // Settings' TextField publishes each keystroke, and relying only on
-        // focus/submit callbacks is inconsistent across SwiftUI Form on iOS
-        // and macOS. Debounce the same URL-bar normalization so the completed
-        // value is qualified automatically after the user pauses typing.
-        homePageNormalizationTask?.cancel()
-        guard !url.isEmpty else { return }
-        homePageNormalizationTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(500))
-                guard !Task.isCancelled, let self,
-                      self.homePage == url else { return }
-                self.qualifyHomePage()
-            } catch {
-                // A subsequent keystroke cancels this task.
-            }
+    /// Applies what is in the Gateway field (M5): on Return and when Settings
+    /// closes, never per keystroke. Per-keystroke writes let a cleared field
+    /// mean "no gateway" and swap the first-run picker in under Settings (M5
+    /// review). An empty or unusable entry keeps the current gateway.
+    /// Normalized like the picker's manual entry: a bare name is qualified
+    /// with the tailnet's suffix, and the scheme is always https -- the old
+    /// URL-bar normalization produced http://, which ATS now blocks (R28).
+    func commitGateway() {
+        let current = workspace.homePage.url
+        let suffix = workspace.model.localStatus?.CurrentTailnet?.MagicDNSSuffix
+        guard let origin = GatewayCandidates.manualOrigin(homePage, suffix: suffix) else {
+            if homePage != current { homePage = current }
+            return
         }
+        if homePage != origin { homePage = origin }
+        guard origin != current else { return }
+        logger.log("Settings: gateway \(LogRedaction.scrub(current)) -> \(origin)")
+        workspace.selectGateway(origin)
     }
 
-    /// Commits the Home Page field using the same normalization as the
-    /// browser's URL bar. In particular, `google.com` becomes
-    /// `https://google.com`, while a bare tailnet name such as `ai` becomes
-    /// `http://ai` and is subsequently qualified using the live tailnet data.
-    /// This is intentionally called when editing ends/submission occurs,
-    /// rather than on every keystroke, so typing is not disrupted by adding a
-    /// scheme after the first character.
-    func qualifyHomePage() {
-        let trimmed = URLInputNormalizer.trimmed(homePage)
-        guard !trimmed.isEmpty else { return }
-        homePageNormalizationTask?.cancel()
-        // The gateway is an origin: never a path, query or fragment (R2).
-        let normalized = GatewayAddress.persistable(URLInputNormalizer.normalized(from: trimmed))
-        logger.log("Settings: normalized home page \(LogRedaction.scrub(trimmed)) -> \(LogRedaction.scrub(normalized))")
-        if homePage != normalized {
-            homePage = normalized
-        }
-        // Persist directly as well as through the TextField's onChange. This
-        // makes normalization reliable even when SwiftUI coalesces the
-        // Published update while the Settings sheet is being dismissed.
-        workspace.setHomePage(normalized)
+    /// A gateway chosen in Settings' picker.
+    func choose(_ origin: String) {
+        homePage = origin
+        commitGateway()
     }
 
     func setTailnetHostName(_ hostName: String) {

@@ -102,6 +102,18 @@ final class SessionManager: NSObject, ObservableObject {
     /// The host name the sheet shows as the sign-in target.
     var gatewayHost: String? { host?.sessionOrigin?.host }
 
+    /// Forgets the current gateway's sign-in state (a new gateway was chosen).
+    func reset() {
+        watchdog?.cancel()
+        redemptionTimer?.cancel()
+        redemption = nil
+        isRedeeming = false
+        message = nil
+        state = .unknown
+        isTokenSheetPresented = false
+        authGeneration += 1
+    }
+
     // MARK: - Installation
 
     /// Adds the bridge to a web view's configuration. Call before its first

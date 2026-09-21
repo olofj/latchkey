@@ -40,8 +40,18 @@ final class DiscoveryTests: XCTestCase {
             XCTFail("The discovery harness is not running. Use scripts/test-discovery.sh (parent repo).")
             return
         }
+        try await resetFakes()
+    }
+
+    /// Both fakes forget everything, and are checked to have (M5 review: a
+    /// silently failed reset would let an earlier test's probe satisfy a
+    /// later test's "was probed" check).
+    private func resetFakes() async throws {
         _ = try await Self.post("\(Self.gatewayControl)/__reset")
         _ = try await Self.post("\(Self.dashboardControl)/__reset")
+        let paths = try await dashboardState()["paths"] as? [String] ?? ["<unreadable>"]
+        let requests = try await gatewayState()["requests"] as? [String] ?? ["<unreadable>"]
+        XCTAssertTrue(paths.isEmpty && requests.isEmpty, "the fakes did not reset: \(paths.prefix(3)) \(requests.prefix(3))")
     }
 
     /// First run: discovery finds exactly the gateway, within R26's budget,
@@ -65,12 +75,20 @@ final class DiscoveryTests: XCTestCase {
 
         // The probes really went out: the gateway answered both fingerprint
         // requests, and the non-gateway page was asked too.
+        // The probe, in order, before anything else: the manifest, then the
+        // unauthenticated /api/auth/me (the page's own calls come after).
         let requests = try await gatewayState()["requests"] as? [String] ?? []
-        XCTAssertTrue(requests.contains("GET /manifest.json"), "the gateway was probed: \(requests.prefix(10))")
-        XCTAssertTrue(requests.contains("GET /api/auth/me"), "and its auth probe was made")
+        XCTAssertEqual(Array(requests.prefix(2)), ["GET /manifest.json", "GET /api/auth/me"],
+                       "the fingerprint probe came first: \(requests.prefix(6))")
         let dashPaths = try await dashboardState()["paths"] as? [String] ?? []
         XCTAssertTrue(dashPaths.contains { $0.hasPrefix("dash.tail-scale.ts.net GET /manifest.json") },
                       "dash was probed and rejected: \(dashPaths.prefix(5))")
+        // The peer that never answers was probed too (its accepts are
+        // journaled); plain's refusal shows only in the app's own sweep log,
+        // which scripts/test-discovery.sh checks.
+        let journal = try await harnessState()["journal"] as? [[String: Any]] ?? []
+        XCTAssertTrue(journal.contains { $0["peer"] as? String == "slow" },
+                      "the slow peer was probed: \(journal.prefix(5))")
     }
 
     /// Nothing found: the picker says so, and manual entry works — a bare
@@ -89,8 +107,28 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertTrue(probed.contains { $0.hasPrefix("dash.tail-scale.ts.net GET /manifest.json") },
                       "dash must have been probed and rejected: \(probed.prefix(5))")
 
+        // "Search again" really sweeps again: dash is probed anew.
+        try await resetFakes()
+        element(app, "gateway-refresh").tap()
+        var reprobed = false
+        for _ in 0..<20 {
+            try await Task.sleep(for: .milliseconds(500))
+            let paths = try await dashboardState()["paths"] as? [String] ?? []
+            if paths.contains(where: { $0.hasPrefix("dash.tail-scale.ts.net GET /manifest.json") }) { reprobed = true; break }
+        }
+        XCTAssertTrue(reprobed, "Search again probes the tailnet again")
+
+        // A host the tailnet does not carry is refused: it would load direct
+        // and become the sign-in origin (M5 review).
         let field = element(app, "gateway-manual-field")
         field.tap()
+        field.typeText("example.com")
+        element(app, "gateway-manual-use").tap()
+        XCTAssertTrue(element(app, "gateway-manual-error").waitForExistence(timeout: 5),
+                      "a public host is refused, with a reason")
+        XCTAssertTrue(element(app, "gateway-picker").exists, "and the picker stays")
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20))
         field.typeText("dash")
         element(app, "gateway-manual-use").tap()
 
@@ -112,16 +150,49 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 75), "first run: chosen and loaded")
         app.terminate()
 
-        _ = try await Self.post("\(Self.gatewayControl)/__reset")
+        try await resetFakes()
         let again = XCUIApplication()
         again.launchArguments = ["-TestControlURL", Self.controlURL]   // no reset this time
         again.launch()
         defer { again.terminate() }
         XCTAssertTrue(element(again, "token-sheet").waitForExistence(timeout: 60),
-                      "the saved gateway loads directly")
-        XCTAssertFalse(element(again, "gateway-picker").exists, "no picker on a relaunch")
-        let shells = ((try await gatewayState())["counters"] as? [String: Int])?["shell_loads"] ?? 0
-        XCTAssertGreaterThan(shells, 0, "the saved gateway was loaded")
+                      "the saved gateway loads")
+        // Proof it was the SAVED choice: no discovery ran. A sweep would have
+        // probed the web-page peer and asked the gateway for its manifest
+        // first; re-discovering and auto-choosing gw would otherwise look
+        // exactly like persistence (M5 review).
+        let dashPaths = try await dashboardState()["paths"] as? [String] ?? []
+        XCTAssertFalse(dashPaths.contains { $0.contains("/manifest.json") },
+                       "no sweep on a relaunch: dash was probed \(dashPaths.prefix(5))")
+        // The page itself fetches /manifest.json (index.html links it), so
+        // the mark of a probe is ORDER: a probe asks for the manifest before
+        // anything else, a page load starts with GET /.
+        let requests = try await gatewayState()["requests"] as? [String] ?? []
+        XCTAssertEqual(requests.first, "GET /",
+                       "the saved gateway was loaded directly, not probed first: \(requests.prefix(6))")
+    }
+
+    /// M5.5: the chosen gateway is gone from the tailnet. The banner's Find
+    /// runs a FRESH sweep (not the first run's stale result), and the choice
+    /// is applied once the sheet has gone -- the new gateway's token sheet
+    /// must still appear, not collide with the closing picker (M5 review).
+    func testFindFromTheUnreachableBannerSwitchesGateway() async throws {
+        try await resetHarness()
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestResetWorkspaces", "-TestControlURL", Self.controlURL,
+                               "-UITestHomePage", "https://gone.tail-scale.ts.net"]
+        app.launch()
+        defer { app.terminate() }
+
+        let find = element(app, "gateway-unreachable-find-button")
+        XCTAssertTrue(find.waitForExistence(timeout: 60), "a gateway not in the tailnet: the banner offers Find")
+        find.tap()
+        let gw = element(app, "gateway-\(Self.gatewayHost)")
+        XCTAssertTrue(gw.waitForExistence(timeout: 15), "Find sweeps and lists the gateway")
+        gw.tap()
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+                      "the new gateway loads, and its token sheet appears after the picker has gone")
+        XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.gatewayHost))
     }
 
     // MARK: - Helpers
@@ -141,6 +212,10 @@ final class DiscoveryTests: XCTestCase {
         let data = try await Self.post("\(Self.harnessAPI)/reset\(withGateway ? "" : "?gw=0")", timeout: 90)
         let state = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         XCTAssertNotNil(state["generation"], "reset failed: \(String(decoding: data, as: UTF8.self))")
+    }
+
+    private func harnessState() async throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: try await Self.get("\(Self.harnessAPI)/state")) as? [String: Any] ?? [:]
     }
 
     private func gatewayState() async throws -> [String: Any] {

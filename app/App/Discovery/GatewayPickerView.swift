@@ -26,12 +26,18 @@ struct GatewayPickerView: View {
     let savedHost: String?
     /// Choose automatically when exactly one gateway is found.
     let autoSelectSingle: Bool
+    /// Sweep on appear even if an earlier sweep finished (Find, Settings):
+    /// the discovery object outlives the picker, and a stale result -- maybe
+    /// the unreachable gateway itself -- is not what Find asked for (M5 review).
+    var sweepOnAppear: Bool = false
     /// Called with the gateway's origin, `https://<fqdn>`.
     let onSelect: (String) -> Void
     var onCancel: (() -> Void)?
 
     @State private var manual = ""
+    @State private var manualError: String?
     @State private var autoSelected = false
+    @State private var shownAt = ContinuousClock.now
 
     private var ready: Bool { model.localStatus != nil && model.proxyConfiguration != nil }
 
@@ -64,10 +70,19 @@ struct GatewayPickerView: View {
                             .accessibilityIdentifier("gateway-none")
                     }
                     if discovery.phase == .proxyUnhealthy {
-                        Text("The tailnet connection isn't passing traffic yet. Try Refresh in a moment.")
+                        Text("The tailnet connection isn't passing traffic yet. Search again in a moment.")
                             .foregroundStyle(.orange)
                             .accessibilityIdentifier("gateway-proxy-unhealthy")
                     }
+                    // In the list, not the toolbar: the dashboard's gear sits
+                    // over the navigation bar's trailing corner (M5 review).
+                    Button {
+                        discovery.start(savedHost: savedHost, shownAt: .now)
+                    } label: {
+                        Label("Search again", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(discovery.phase == .probing || !ready)
+                    .accessibilityIdentifier("gateway-refresh")
                 } header: {
                     Text("Gateways")
                 }
@@ -83,6 +98,12 @@ struct GatewayPickerView: View {
                     Button("Use this gateway", action: useManual)
                         .disabled(GatewayCandidates.manualOrigin(manual, suffix: suffix) == nil)
                         .accessibilityIdentifier("gateway-manual-use")
+                    if let manualError {
+                        Text(manualError)
+                            .font(.subheadline)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("gateway-manual-error")
+                    }
                 } header: {
                     Text("Enter manually")
                 }
@@ -90,11 +111,6 @@ struct GatewayPickerView: View {
             .accessibilityIdentifier("gateway-picker")
             .navigationTitle("Choose a gateway")
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Refresh") { discovery.start(savedHost: savedHost) }
-                        .disabled(discovery.phase == .probing || !ready)
-                        .accessibilityIdentifier("gateway-refresh")
-                }
                 if let onCancel {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel", action: onCancel)
@@ -110,9 +126,25 @@ struct GatewayPickerView: View {
                 }
             }
         }
+        .onAppear {
+            shownAt = .now
+            if sweepOnAppear, ready { discovery.start(savedHost: savedHost, shownAt: shownAt) }
+        }
         // Start once the node has a status and a proxy to probe through.
         .task(id: ready) {
-            if ready, discovery.phase == .idle { discovery.start(savedHost: savedHost) }
+            if ready, discovery.phase == .idle {
+                discovery.start(savedHost: savedHost, shownAt: shownAt)
+            }
+        }
+        // Nothing outlives the picker: a sweep it no longer shows is stopped.
+        .onDisappear { discovery.cancel() }
+        // A sweep that ran on a status fetched before the peers arrived finds
+        // no candidates, and nothing would start another (M5 review): sweep
+        // again when the peer list changes after an empty sweep.
+        .onChange(of: model.localStatus?.Peer?.count ?? 0) { _, _ in
+            if discovery.phase == .finished, discovery.candidateCount == 0 {
+                discovery.start(savedHost: savedHost, shownAt: shownAt)
+            }
         }
         .onChange(of: discovery.phase) { _, phase in
             guard autoSelectSingle, !autoSelected, phase == .finished,
@@ -126,6 +158,14 @@ struct GatewayPickerView: View {
 
     private func useManual() {
         guard let origin = GatewayCandidates.manualOrigin(manual, suffix: suffix) else { return }
+        // Only a host the tailnet carries: anything else would load direct,
+        // off the tailnet, and become the sign-in origin (M5 review).
+        if let host = URL(string: origin)?.host(), let policy = model.proxyPolicy,
+           policy.matchingRule(for: host) == nil {
+            manualError = "\(host) isn't on your tailnet. Enter a tailnet name, like byskebox or byskebox.<tailnet>.ts.net."
+            return
+        }
+        manualError = nil
         onSelect(origin)
     }
 
