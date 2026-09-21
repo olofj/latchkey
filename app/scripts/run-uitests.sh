@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# run-uitests.sh — build & run the Aperture UI tests on the iOS simulator,
+# run-uitests.sh — build & run the Latchkey UI tests on the iOS simulator,
 # while capturing libtailscale/tsnet logs two ways:
 #
 #   1. The app's stdout (print("tsnet: ...")) — captured by the OS unified
@@ -100,19 +100,28 @@ else
 fi
 
 # --- Build (optional) then run the tests ------------------------------------
+# Same nested-sandbox detection as the Makefile: if this shell cannot apply a
+# nested sandbox, Swift macro expansion fails and the build dies with hundreds
+# of misleading "cannot find '$binding' in scope" errors. See ../docs/DECISIONS.md.
+SANDBOX_FLAGS=()
+if ! sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then
+    echo "▶ Nested sandboxing unavailable; adding -disable-sandbox to the Swift driver"
+    SANDBOX_FLAGS=("OTHER_SWIFT_FLAGS=\$(inherited) -disable-sandbox")
+fi
+
 COMBINED="$LOG_DIR/combined.log"
 if [[ "$BUILD" -eq 1 ]]; then
     echo "▶ Building for testing…"
     xcodebuild build-for-testing \
-        -project Latchkey.xcodeproj -scheme Aperture \
+        -project Latchkey.xcodeproj -scheme Latchkey \
         -configuration Debug -destination "$DEST" \
-        -derivedDataPath "$DERIVED" 2>&1 | tee "$COMBINED"
+        -derivedDataPath "$DERIVED" "${SANDBOX_FLAGS[@]}" 2>&1 | tee "$COMBINED"
 fi
 
 echo "▶ Running tests…"
 set +e
 xcodebuild test-without-building \
-    -project Latchkey.xcodeproj -scheme Aperture \
+    -project Latchkey.xcodeproj -scheme Latchkey \
     -configuration Debug -destination "$DEST" \
     -derivedDataPath "$DERIVED" 2>&1 | tee -a "$COMBINED"
 TEST_RC=${PIPESTATUS[0]}

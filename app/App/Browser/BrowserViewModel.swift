@@ -62,7 +62,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private let isHomePage: Bool
     private let dataStore: WKWebsiteDataStore
     private let configureWebView: ((WKWebViewConfiguration) -> Void)?
-    private let openNewTab: (URL) -> Void
+    private let openExternally: (URL) -> Void
     private var webView: WKWebView?
 
     private(set) var didLoadInitial = false
@@ -76,13 +76,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
     init(model: TSNetModel, initialURL: URL, dataStore: WKWebsiteDataStore,
          isHomePage: Bool = false,
          configureWebView: ((WKWebViewConfiguration) -> Void)? = nil,
-         openNewTab: @escaping (URL) -> Void = { _ in }) {
+         openExternally: @escaping (URL) -> Void = { _ in }) {
         self.tsnetModel = model
         self.initialURL = initialURL
         self.isHomePage = isHomePage
         self.dataStore = dataStore
         self.configureWebView = configureWebView
-        self.openNewTab = openNewTab
+        self.openExternally = openExternally
         super.init()
 
         if let proxy = model.proxyConfiguration {
@@ -635,8 +635,11 @@ extension BrowserViewModel: WKUIDelegate {
             let open = UIAction(title: "Open", image: UIImage(systemName: "arrow.up.right.square")) { _ in
                 Task { @MainActor [weak self] in self?.load(url: url) }
             }
-            let openInTab = UIAction(title: "Open in New Tab", image: UIImage(systemName: "plus.square.on.square")) { _ in
-                Task { @MainActor [weak self] in self?.openNewTab(url) }
+            // `openExternally` hands the URL to the system browser now that there
+            // are no tabs (PLAN §1.4); the label has to say so, or the menu
+            // promises something it does not do.
+            let openInTab = UIAction(title: "Open in Safari", image: UIImage(systemName: "safari")) { _ in
+                Task { @MainActor [weak self] in self?.openExternally(url) }
             }
             let copy = UIAction(title: "Copy Link", image: UIImage(systemName: "doc.on.doc")) { _ in
                 Task { @MainActor in UIPasteboard.general.url = url }
@@ -648,8 +651,10 @@ extension BrowserViewModel: WKUIDelegate {
 #endif
 
     /// WebKit asks its UI delegate to create a view for target=_blank,
-    /// window.open(), and links whose target requests another browsing context.
-    /// Route that request into this workspace's tab manager instead.
+    /// window.open(), and links whose target requests another browsing
+    /// context. Latchkey has exactly one browsing context (PLAN §1.4), so
+    /// the request goes to the system browser rather than opening a second
+    /// tab here. Returning nil tells WebKit not to create a view.
     func webView(_ webView: WKWebView,
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
@@ -657,7 +662,7 @@ extension BrowserViewModel: WKUIDelegate {
         guard navigationAction.targetFrame == nil,
               let url = navigationAction.request.url
         else { return nil }
-        openNewTab(url)
+        openExternally(url)
         return nil
     }
 }

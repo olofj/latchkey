@@ -239,6 +239,35 @@ private struct DashboardContent: View {
                 )
             }
         }
+        .onChange(of: homePageAvailability) { _, availability in
+            loadGatewayIfRecovered(availability)
+        }
+    }
+
+    /// Recovers from the unreachable-gateway fallback when the gateway shows
+    /// up later.
+    ///
+    /// If the gateway is not yet a peer when the first load is decided,
+    /// `HomePageAvailabilityChecker` sends the tab to `about:blank`. That
+    /// commits a URL, which makes `BrowserViewModel.loadInitial` refuse every
+    /// subsequent attempt — by design, so a status poll can't yank a page the
+    /// user is reading back to the home page. The side effect is that a
+    /// gateway that finishes booting a few seconds after the app does leaves
+    /// the user on a permanently blank page with a banner, recoverable only by
+    /// relaunching.
+    ///
+    /// The tailnet is a slow, racy thing to wait on, so the ordering is not
+    /// rare: the peer list can easily arrive after the first load decision.
+    /// Narrow on purpose — it only fires on the unavailable → available edge,
+    /// and only when the blank fallback is what is actually on screen, so it
+    /// can never interrupt a real page.
+    private func loadGatewayIfRecovered(_ availability: HomePageAvailability) {
+        guard availability == .available,
+              tab.viewModel.url == HomePageAvailabilityChecker.unreachableFallbackURL,
+              let gateway = URL(string: homePage.url)
+        else { return }
+        logger.log("Gateway \(homePage.url) appeared in the tailnet; leaving the fallback page")
+        tab.viewModel.load(url: gateway)
     }
 
     private var homePageAvailability: HomePageAvailability {

@@ -164,8 +164,33 @@ final class TabManager: ObservableObject {
         BrowserTab(id: id, model: model, initialURL: url,
                    restoredTitle: restoredTitle, dataStore: dataStore,
                    isHomePage: isHomePage,
-                   openNewTab: { [weak self] url in self?.openTab(url: url) },
+                   openExternally: { url in Self.openExternally(url) },
                    onMetadataChange: { [weak self] in self?.persist() })
+    }
+
+    /// Handles a link the page asked to open in another browsing context —
+    /// `target="_blank"`, `window.open()`, or the context menu's "Open in New
+    /// Tab" — by handing it to the system browser.
+    ///
+    /// Upstream opened a second tab. With `maximumTabCount == 1` that path now
+    /// hits `canOpenNewTab == false` and returns nil, which means such a link
+    /// would do **nothing at all** when tapped: no new tab, no navigation, no
+    /// error. Silently dead links are worse than either alternative.
+    ///
+    /// Safari rather than this tab, deliberately. The KiroCrew dashboard links
+    /// out to GitHub, docs and the like; loading those here would replace the
+    /// session the user was reading, and with no address bar and no back
+    /// button there is no way back. PLAN §1.3 also rules out being a general
+    /// browser — an external link is exactly the case that belongs elsewhere.
+    private static func openExternally(_ url: URL) {
+#if canImport(UIKit)
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+            logger.log("Refusing to open non-http(s) URL externally: \(url.scheme ?? "nil")")
+            return
+        }
+        logger.log("Opening externally: \(url)")
+        UIApplication.shared.open(url)
+#endif
     }
 
     private func persist() {

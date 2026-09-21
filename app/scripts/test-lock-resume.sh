@@ -1,7 +1,7 @@
 #!/bin/bash
 # Reproduce physical lock/unlock more faithfully than an ordinary simulator
 # XCUITest: Home supplies real scene background/active transitions, while a
-# host-side SIGSTOP freezes the Aperture process (Swift + URLSession + Go) for
+# host-side SIGSTOP freezes the Latchkey process (Swift + URLSession + Go) for
 # the same interval during which iOS suspends it after screen lock.
 set -euo pipefail
 
@@ -55,12 +55,12 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "${NO_BUILD:-0}" != 1 ]]; then
-    xcodebuild build-for-testing -project Latchkey.xcodeproj -scheme Aperture \
+    xcodebuild build-for-testing -project Latchkey.xcodeproj -scheme Latchkey \
         -configuration Debug -destination "$DEST" -derivedDataPath "$DERIVED" \
         >"$LOG_DIR/build.log" 2>&1
 fi
 
-xcodebuild test-without-building -project Latchkey.xcodeproj -scheme Aperture \
+xcodebuild test-without-building -project Latchkey.xcodeproj -scheme Latchkey \
     -configuration Debug -destination "$DEST" -derivedDataPath "$DERIVED" \
     -only-testing:LatchkeyUITests/LatchkeyUITests/testExternalProcessSuspendRecoversWithoutReloadingPage \
     >"$LOG_DIR/test.log" 2>&1 &
@@ -72,18 +72,18 @@ for _ in $(seq 1 300); do
     sleep 0.1
 done
 if ! grep -q 'Background: leaving tsnet, proxy, and observers unchanged' "$UNIFIED"; then
-    echo "Timed out waiting for Aperture to enter background" >&2
+    echo "Timed out waiting for Latchkey to enter background" >&2
     tail -80 "$UNIFIED" >&2
     exit 1
 fi
 
-APP_PID=$(pgrep -f "Devices/$UDID/.*/Latchkey.app/Aperture" | head -1 || true)
+APP_PID=$(pgrep -f "Devices/$UDID/.*/Latchkey.app/Latchkey" | head -1 || true)
 if [[ -z "$APP_PID" ]]; then
-    echo "Could not find Aperture simulator process" >&2
+    echo "Could not find Latchkey simulator process" >&2
     exit 1
 fi
 
-echo "Freezing Aperture pid $APP_PID for ${SUSPEND_SECONDS}s"
+echo "Freezing Latchkey pid $APP_PID for ${SUSPEND_SECONDS}s"
 kill -STOP "$APP_PID"
 sleep "$SUSPEND_SECONDS"
 kill -CONT "$APP_PID"
