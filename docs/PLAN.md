@@ -1,0 +1,780 @@
+# Latchkey — Implementation Plan
+
+**A single-purpose iPhone app for reaching a self-hosted KiroCrew dashboard over Tailscale, with the Tailscale node embedded in the app binary.**
+
+| | |
+|---|---|
+| Status | Plan approved for implementation; no code written yet |
+| Author | Drafted 2026-09-20 from three parallel research passes |
+| Repo | `~/src/latchkey` |
+| Base | Fork of [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) @ `dba0555` (2026-08-24), BSD-3-Clause |
+| Target | iOS 26.0+, iPhone (iPad secondary) |
+| Owner | Olof (`owner@example.com`), tailnet `example.ts.net` |
+
+---
+
+## 0. How to read this document
+
+Sections 1–4 are context and architecture: read once, in order. Section 5 is the
+work breakdown — each milestone is a self-contained unit with tasks, exact file
+paths, and acceptance criteria. Section 6 is the test strategy and is deliberately
+detailed, because most of this project's risk lives in "can we test this without
+the owner's personal tailnet?" Sections 7–9 are risks, open questions and
+reference appendices.
+
+Every factual claim about aperture-plus, KiroCrew or Tailscale internals in this
+document was verified against source during planning. Where something is
+**inferred** rather than verified, it says so. Do not treat inferred claims as
+settled — verify them in the milestone that depends on them.
+
+**Conventions used below**
+- `path/to/file.swift:123` — a real file and line in the upstream repo at `dba0555`. Line numbers drift once you start editing; treat them as "where to look", not as addresses.
+- **AC** — acceptance criteria. A milestone is done when all of its ACs pass.
+- Effort estimates assume one engineer working with an AI pair, and are in focused hours, not calendar time.
+
+---
+
+## 1. Goal and non-goals
+
+### 1.1 The problem
+
+Long-running Claude Code sessions run under KiroCrew on two gateways (`byskebox`,
+a Linux VM, and `chonk`, the Mac Studio). Reaching them from an iPhone today means:
+open Safari, make sure the system Tailscale VPN is connected, load the dashboard,
+and re-authenticate by pasting a token URL produced by `kirocrew token` on a
+computer. That last step is the real friction — it needs a second device.
+
+### 1.2 Goals
+
+1. **One tap from the home screen to a live session.** An app icon that opens directly to the dashboard, with no browser chrome, no VPN toggle, and no tab to lose.
+2. **No system VPN.** The app carries its own userspace Tailscale node, so it does not compete with any other VPN profile and works even when Tailscale's own app is off.
+3. **Durable sign-in.** The token lives in the Keychain; the app renews the session silently and only asks for a new token when renewal genuinely fails.
+4. **Gateway discovery.** The app finds KiroCrew gateways on the tailnet instead of requiring a hand-typed hostname.
+5. **Testable without the owner's tailnet.** Contributors and CI must be able to run meaningful tests with no Tailscale account at all.
+
+### 1.3 Non-goals (for v1)
+
+- **App Store or TestFlight distribution.** Personal sideloading only. This also dodges the privacy-manifest blocker in [libtailscale PR #57](https://github.com/tailscale/libtailscale/pull/57).
+- **Push notifications.** They need KiroCrew [PR #7821](https://github.com/kirodotdev/KiroCrew/pull/7821) (Web Push) or a native APNs sender. Section 9 keeps the door open.
+- **A general browser.** No tabs, no address bar, no arbitrary navigation. Exactly one destination, chosen from discovered gateways.
+- **Exit nodes and subnet routes.** Broken upstream in tsnet (see §7.4). Explicitly out of scope; remove the UI.
+- **macOS.** The Mac already has the desktop app. Delete the Mac target.
+- **Multi-user.** One person, one tailnet.
+
+### 1.4 What "done" looks like
+
+Olof taps the Latchkey icon on his iPhone 14 Pro with the system Tailscale VPN
+**off**. Within a couple of seconds he is looking at a live KiroCrew chat on
+`byskebox`, streaming over a WebSocket, with no sign-in prompt. He backgrounds
+the app for an hour, comes back, and it reconnects on its own.
+
+---
+
+## 2. Background: what already exists
+
+### 2.1 aperture-plus is 80% of this app
+
+[tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) is an
+experimental WebKit browser for iOS and macOS with an embedded userspace
+Tailscale node, written almost entirely by Avery Pennarun (197 of 200 commits).
+It already solves the hard parts:
+
+- Embeds `TailscaleKit` (the Swift binding in [tailscale/libtailscale](https://github.com/tailscale/libtailscale)) as a vendored submodule and builds it into an `xcframework`.
+- Brings up a tsnet node, drives interactive login through `ASWebAuthenticationSession`, and persists node state.
+- Obtains tsnet's loopback SOCKS5 proxy and points WebKit at it via `WKWebsiteDataStore.proxyConfigurations`.
+- Implements a **split tunnel**: only tailnet destinations go through the proxy, because routing public traffic through it made every non-tailnet URL fail with `NSURLErrorBadURL (-1000)` on some hardware.
+- Recovers from iOS reclaiming the loopback listener after suspension.
+
+What it is not: single-purpose. It has tabs, an address bar, bookmarks, a macOS
+app, and a virtualization feature. Our job is to remove those, pin one
+destination, and add KiroCrew-specific auth and discovery.
+
+### 2.2 Why fork rather than build fresh
+
+A from-scratch build on `tunnelless` (MIT, ~250 lines) was considered and
+rejected. aperture-plus carries roughly 3,000 lines of hard-won iOS-specific
+knowledge — the `-1000` proxy semantics, the split-tunnel `matchDomains`
+computation, the `node.up()` actor-starvation workaround, failure-driven loopback
+recovery — that would otherwise have to be rediscovered by hitting the same bugs.
+The cost of the fork is carrying code we delete once, plus tracking upstream.
+
+### 2.3 What we verified about KiroCrew
+
+The dashboard (0.6.0, installed at
+`~/.kiro/crew-venv/lib/python3.12/site-packages/kiro_crew/`) is an SPA
+that authenticates by signed token and streams over a WebSocket. Key facts that
+shape the design, each verified in source:
+
+- **Auth is a signed token in a query parameter**, exchanged for cookies. `dashboard/urls.py:364` builds `{base_url}?token={token}`.
+- **Identity alone is never enough.** With `trust_identity` on, `dashboard/token_auth.py:2144-2152` only resolves the tailnet peer *when a credential is already present*. Tailnet identity narrows access; it never grants it. **The app must always hold a token.**
+- **A refresh chain exists**: `POST /api/auth/refresh`, cookie-scoped to `/api/auth`, rotating on use, valid up to 30 days. This is what makes durable sign-in possible.
+- **`GET /manifest.json` is unauthenticated** and returns `{"name":"Kiro Crew",...}` — our discovery probe. `GET /api/health` is deliberately uninformative through `tailscale serve`.
+- **No user-agent sniffing** anywhere in the server, so a custom WKWebView UA is safe.
+- **`frame-ancestors 'self'`** — the dashboard cannot be iframed from another origin. Load it as the top-level document, which is what we do anyway.
+
+### 2.4 A live finding worth keeping in mind
+
+During planning, simulator Safari (iOS 27) loaded `https://byskebox.example.ts.net`
+over the tailnet and the dashboard **rendered correctly**. That is a live
+counter-test of [KiroCrew #9399](https://github.com/kirodotdev/KiroCrew/issues/9399)
+("dashboard renders blank in all WebKit browsers over Tailscale"), which is open
+and disputed. It does not disprove the bug — the report is iOS 26.6.1 against a
+Windows-packaged 0.6.0 — but it means we are not walking into a known wall.
+**M1 must re-check this on the real device**, because a WKWebView uses the same
+engine as Safari: if it breaks there, it breaks here, and the fix belongs in
+KiroCrew, not in this app.
+
+---
+
+## 3. Architecture
+
+### 3.1 Components
+
+```
+┌──────────────────────── Latchkey (single iOS process) ────────────────────────┐
+│                                                                                │
+│  SwiftUI shell                                                                 │
+│   ├── ConnectionGate      — pre-connect screen, login button, status           │
+│   ├── DashboardView       — one WKWebView, no chrome                           │
+│   ├── GatewayPicker       — discovered KiroCrew gateways (new)                 │
+│   └── Settings            — diagnostics, logs, gateway, sign-out               │
+│                                                                                │
+│  SessionManager (new)     — token lifecycle, Keychain, refresh loop            │
+│  GatewayDiscovery (new)   — enumerate tailnet peers, probe /manifest.json      │
+│                                                                                │
+│  TSNetManager             — tsnet node, IPN bus, loopback SOCKS5, recovery     │
+│  TailnetProxyPolicy       — split tunnel: which hosts go through the proxy     │
+│                                                                                │
+│  TailscaleKit.xcframework — libtailscale (Go tsnet compiled c-archive)         │
+└────────────────────────────────────────────────────────────────────────────────┘
+          │ SOCKS5 on 127.0.0.1 (credentialed)          │ WireGuard / DERP
+          ▼                                              ▼
+   WKWebView network stack                        tailnet → byskebox:443
+                                                  (tailscale serve → :5476)
+```
+
+### 3.2 Traffic routing
+
+Unchanged from upstream, and **do not simplify it** — `AGENTS.md` in the upstream
+repo explicitly warns against collapsing the split tunnel back to an unscoped
+proxy config, and `TSNet/TailnetProxyPolicy.swift:11-82` documents the measured
+semantics.
+
+- tsnet exposes a loopback SOCKS5 listener; username is literally `tsnet`, password is the per-launch `proxyCredential` (`tailscale.h:155-176`).
+- The app builds `ProxyConfiguration(socksv5Proxy:)`, calls `applyCredential(username:password:)`, and sets `matchDomains` to tailnet CIDRs plus MagicDNS names (`TSNet/TSNetManager.swift:501-549`).
+- `allowFailover` stays **false** (the Network.framework default, `proxy_config.h:220-224`). This is what guarantees a dead proxy fails the load instead of leaking direct. **Add a unit test asserting it is false** — flipping it would be a silent privacy regression.
+- TLS is end-to-end to the real `*.ts.net` Let's Encrypt certificate. The proxy sees only a CONNECT.
+
+### 3.3 Authentication design
+
+This is the main thing we add. The flow:
+
+```
+first run ──► no token in Keychain
+              │
+              ├─► user pastes a token URL (from `kirocrew token`) OR
+              │   scans the QR from the dashboard's Phone access card
+              ▼
+        load https://<gateway>/?token=<token> in the WKWebView
+              │  (server sets mc_token_<port> + mc_refresh_<port> cookies)
+              ▼
+        persist: gateway URL + a marker in Keychain; cookies live in
+        the WKWebsiteDataStore (persistent, per-workspace UUID)
+              │
+              ▼
+        steady state: poll GET /api/auth/me for session_exp
+                      call POST /api/auth/refresh before it expires
+              │
+              ├─ refresh 200 ──► keep going
+              └─ refresh 401 ──► surface "needs new token" UI
+```
+
+**Do not build a refresh loop. The page already has one.** This was the single
+most useful discovery of the planning phase. The dashboard's own JS client
+(`client-oM83i081.js`) implements the whole thing:
+
+- Any API response of **`403` with header `X-Auth-Required: true`** triggers `POST /api/auth/refresh`. Note it is 403, not 401 — the server's `_deny()` always emits that pair (`dashboard/token_auth.py:3097-3111`).
+- The refresh call is **single-flight**: the in-flight promise is memoised, so concurrent 403s cause exactly one refresh. This matters because reusing a rotated refresh token outside its grace window revokes the entire chain.
+- On `200` it clears the banner; on **`401` it latches a terminal flag** and never retries, drawing the red paste banner instead. Other statuses are treated as transient.
+
+So the app's job is **not** to drive refresh. It is to (a) let the page do its
+work, (b) notice the terminal state, and (c) supply a fresh token without making
+the user find a computer. Building a second refresh loop natively would race the
+page's and risk revoking the chain.
+
+**Hook the events, don't scrape the DOM.** The banner is drawn as imperative DOM
+outside React (element id `mc-session-expired`) so it survives a broken app tree,
+and it dispatches `mc-auth-required` / `mc-auth-cleared` on `window`. Inject a
+content script that forwards both to native via `WKScriptMessageHandler`. That is
+the app's authoritative session signal — far better than polling `/api/auth/me`
+or reading the DOM.
+
+**Nudge on foreground.** The server has **no WebSocket expiry watchdog**: it never
+closes `/api/ws` when a session expires, and auth is resolved once at upgrade and
+never re-checked per frame. An expired session can therefore sit unnoticed behind
+a socket that looks healthy. On foreground, issue one cheap authenticated HTTP
+request (`GET /api/auth/me`) to force the 403 → refresh path promptly rather than
+waiting for the user's next action to discover it.
+
+**Token supply, when it does come to that.** The banner accepts either a full URL
+or a bare token, extracts `?token=`, and hard-navigates to
+`{origin}?token={token}`. The app should present a native sheet at that moment
+and perform the same navigation. A token cannot be cached for later reuse: the
+link window is 300 s (`LINK_WINDOW_SECS`), so there is no such thing as a stored
+spare key. **The 30-day refresh chain is the only durable credential** — which is
+exactly why §3.3's "don't race the page's refresh" rule matters.
+
+**A payoff worth configuring.** `dashboard.qr_session_persist_across_restart`
+gives 30-day sessions that survive gateway restarts, but it is gated on
+`trust_identity` plus a non-empty `allowed_logins`. Olof's iPhone can't satisfy
+that today: it is ACL-tagged, so `tailscale whois` reports it as `tagged-devices`
+(`dashboard/tailnet.py:864`). **The embedded node is a different node**, created
+by an interactive login as `owner@example.com`, so it reports the real
+login and passes the allowlist. Enabling this on the gateway is a one-line config
+change and removes the "signed out after every gateway restart" annoyance
+entirely. Do it in M7 and measure the difference.
+
+### 3.4 Discovery design
+
+1. Ask the node for tailnet status. Prefer `statusJSON()` on `TailscaleNode` over the loopback HTTP `/status` endpoint: `tailscale.h:183-186` documents that the LocalAPI path keeps working when *"the OS reclaims the loopback TCP listener from a suspended process (observed on iOS), where the loopback address goes permanently stale."*
+2. Extract peer `DNSName`s. `TailnetProxyPolicy` already parses exactly this data — reuse its parsing rather than writing a second JSON path.
+3. For each peer, probe `GET https://<dnsname>/manifest.json` through the tsnet dialer with a short timeout (2 s) and bounded concurrency (4 at a time).
+4. A gateway is a match when the response is JSON with `"name": "Kiro Crew"`.
+5. Cache results with a timestamp; re-probe on manual refresh and on first run only. Persist the chosen gateway.
+
+Fallback: let the user type a hostname, and also probe `http://<host>:5476` for
+gateways not fronted by `tailscale serve` (that is how `chonk` is reachable
+today; `byskebox` answers on 443).
+
+### 3.5 Lifecycle
+
+Upstream HEAD already replaced lifecycle-driven repair with **failure-driven
+recovery**: `TSNetManager.isLocalLoopbackConnectionFailure` (`:355-364`) →
+`recoverLoopbackAfterFailure` (`:366-415`), which calls `node.restartLoopback()`,
+rebuilds the LocalAPI client and IPN bus, restarts the relay and republishes the
+proxy config. `willEnterBackground()` (`:662-664`) is a deliberate no-op.
+
+Keep that design. Our addition is at the **session** layer, not the network layer:
+on foreground, re-check `/api/auth/me` and let the page reconnect its WebSocket.
+The dashboard's SPA already reconnects (the frontend opens `/api/ws` with a
+heartbeat every 30 s), so the app should not fight it; it should only reload the
+page if the session itself died.
+
+---
+
+## 4. Repository and project setup
+
+### 4.1 Layout
+
+```
+~/src/latchkey/
+├── docs/
+│   ├── PLAN.md              ← this document
+│   └── DECISIONS.md         ← append-only log of decisions made during implementation
+├── testing/
+│   └── harness/             ← already populated, see §6.3
+│       ├── dashboard.py     — fake KiroCrew (HTTPS + WebSocket + SSE)
+│       ├── socks5stub.py    — stub SOCKS5 with journal / blackhole modes
+│       ├── ca.cnf, leaf.cnf — OpenSSL configs for the test CA
+├── app/                     ← the fork of aperture-plus lands here (M0)
+└── README.md
+```
+
+Keeping the fork in a subdirectory (`app/`) rather than at the repo root means
+the harness, docs and any future server-side helpers are versioned alongside it
+without entangling them in upstream merges.
+
+### 4.2 Fork strategy
+
+```bash
+cd ~/src/latchkey
+git clone https://github.com/tailscale/aperture-plus app
+cd app
+git remote rename origin upstream
+git remote add origin <your fork URL>       # optional; a local-only fork is fine
+git checkout -b latchkey
+git submodule update --init --recursive     # pulls ThirdParty/libtailscale + tailscale-patched
+```
+
+**Track upstream, don't diverge silently.** Upstream is an active experiment by
+the person who knows tsnet-on-iOS best; its bug fixes are worth having. Keep
+deletions and additions in separate commits so a future `git merge upstream/main`
+has the best chance. Record every non-obvious divergence in `docs/DECISIONS.md`.
+
+**License**: BSD-3-Clause. Keep `LICENSE` intact and add a `NOTICE` naming the
+origin.
+
+### 4.3 Identity changes
+
+| What | Where | From | To |
+|---|---|---|---|
+| Development team | `app/Aperture.xcodeproj/project.pbxproj` (10 sites: 446, 488, 525, 542, 562, 600, 666, 731, 759, 777) | `W5364U7YZB` | your personal team |
+| Bundle id (app) | same file, 581 / 619 | `io.tailscale.Aperture` | `net.lixom.latchkey` |
+| Bundle id (UI tests) | same file, 763 / 781 | `io.tailscale.Aperture.UITests` | `net.lixom.latchkey.UITests` |
+| Export team | `app/ExportOptions.plist` | `W5364U7YZB` | your personal team |
+| Display name | `app/Aperture/Info.plist` | Aperture | Latchkey |
+
+With a free personal team, the reliable install path is Xcode's Run button, not
+`make ipa`. Profiles last 7 days; rebuild to renew.
+
+### 4.4 Build prerequisites (already satisfied on `chonk`)
+
+- Xcode 27.0 (27A266a), licensed, `xcode-select` pointed at it. **Note:** upstream requires Xcode 26.x and the iOS 26 SDK; we have 27. See §7.1.
+- iOS 27.0 simulator runtime installed, six device types available.
+- Go 1.27.1 (upstream asks for 1.26.5; `go.mod` declares `go 1.25.0`).
+- Disk: ~85 GB free.
+
+---
+
+## 5. Milestones
+
+### M0 — Bootstrap: fork builds and runs (3–5 h)
+
+**Goal:** an unmodified fork building and launching in the simulator, with the
+host-only tests green. This milestone changes no behaviour; it de-risks the
+toolchain.
+
+| # | Task | Detail |
+|---|---|---|
+| 0.1 | Clone and branch | §4.2. Verify `ThirdParty/libtailscale` and its nested `tailscale-patched` submodule are checked out. |
+| 0.2 | Build the framework | `cd app && make framework`. Slow the first time (Go builds a fat xcframework). If Go 1.27 rejects the build, install 1.26.5 via `GOTOOLCHAIN=go1.26.5` before reaching for anything heavier. |
+| 0.3 | Build the app | `make app` (simulator). Fix Xcode-27 fallout here, not later. |
+| 0.4 | Host-only tests | `make test-policy` — runs `scripts/test-proxy-policy.sh` and `scripts/test-hostname-qualifier.sh` via `swiftc`, ~2 s, no simulator or framework needed. |
+| 0.5 | Launch in simulator | `xcrun simctl boot "iPhone 17"`, install, launch. It will sit at the connection gate with no tailnet — that is correct. |
+| 0.6 | Identity changes | §4.3. Rebuild. |
+| 0.7 | Record the baseline | `docs/DECISIONS.md`: upstream SHA, Xcode/Go versions, which upstream tests already fail (see §7.5 — five iOS UI tests are known-flaky upstream). |
+
+**AC:**
+- `make framework && make app && make test-policy` all succeed from a clean clone.
+- The app launches in the iOS 27 simulator and shows the connection gate without crashing.
+- `docs/DECISIONS.md` records the baseline, including any upstream test failures inherited.
+
+---
+
+### M1 — Strip to single purpose (6–10 h)
+
+**Goal:** one window, one WKWebView, one destination. No tabs, no address bar, no
+Mac target, no VM code.
+
+Deletions first, then the pin. Keep each in its own commit.
+
+| # | Task | Files |
+|---|---|---|
+| 1.1 | Remove the Mac app | Delete `MacApp/`, `MacUITests/`, the `ApertureMac` / `ApertureMacUITests` targets (`project.pbxproj:219-267`), `xcshareddata/xcschemes/ApertureMac.xcscheme`, and the Makefile targets `mac-framework`, `mac-app`, `mac-app-signed`, `test-mac`, `build-mac-uitests`, `test-mac-ui`, `tf-mac*`. Nothing in the iOS target references `MacApp/`. |
+| 1.2 | Remove virtualization | Delete `Packages/ApertureVM/`, `Tools/aperture-vm-cli/`, `scripts/build-aperture-vm-cli.sh`, the `stage-thunderboot-*` Makefile targets, `README.thunderboot.md`, `TODO.thunderboot.md`, `TODO.vmnet.md`, `MacApp/Thunderboot/`. |
+| 1.3 | Remove the VM seam from iOS | Delete `App/Workspace/WorkspaceVMModel.swift`, `App/Workspace/WorkspaceVMProtocol.swift`, `App/Settings/WorkspaceVMSettingsSection.swift`; then fix the referents at `SettingsView.swift:87-90`, `SettingsViewModel.swift:96/103/106`, `WorkspaceManager.swift:43/282`, `WorkspaceStore.swift:213-218`. |
+| 1.4 | Remove tabs | `App/Browser/TabbedBrowserView.swift`: drop the `TabOverview` sheet (`:82-87`) and the macOS `TabBar` (`:241-242`). Then delete `TabBar.swift`, `TabOverview.swift`. Collapse `TabManager` to a single tab (`maximumTabCount`, `TabManager.swift:20`) — do not delete `TabManager`; it owns tab persistence the workspace expects. |
+| 1.5 | Remove the address bar | `TabbedBrowserView.swift`: remove `browserToolbar` from the VStacks at `:244` and `:264`; the definition is `:356`. Delete `CompactBrowserToolbar.swift`. **Keep** `BrowserNavigator.swift`'s statics `trimmedURLInput` / `normalizedURLString` (still called from `SettingsViewModel.swift:297,300`) or inline them. |
+| 1.6 | Remove bookmarks | Delete `App/Bookmarks/Bookmark.swift`, `BookmarkEditor.swift`, `BookmarkList.swift`, `App/Browser/BookmarksSheet.swift`. **Keep** `App/Bookmarks/HomePage.swift` — it holds the start URL. |
+| 1.7 | Pin the start URL | `HomePage.swift:25` (`defaultURL`), `WorkspaceStore.swift:81-92` (`makeDefault()`), `TabManager.openChatTab()` (`TabManager.swift:73-79`). Temporarily hardcode `https://byskebox.example.ts.net`; M5 replaces this with the discovered gateway. |
+| 1.8 | Remove exit-node UI | `SettingsView.swift` exit-node section and `SettingsViewModel.runExitNodeDiagnostic` (`:203`) / `fetchEgressIP` (`:225`). Exit nodes are broken upstream (§7.4); shipping the toggle would be shipping a known-broken feature. Also drops the upstream-failing `testExitNodeChangesEgressIP`. |
+| 1.9 | Keep and re-point diagnostics | Keep `SettingsView.swift` routing section (`:182-232`), `App/Settings/LogViewer.swift`, `TSNet/Logging.swift`, `TSNet/SocksLogProxy.swift`, `App/Tailnet Status/StatusView*.swift` (this is the login UI — not optional). |
+| 1.10 | Fix the UI test suite | `UITests/ApertureUITests.swift` is 2,275 lines / 29 tests, many about tabs and bookmarks. Delete the tests for deleted features; keep and re-point the ones about connection, login, home page and keyboard layout. |
+| 1.11 | Rename | Target, scheme, display name, `LogRing` subsystem string. Rename `Aperture.xcodeproj` last — it touches the most paths. |
+
+**AC:**
+- App launches to the connection gate, then to a single full-screen WKWebView. No tab UI, no address bar anywhere.
+- `make test-policy` still green; the trimmed UI suite compiles and runs.
+- Building the Mac scheme is impossible because it no longer exists; the iOS build has no references to `ApertureVM`.
+- **Device check:** install on the iPhone, sign in with the system Tailscale VPN *off*, and confirm the KiroCrew dashboard renders (the #9399 re-test from §2.4). If it renders blank, stop and fix that in KiroCrew first — it blocks everything downstream.
+
+---
+
+### M2 — Offline test harness (5–8 h)
+
+**Goal:** prove the WebKit-through-SOCKS5 path with **zero Tailscale involvement**,
+so every later change has a fast, deterministic regression net. This milestone is
+scheduled early on purpose: it is the safety rail for M4 and M6.
+
+See §6 for the full strategy; this is the build-out.
+
+| # | Task | Detail |
+|---|---|---|
+| 2.1 | Move the harness in | `testing/harness/` already holds `dashboard.py`, `socks5stub.py`, `ca.cnf`, `leaf.cnf`, verified working during planning. Add a `Makefile` with `harness-up` / `harness-down`. |
+| 2.2 | Generate test certs | Script `testing/harness/gen-certs.sh` per §6.3. The CA **must** carry `keyUsage=critical,keyCertSign,cRLSign` or iOS rejects it with "CA cert does not include key usage extension". The leaf needs `subjectAltName` (iOS ignores CN) and `extendedKeyUsage=serverAuth`. |
+| 2.3 | Trust the CA in the simulator | `xcrun simctl keychain booted add-root-cert testing/harness/ca.der`. Wire this into the test bootstrap so a fresh simulator works unattended. |
+| 2.4 | Test-only proxy override | Add a launch argument `-TestProxyEndpoint <host:port>` + `-TestProxyCredential <pass>` so XCUITests can point the app at `socks5stub.py` instead of tsnet. Follow the upstream pattern in `TSNetManager.swift:133-174`. **Gate it on a debug build** so a release build cannot be pointed at an arbitrary proxy. |
+| 2.5 | Happy-path UI test | Launch with the override, load `https://dash.tail-scale.ts.net/` (mapped by the stub to `127.0.0.1:8443`), assert the page renders, the WebSocket echoes, and the SSE stream advances. |
+| 2.6 | **Negative test** | Run the stub with `--blackhole`; assert the load **fails** rather than succeeding directly. Then assert `proxyConfiguration.allowFailover == false` in a host-side unit test. This pair is the anti-leak guarantee. |
+| 2.7 | Journal assertion | Assert `testing/harness/proxy.ndjson` contains a `connect` event for the dashboard host — proof the traffic actually traversed the proxy rather than reaching it some other way. |
+| 2.8 | JS bridge for web assertions | The accessibility tree is flaky for dynamic web content. Add a debug-only bridge behind `-UITestBridge`: poll `evaluateJavaScript("document.getElementById('wsstate').textContent")` and publish into a hidden view's `accessibilityValue` for XCUITest to read. (INFERRED — established practice, not verified here; if it proves awkward, fall back to `WKScriptMessageHandler`.) |
+| 2.9 | Script the whole thing | `scripts/test-offline.sh`: certs → harness up → `xcodebuild test -only-testing:...` → harness down, with logs and a screenshot on failure. |
+
+**AC:**
+- `scripts/test-offline.sh` passes from a clean checkout on a machine with **no Tailscale account and no tailnet**.
+- The blackhole test fails the page load (not the test), proving no direct fallback.
+- Total runtime under 3 minutes.
+
+---
+
+### M3 — Fake control plane for tsnet tests (4–6 h)
+
+**Goal:** exercise the real tsnet node — login, netmap, loopback, proxy — against a
+throwaway control server, still with no real tailnet.
+
+| # | Task | Detail |
+|---|---|---|
+| 3.1 | Build `libtstestcontrol` | libtailscale ships `tstestcontrol/`, a `c-archive` exposing exactly `run_control(char*, size_t)` and `stop_control()` (`tstestcontrol.h:17-20`), with a prebuilt `libtstestcontrol.xcscheme`. It wires in `integration.RunDERPAndSTUN` plus `testcontrol.Server`. |
+| 3.2 | Patch in MagicDNS | The shim's struct literal (`tstestcontrol.go:77-79`) sets neither `MagicDNSDomain` nor `DNSConfig`, so out of the box you get DERP+STUN but no `*.ts.net` names. Add `MagicDNSDomain: "tail-scale.ts.net"` and `DNSConfig: &tailcfg.DNSConfig{Proxied: true}`, rebuild the archive. Keep the patch in `ThirdParty/` and document it in `DECISIONS.md`. |
+| 3.3 | XCTest scaffolding | Follow `swift/TailscaleKitXCTests/TailscaleKitTests.swift:10-30` verbatim: `run_control` in `setUp`, `stop_control` in `tearDown`, feed the URL to `Configuration(controlURL:)`. The override already exists — `TailscaleNode.swift:14` has `public let controlURL: String`, and `tailscale.h:68` exposes `tailscale_set_control_url`. **No libtailscale patch needed for this part.** |
+| 3.4 | Node-joins-control test | Assert the node reaches `Running` against the fake control, and that `statusJSON()` reports the expected peer set. |
+| 3.5 | End-to-end over tsnet | Run a second tsnet node serving the fake dashboard; have the app reach it by MagicDNS name through the real loopback SOCKS5 proxy. This is the highest-fidelity test that needs no Tailscale account. |
+| 3.6 | Note the failure mode | `fakeTB.Fatal` calls `log.Fatal`, so a control-server failure kills the test process rather than failing a test (upstream TODO at `tstestcontrol.go:53`). Detect the dead process and report it as a test failure, not a hang. |
+
+**AC:**
+- A test boots a fake control plane in-process, joins a real tsnet node to it, and asserts `Running` — with no Tailscale account.
+- The end-to-end test loads a page from a second tsnet node through the app's own proxy path.
+- Both run from the command line via `xcodebuild test`.
+
+**Note:** HTTPS certs are the one thing testcontrol cannot give us. Tailscale's
+own tests mint them through `s.lb.ForTest().ConfigureCerts`, which panics outside
+`go test` (`ipn/ipnlocal/fortest.go:26-32`) and is unreachable from Swift. So M3
+tests either use plain HTTP over the tailnet, or the M2 test CA. That is fine —
+TLS is covered by M2.
+
+---
+
+### M4 — KiroCrew session management (8–12 h)
+
+**Goal:** the app holds a durable session, renews it silently, and asks for a new
+token only when renewal truly fails.
+
+| # | Task | Detail |
+|---|---|---|
+| 4.1 | Extend the fake dashboard | Teach `testing/harness/dashboard.py` KiroCrew's real auth semantics: accept `?token=`; set `mc_token_<port>` / `mc_refresh_<port>` cookies; deny with **`403` + `X-Auth-Required: true`** (not 401) when the session is stale; implement `GET /api/auth/me` and `POST /api/auth/refresh` → 200 with rotated cookies, or `401 {"error":"refresh_chain_revoked"}` for the terminal case; `--expire-in N` to force expiry. **Fail the test if two refreshes overlap** — that is the bug we most need to not write. |
+| 4.2 | JS event bridge | Inject a content script that forwards the page's `mc-auth-required` and `mc-auth-cleared` window events to native through a `WKScriptMessageHandler`. This is the session signal; no DOM scraping, no polling. |
+| 4.3 | `SessionManager` | New type. Owns gateway URL, session state (`unauthenticated` / `active` / `needsToken`), and Keychain persistence. **It does not refresh** — the page does (§3.3). It reacts to the bridge events and drives the token sheet. |
+| 4.4 | Token entry UI | A native sheet accepting a full URL or a bare token, mirroring the page banner's own parsing: `new URL(input).searchParams.get("token")`, falling back to the raw string when the input is not a URL. Then navigate to `{origin}?token={token}`. Add QR scan via `AVCaptureSession` — the dashboard's Phone access card encodes exactly that URL. |
+| 4.5 | Redemption | Load `https://<gateway>/?token=<token>` once; the server mints cookies. The link is valid **300 s** and is re-redeemable inside that window, so one retry is safe. |
+| 4.6 | Keychain | Store the gateway URL and a redemption marker with `kSecAttrAccessibleAfterFirstUnlock`. **Do not try to cache a reusable token — there is no such thing** (§3.3). Session cookies live in the `WKWebsiteDataStore`. |
+| 4.7 | Foreground nudge | On `scenePhase == .active`, issue one `GET /api/auth/me` to force prompt discovery of a dead session, because the server never closes an expired WebSocket. Rate-limit this to once per N seconds; the refresh endpoint allows 60 calls/60 s per IP and answers `429` + `Retry-After` beyond that. |
+| 4.8 | Suppress the web banner | With a native sheet in place, hide the page's own red banner (it has a dismiss button and a stable element id) so the user sees one prompt, not two. Keep it as the fallback if the bridge ever fails to install. |
+| 4.9 | Tests | Against the fake dashboard: cold redemption; the page self-refreshing across an expiry with no native involvement; terminal `401` → native sheet; re-entering a token recovers; gateway restart (boot-id change) → sheet; airplane mode → no spurious sheet, recovers on return; **assert no overlapping refreshes throughout**. |
+
+**AC:**
+- With `--expire-in 60`, the app runs 10 minutes across several expiries without ever showing the token sheet.
+- Forcing `refresh_chain_revoked` shows the native token sheet, and re-entering a token recovers without reinstalling the app.
+- No concurrent refreshes under any test (assert in the fake dashboard by failing on overlapping requests).
+
+---
+
+### M5 — Gateway discovery (5–8 h)
+
+**Goal:** find KiroCrew gateways on the tailnet instead of hardcoding a hostname.
+
+| # | Task | Detail |
+|---|---|---|
+| 5.1 | `GatewayDiscovery` | New type. Enumerate peers via `statusJSON()` (not the loopback HTTP `/status`, per §3.4). Reuse `TailnetProxyPolicy`'s existing peer parsing. |
+| 5.2 | Probe | `GET https://<dnsname>/manifest.json` through the tsnet dialer; 2 s timeout; max 4 concurrent. Match on `"name": "Kiro Crew"`. Also try `http://<dnsname>:5476/manifest.json` for gateways not behind `tailscale serve`. |
+| 5.3 | Picker UI | List discovered gateways with hostname and reachability. Manual entry as a fallback. Persist the choice; skip the picker when only one is found and it already has a session. |
+| 5.4 | Wire into the start URL | Replace the M1 hardcoded URL: `HomePage.defaultURL` becomes the selected gateway. Keep `HomePageAvailability` (`App/Browser/HomePageAvailability.swift`) — it already checks whether a host exists in the tailnet before loading, which is exactly right here. |
+| 5.5 | Re-probe policy | On first run, on manual refresh, and when the selected gateway has been unreachable for N attempts. Never on every launch — it costs seconds. |
+| 5.6 | Tests | Against the M3 fake control plane with two fake nodes, one serving `manifest.json` and one not: assert exactly one gateway is discovered. Assert probes are concurrency-bounded and that a slow peer cannot stall discovery past its timeout. |
+
+**AC:**
+- On a tailnet with two nodes where one runs KiroCrew, discovery finds exactly that one, in under 5 seconds.
+- Manual entry works when discovery finds nothing.
+- The selected gateway persists across app restarts.
+
+---
+
+### M6 — Lifecycle hardening (6–10 h)
+
+**Goal:** survive suspension, resume, and network churn — the failure mode most
+likely to make the app feel unreliable in daily use.
+
+| # | Task | Detail |
+|---|---|---|
+| 6.1 | Inherit, don't rewrite | Upstream's failure-driven recovery (`TSNetManager.swift:355-415`) is the right design and replaced an earlier lifecycle-driven one that had real bugs. Do not reintroduce foreground rebuild logic. |
+| 6.2 | Use `statusJSON()` for liveness | `tailscale.h:183-186`: the LocalAPI path keeps working when the OS reclaims the loopback listener, where the loopback HTTP address goes **permanently stale**. Any liveness check that uses the loopback HTTP endpoint will lie to you after a suspend. |
+| 6.3 | Session re-check on foreground | Hook `scenePhase == .active` (`App/ApertureApp.swift:69`) to `SessionManager.refreshIfNeeded()`. Note `:67` deliberately ignores `.inactive` — respect that; there is a stale-auth-URL bug behind it. |
+| 6.4 | WebSocket reconnect | **Write no app-side reconnect logic.** The page already reconnects with exponential backoff (1 s, doubling, capped at 10 s; reset to 1 s on open) and on reconnect does a full refetch plus re-subscribe, because the protocol has no sequence numbers or cursor-based replay — anything missed while disconnected is recovered by HTTP, not by the socket. The app's only job is the foreground nudge (M4.7). Measure reconnect time after resume; intervene only if it is bad. |
+| 6.5 | Simulated suspend test | `XCUIDevice.shared.press(.home)` then `app.activate()`, then assert a page load still works. **`xcrun simctl` has no `suspend` subcommand** (verified) — there is no CLI path. |
+| 6.6 | Real-device suspend test | The simulator keeps processes far more alive than a real device; genuine listener reclamation and jetsam kills are **device-only**. Write a manual test script: background for 1 min / 10 min / 1 h / overnight, foreground, and record time-to-interactive each time. A debugger prevents suspension entirely, so run it untethered and read logs afterwards. |
+| 6.7 | Network churn | Kill the stub proxy or run it `--blackhole` mid-session. `simctl status_bar` is **cosmetic only** and cannot simulate network loss (verified). Assert the app shows a real error and recovers when the proxy returns. |
+| 6.8 | Known upstream flake | Five upstream iOS UI tests flake at ~66–68 s against a 60 s page-load timeout on a cold node, because the initial navigation waits on netmap peer data while `watch-ipn-bus` times out. The code involved is `BrowserViewModel.loadInitial` (`:277-312`) and `TailnetProxyPolicy.hasPeerData`. Decide deliberately: raise the timeout, or gate the first load on peer data. Record the decision. |
+
+**AC:**
+- After a 10-minute background on a real device, foregrounding reaches an interactive dashboard in under 5 seconds with no manual intervention.
+- Mid-session proxy loss shows a clear error and self-recovers.
+- The overnight test is documented with real measured numbers in `docs/DECISIONS.md`.
+
+---
+
+### M7 — Real tailnet bring-up (3–5 h)
+
+**Goal:** the app working on Olof's actual phone and tailnet, daily-driver ready.
+
+| # | Task | Detail |
+|---|---|---|
+| 7.1 | Device registration | Plug the iPhone into `chonk`, Xcode → Devices and Simulators, enable Developer Mode on the phone (Settings → Privacy & Security). |
+| 7.2 | Install | Xcode Run with the free personal team. Trust the profile under General → VPN & Device Management. |
+| 7.3 | Node login | Interactive login through `ASWebAuthenticationSession` (`TSNet/AuthManager.swift:16-44`). The new node appears in the tailnet under `owner@example.com`, **not** tagged. Confirm in the Tailscale admin console; name it recognizably. |
+| 7.4 | System VPN off | Turn the Tailscale app's VPN off and confirm the dashboard still loads. This is the headline feature — verify it explicitly. |
+| 7.5 | Durable sessions | On the gateway, consider `dashboard.qr_session_persist_across_restart` with `trust_identity` + `allowed_logins: ["owner@example.com"]`. The embedded node passes the allowlist where the tagged iPhone cannot (§3.3). Restart the gateway and confirm the app stays signed in. |
+| 7.6 | Both gateways | Test against `byskebox` (443 via serve) and `chonk`. Confirm discovery finds both and switching works. |
+| 7.7 | Weekly re-sign | Document the 7-day rebuild ritual in `README.md`. If it grates, the $99 program makes profiles last a year. |
+
+**AC:**
+- App reaches a live session with the system VPN off, on cellular as well as Wi-Fi.
+- Survives a gateway restart without a token re-entry (if 7.5 is enabled).
+- Both gateways are discoverable and switchable.
+
+---
+
+### M8 — Polish (3–6 h)
+
+| # | Task |
+|---|---|
+| 8.1 | App icon and launch screen. |
+| 8.2 | Diagnostics screen: node state, selected gateway, session expiry, proxy endpoint, last error — everything needed to debug a failure without a Mac. |
+| 8.3 | Surface tsnet's own logs. Upstream writes Go/tsnet detail to `Logs/tsnet.log`, **not** to `LogRing`/`os_log`, so Settings → Logs currently hides magicsock/DERP/loopback failures. Pipe them in. |
+| 8.4 | `README.md`: build, install, re-sign, test, troubleshoot. |
+| 8.5 | Clean up upstream oddity: `Aperture/Info.plist:11-28` has a malformed nested `NSAllowsArbitraryLoadsInWebContentUsageDescription` dict. |
+| 8.6 | Decide whether to keep `NSAllowsArbitraryLoads`. We only ever load one HTTPS origin with a real cert; tightening ATS is easy hardening. |
+
+---
+
+## 6. Test strategy
+
+### 6.1 The constraint
+
+The app's whole job is to reach a private tailnet, so the obvious test needs
+Olof's Tailscale account, his gateways and his phone. That does not scale to CI,
+it cannot run on a contributor's machine, and it makes every test depend on a
+network that might be down for unrelated reasons. So the strategy is to push as
+much coverage as possible *down* to layers that need no tailnet at all.
+
+### 6.2 Five layers
+
+| Layer | What it covers | Needs | Speed |
+|---|---|---|---|
+| **L0** Host unit tests | Pure logic: split-tunnel policy, hostname qualification, URL parsing, session state machine, `allowFailover == false` | `swiftc`, nothing else | ~2 s |
+| **L1** Offline harness (M2) | WKWebView ↔ SOCKS5 ↔ HTTPS ↔ WebSocket ↔ SSE; the anti-leak negative test | Simulator + two Python processes | <3 min |
+| **L2** Fake control plane (M3) | Real tsnet node: login, netmap, loopback, proxy, MagicDNS names | Simulator + `libtstestcontrol.a` | <5 min |
+| **L3** Headscale (optional) | Persistent identity, ACLs/tags, a second device | Docker | minutes |
+| **L4** Real tailnet + device | Suspension, jetsam, cellular, real certs, real dashboard | Olof's phone | manual |
+
+**The rule: a bug found at L4 gets a regression test at the lowest layer that can
+express it.** L4 is for discovering problems, never for guarding against them.
+
+### 6.3 The offline harness (already built and verified)
+
+Living in `testing/harness/`, verified working during planning:
+
+- **`socks5stub.py`** (96 lines, stdlib only) — SOCKS5 with RFC1929 user/pass auth and CONNECT. Three test affordances: `--journal FILE` writes one JSON line per event so a test can *prove* traffic traversed the proxy; `--map dash.tail-scale.ts.net:443=127.0.0.1:8443` stands in for MagicDNS; `--blackhole` authenticates then refuses every CONNECT, which is the negative fixture.
+- **`dashboard.py`** (91 lines, stdlib only) — HTTPS server with `GET /` (a page that opens a WebSocket and an EventSource, writing state into stable element ids), `GET /healthz`, `GET /events` (SSE ticks), `GET /ws` (RFC6455 echo). M4 extends it with KiroCrew's auth semantics.
+- **`ca.cnf` / `leaf.cnf`** — OpenSSL configs that produce a CA iOS will actually accept.
+
+Verified behaviours from the planning run: HTTPS GET through the proxy succeeds
+and is journaled; SSE streams; a WebSocket completes `101 Switching Protocols`
+and echoes through TLS through SOCKS5; a wrong proxy password is rejected;
+`--blackhole` fails the connection **with no direct fallback**; and killing the
+proxy fails the connection outright.
+
+### 6.4 Things worth knowing before writing tests
+
+- **The CA must carry `keyUsage=critical,keyCertSign,cRLSign`.** Without it iOS fails with "CA cert does not include key usage extension". The leaf needs `subjectAltName` (CN is ignored) and `extendedKeyUsage=serverAuth`.
+- **Trust it with** `xcrun simctl keychain booted add-root-cert <path>` (verified syntax; PEM or DER).
+- **`xcresulttool get object` is deprecated** in Xcode 27 and now requires `--legacy`; every old recipe from the internet needs that flag. Use `xcrun xcresulttool get test-results summary|tests|test-details --path X`. Note the deprecation text points at `get test-report`, **which does not exist**. `xcresulttool export attachments --only-failures` pulls out failure screenshots.
+- **`-resultBundlePath` errors out if the path already exists.** `rm -rf` it first in any script.
+- **Useful `xcodebuild test` flags** (all verified present in Xcode 27): `-only-testing:`, `-parallel-testing-enabled NO`, `-test-timeouts-enabled YES`, `-default-test-execution-time-allowance 120`, `-maximum-test-execution-time-allowance 300`, `-retry-tests-on-failure`, `-collect-test-diagnostics on-failure`, `-destination-timeout 60`. New in 27: `-only-testing @file.txt` response files, handy for sharding.
+- **`timeout` is not a stock macOS command.** It resolves to Homebrew coreutils' `gtimeout` here. Don't assume it exists in CI.
+- **`xcrun simctl bootstatus <device> -b`** is the correct boot barrier (boots if needed, blocks until ready). It is hidden from the top-level help. Never `sleep`.
+- **XCUITest now lives in `XCUIAutomation.framework`**, split out of XCTest in Xcode 16.3. `XCTAttachment`, `XCTContext` and `XCTestCase` stayed in XCTest. Old doc URLs redirect.
+- **Attachment lifetime defaults to `deleteOnSuccess`** — set `.keepAlways` on failure screenshots or they vanish.
+- **`camera` is not a valid `simctl privacy` service** in Xcode 27; `simctl device_appearance` does not exist (use `simctl ui <device> appearance`).
+- **The CoreSimulator XPC service outlives runs** and is how the simulator wedges. Recovery: `simctl shutdown all` then `killall -9 com.apple.CoreSimulator.CoreSimulatorService Simulator SimulatorTrampoline`.
+- **`simctl status_bar` is cosmetic.** It changes the rendered status bar, not the network stack. To simulate network loss, kill or blackhole the stub proxy.
+- **There is no `simctl suspend`.** Background/foreground only from inside XCUITest.
+- **The simulator does not reproduce real suspension.** Listener reclamation, jetsam and true suspended state are device-only. Section M6.6 exists because of this.
+- **Web content assertions**: the accessibility tree is flaky for dynamic content. Prefer the debug-only JS bridge (M2.8).
+
+### 6.5 CI
+
+There is no CI today and none is required for v1, but keep every layer
+script-invocable so it can be added later:
+
+```bash
+scripts/test-policy.sh     # L0, ~2 s, no simulator
+scripts/test-offline.sh    # L1, <3 min, no tailnet
+scripts/test-tsnet.sh      # L2, <5 min, no tailnet
+```
+
+Wrap simulator runs in a hard `timeout`; on failure, capture a screenshot and
+`xcrun simctl spawn booted log collect`, then `xcrun simctl shutdown all` and
+`killall -9 com.apple.CoreSimulator.CoreSimulatorService`.
+
+---
+
+## 7. Risks
+
+### 7.1 Xcode 27 vs the required 26 — *medium, early*
+Upstream mandates iOS/macOS 26.0 SDKs and Xcode 26.x; `chonk` has Xcode 27 with
+the iOS 27 SDK. A newer SDK with an unchanged deployment target normally builds
+fine, and `SWIFT_VERSION = 6.0` with strict concurrency is unchanged in 27.
+**Mitigation:** M0 surfaces this within the first hour. If it breaks, install
+Xcode 26.x side by side with `xcodes` and set `DEVELOPER_DIR`. Note that
+`DEVELOPER_DIR` does not appear anywhere in upstream's Makefile — you would add it.
+
+### 7.2 libtailscale instability — *medium, ongoing*
+No releases or tags ever, issues disabled, and a Tailscale maintainer describing
+iOS support as "a work-in-progress and it can be tricky to get (and keep)
+everything working reliably". **Mitigation:** we consume it through upstream's
+vendored, patched submodule rather than tracking libtailscale `main`. Pin the
+submodule SHA and move deliberately.
+
+### 7.3 WebSockets through `proxyConfigurations` — *low, verify in M2*
+WebKit's source routes `createWebSocketTask` onto the same proxied session, and
+the planning run proved a WebSocket completing through the stub SOCKS5 proxy at
+the curl level. What is **not** yet verified is a WKWebView WebSocket surviving a
+`matchDomains` republication. M2.5 tests the first; M6.4 tests the second.
+
+### 7.4 Exit nodes are broken upstream — *accepted, not mitigated*
+`README.tsnet-exit-nodes-dont-work.md` documents the cause: `Dialer.UserDial`
+takes a plain `net.Dialer` branch for Tailscale routes, which under tsnet (no TUN)
+is a direct dial bypassing WireGuard. Affects subnet routers too. **We remove the
+feature (M1.8) rather than ship it broken.**
+
+### 7.5 Inherited flaky tests — *low*
+Upstream's own `TODO.failing-tests.md` records iOS 23/29 and macOS 2/3 passing.
+Five iOS failures are the cold-node 60 s timeout (M6.8); one is the exit-node bug
+(removed by M1.8); one is macOS-only (removed by M1.1). Deleting the Mac target
+and exit nodes clears most of it. **Record the inherited baseline in M0.7** so we
+never confuse an upstream flake for our own regression.
+
+### 7.6 KiroCrew #9399 — *low but blocking if it bites*
+If the dashboard renders blank in WKWebView on the real device, this project
+stalls until KiroCrew is fixed. The planning run rendered it fine in the iOS 27
+simulator, and the issue reporter has published a two-layer fix. **M1's device
+check is the gate**; do not build further until it passes.
+
+### 7.7 Free-signing friction — *low, known*
+Seven-day profile expiry, three apps per device. If weekly rebuilds grate, $99
+fixes it. No architectural impact.
+
+---
+
+## 8. Open questions
+
+Each is answerable in minutes during the milestone that needs it; none changes
+the architecture.
+
+1. **What exactly does `kirocrew token` print?** The URL shape is known (`{base}?token=…`, `dashboard/urls.py:364`) and the dashboard's own copy says "Run `kirocrew token` in a terminal, then paste the URL", but the CLI's output was not read directly. *Needed by M4.4.* Just run it.
+2. **What argv does `kirocrew tailnet up` pass to `tailscale serve`?** Affects whether a gateway sits on 443 or behind a path prefix. *Needed by M5.2.* Read `dashboard/tailnet_serve.py`.
+3. **What is `<port>` in the `mc_token_<port>` cookie name behind `tailscale serve`?** Derived from the Host header (`dashboard/token_auth.py:1353`), and a serve URL carries no explicit port. *Needed by M4.1* so the fake dashboard matches real cookie names.
+4. **Does suppressing the page's own banner (M4.8) have side effects?** It also drives a connectivity pill via the same events. *Verify at M4.8.*
+
+**Resolved during planning** (recorded so nobody re-investigates):
+
+- ~~Does the gateway close an expired WebSocket?~~ **No.** There is no session-expiry watchdog on `/api/ws`. The only coded close is `POLICY_VIOLATION "app disabled"` at connect time (`dashboard/ws.py:597`); scope revocation narrows a live socket rather than closing it. Expiry is discovered only on the next HTTP request. Hence M4.7.
+- ~~Is Web Push wired up in 0.6.0?~~ **No.** Zero hits for VAPID, `PushManager`, `PushSubscription` or a subscribe endpoint across the entire package and the JS bundles; `sw.js` has no `push` or `notificationclick` listener. `POST /api/notifications/push` is an app-token **bus producer**, unrelated to Web Push. In-page `new Notification(...)` only works with the tab open. Notifications therefore require [PR #7821](https://github.com/kirodotdev/KiroCrew/pull/7821) or a native APNs path — see §9.
+- ~~Should the app drive `/api/auth/refresh`?~~ **No.** The page already does, single-flight, on 403 + `X-Auth-Required`. Duplicating it risks revoking the chain. See §3.3.
+
+---
+
+## 9. Possible follow-ups (explicitly out of v1 scope)
+
+- **Push notifications.** The reason the phone still feels passive, and now confirmed as genuinely absent: 0.6.0 has no Web Push at all, and its in-page `Notification` call only fires with the tab open. Two routes — land KiroCrew [PR #7821](https://github.com/kirodotdev/KiroCrew/pull/7821), or have the app hold a background connection and raise local notifications itself. The second is the one a native app can do and a PWA cannot, but iOS will not keep a socket alive indefinitely, so it needs a real design rather than optimism.
+- **Claude app Remote Control.** A different route to the original goal: [claude-agent-acp PR #735](https://github.com/agentclientprotocol/claude-agent-acp/pull/735) adds `/remote-control` over ACP, which would surface KiroCrew sessions in the Claude iPhone app. Open since 2026-06-01 with merge conflicts. Complementary, not competing.
+- **Share sheet / Shortcuts.** "Send this URL to Kiro" as a native share target.
+- **Multiple gateways side by side.** Upstream's workspace model already supports several identities; we collapse it to one. It could come back.
+- **Upstreaming.** The split-tunnel and lifecycle fixes stay compatible; if we fix something real in the shared layer, send it to aperture-plus.
+
+---
+
+## 10. Appendix A — Upstream file map
+
+Paths relative to `app/` after the M0 clone.
+
+**Keep and modify**
+```
+App/ApertureApp.swift               @main, scenePhase fan-out (:44, :53, :67, :69)
+App/Browser/TabbedBrowserView.swift root window; strip toolbar (:244, :264, :356)
+App/Browser/BrowserViewModel.swift  owns the WKWebView (:115-155), proxy attach (:88-95, :272-275)
+App/Browser/BrowserView.swift       web view host + error page
+App/Browser/RawWebView.swift        UIViewRepresentable wrapper
+App/Browser/ConnectionGateView.swift pre-connect screen
+App/Browser/HomePageAvailability.swift is the home host in this tailnet?
+App/Browser/TailnetHostnameQualifier.swift short name → FQDN (host-testable)
+App/Bookmarks/HomePage.swift        start URL lives at :25
+App/Settings/SettingsView.swift     keep routing diagnostics (:182-232)
+App/Settings/LogViewer.swift        on-device log viewer
+App/Tailnet Status/StatusView*.swift login state machine — not optional
+App/Workspace/*.swift               workspace/identity/storage
+TSNet/TSNetManager.swift            node, loopback, proxy, recovery (738 lines)
+TSNet/TailnetProxyPolicy.swift      split tunnel; read :11-82 first
+TSNet/SocksLogProxy.swift           logging relay (diagnostics)
+TSNet/AuthManager.swift             ASWebAuthenticationSession login
+TSNet/Logging.swift                 LogRing
+```
+
+**Delete (M1)**
+```
+MacApp/ MacUITests/ Packages/ApertureVM/ Tools/aperture-vm-cli/
+App/Browser/TabBar.swift TabOverview.swift CompactBrowserToolbar.swift BookmarksSheet.swift
+App/Bookmarks/Bookmark.swift BookmarkEditor.swift BookmarkList.swift
+App/Workspace/WorkspaceVMModel.swift WorkspaceVMProtocol.swift
+App/Settings/WorkspaceVMSettingsSection.swift
+App/TimingHarness.swift             (optional; a useful latency harness if you want it)
+```
+
+**Gotcha:** a new file added under `TSNet/` must be listed in the target's
+`membershipExceptions` in `project.pbxproj` or it silently is not compiled.
+Files under `App/` and `UITests/` use synchronized folder groups and need no
+pbxproj edit.
+
+## 11. Appendix B — KiroCrew endpoint reference
+
+All verified in `kiro_crew` 0.6.0 source. Paths are relative to the gateway origin.
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /?token=<token>` | the token itself | Redeem a link; sets session + refresh cookies. Link window 300 s; re-redeemable inside it |
+| `GET /api/auth/me` | cookie | `{"user_id","session_exp","refresh_exp"}`; `401 {"error":"unauthenticated"}` |
+| `POST /api/auth/refresh` | refresh cookie | `200 {"refreshed_at","session_exp","refresh_exp"}` + rotated cookies. `401 no_refresh_cookie` / `invalid_refresh` / `refresh_chain_revoked`; `429` + `Retry-After: 60` (60/min per IP) |
+| `POST /api/auth/logout` | cookie | Ends the session (nonce denylist) |
+| `POST /api/tailnet/mobile/qr` | cookie | `{"url","image","ttl_secs","link_window_secs","host"}`. Default TTL 1 h, max 12 h, never exceeding the calling session |
+| `POST /api/auth/mobile-link` | cookie | `{"url","expires_in"}` |
+| `GET /manifest.json` | **none** | Discovery probe: `{"name":"Kiro Crew",…}` |
+| `GET /api/health` | **none** | `{"ok":true}` only, through `tailscale serve` — deliberately no version |
+| `GET /api/ws` | cookie or `?token=` | The main channel. Auth resolves **once at upgrade** and is never re-checked; the server never closes the socket on session expiry. Heartbeat 30 s. Client reconnects with 1 s→10 s backoff and recovers missed state by HTTP refetch — there is no replay cursor |
+| `POST /api/notifications/push` | **app token only** | A notification-bus producer, **not** Web Push. 0.6.0 has no VAPID, no `PushManager`, no subscribe endpoint |
+
+**Cookies:** `mc_token_<port>` (HttpOnly, SameSite=Lax, Secure on HTTPS, path `/`, ≤20 h) and `mc_refresh_<port>` (path `/api/auth`, ≤30 d). `<port>` comes from the Host header.
+
+**Session killers:** revocation generation bump; boot-id change at gateway restart (when `qr_session_until_restart` is true, the default); `session_exp`; explicit logout.
+
+**CSP:** `frame-ancestors 'self'`; `connect-src 'self'` plus loopback; no CORS on `/api`; no user-agent sniffing. The page fetches fonts and CDN scripts from the public internet — with a split tunnel those go direct, which is correct, but a tailnet-only device would render in fallback fonts.
+
+## 12. Appendix C — Command cheat sheet
+
+```bash
+# Build
+cd ~/src/latchkey/app
+make framework                      # TailscaleKit.xcframework (needs Go; slow first time)
+make app                            # simulator build
+make test-policy                    # host-only unit tests, ~2 s
+
+# Simulator
+xcrun simctl boot "iPhone 17"
+xcrun simctl keychain booted add-root-cert ../testing/harness/ca.der
+xcrun simctl io booted screenshot /tmp/shot.png
+xcrun simctl spawn booted log stream --level debug --predicate 'subsystem CONTAINS "latchkey"'
+
+# Tests
+xcodebuild test -scheme Latchkey \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0' \
+  -resultBundlePath /tmp/out.xcresult -only-testing:LatchkeyUITests/ProxyTests \
+  -parallel-testing-enabled NO -test-timeouts-enabled YES
+xcrun xcresulttool get test-results summary --path /tmp/out.xcresult --format json
+
+# Harness
+python3 testing/harness/dashboard.py --port 8443 --cert server.pem --key server.key
+python3 testing/harness/socks5stub.py --port 1080 --user tsnet --password s3cret \
+    --journal /tmp/proxy.ndjson --map dash.tail-scale.ts.net:443=127.0.0.1:8443
+```
+
+**Total estimated effort: 43–70 focused hours across M0–M8.** M0–M2 (14–23 h) is
+the point at which the riskiest unknowns are resolved and there is a working
+test net; if the project is going to fail, it fails there, cheaply.

@@ -1,0 +1,7 @@
+[req]
+distinguished_name=dn
+[dn]
+[ext]
+subjectAltName=DNS:dash.tail-scale.ts.net,DNS:localhost,IP:127.0.0.1
+extendedKeyUsage=serverAuth
+basicConstraints=CA:FALSE

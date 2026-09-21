@@ -1,0 +1,14 @@
+# Test harness artifacts (regenerate with gen-certs.sh)
+testing/harness/*.pem
+testing/harness/*.key
+testing/harness/*.der
+testing/harness/*.srl
+testing/harness/*.log
+*.ndjson
+
+# Xcode / build
+app/build/
+app/.dd/
+DerivedData/
+*.xcresult
+.DS_Store
