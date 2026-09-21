@@ -129,8 +129,9 @@ else
         sed "s|$CONTAINER/|    |" "$LOG_DIR/link-leaks.txt" >&2
         LEAK_RC=1
     else
-        # Not vacuous only if there is web data to search: the last test's
-        # data store survives (the reset hook removes only the others).
+        # Not vacuous only if there is web data to search. SessionTests
+        # launch with -UITestKeepWebData, so every test's data store is
+        # still here, not only the last one's.
         WK_FILES=$(find "$CONTAINER/Library/WebKit" -type f 2>/dev/null | wc -l | tr -d ' ')
         if [[ "$WK_FILES" -eq 0 ]]; then
             echo "error: no WebKit data in the container, so the disk scan searched nothing" >&2

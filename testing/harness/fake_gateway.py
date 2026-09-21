@@ -4,40 +4,53 @@
 Testing the app's session handling against a page we wrote would be circular:
 the refresh scheduler, the 403 interceptor, the `mc-auth-*` events and the
 `#mc-session-expired` banner exist only in KiroCrew's real bundles. So this
-serves the installed `kiro_crew/static/dist` byte for byte -- pinned by version
-and hash, and refusing to start on a mismatch -- and emulates the server side
-of the auth contract, as read from the installed 0.6.0 source. Nothing of
-KiroCrew's is run or imported (D10): the credentials here are opaque test
-strings this fake invents, meaningless to a real gateway.
+serves the installed `kiro_crew/static/dist` byte for byte -- pinned, with the
+server code the emulation was read from, and refusing to start on a mismatch
+-- and emulates the server side of the auth contract as read from the
+installed 0.6.0 source. Nothing of KiroCrew's is run or imported (D10): the
+credentials here are opaque test strings this fake invents, meaningless to a
+real gateway.
 
 What is emulated (server source references are to kiro_crew/dashboard/):
 
-  * Middleware order: Host allowlist -> CSRF (mutating methods) -> auth.
-    Host and CSRF failures are text/plain 403s WITHOUT X-Auth-Required
-    (server.py:627-705).
-  * Redemption: `?token=<link>` on ANY request is a credential. A valid link
-    mints an access session and a NEW refresh chain and sets them as cookies
-    on whatever the route returns; `/` returns index.html, 200, no redirect
-    (token_auth.py:2603-3061). A link is re-redeemable until its 300 s window
-    ends; a restart forgets unredeemed links.
+  * Middleware order: Host allowlist (hostname only) -> CSRF (mutating
+    methods) -> auth. Host and CSRF failures are text/plain 403s WITHOUT
+    X-Auth-Required (server.py:627-705, origin.py:344).
+  * Auth-exempt paths return before any credential is looked at, so a
+    `?token=` on one is not redeemed (token_auth.py:2559-2601).
+  * Credentials: a `?token=` is validated FIRST. A valid link mints an access
+    session and a NEW refresh chain and sets both cookies on whatever the
+    route returns (`/` -> index.html, 200, no redirect) -- even over a valid
+    cookie. An invalid link falls back to the cookie; without a valid cookie
+    the link's failure stands (token_auth.py:2603-2681, 2785-3037).
+  * Links: redeemable for min(300 s, ttl) from MINT, re-redeemable inside
+    that window; the session runs to mint + ttl (token_auth.py:828, 2745). A
+    restart forgets unredeemed links.
   * Cookies `mc_token_<P>` (HttpOnly; Max-Age; Path=/; SameSite=Lax; Secure)
-    and `mc_refresh_<P>` (Path=/api/auth, ~30 d). <P> is the Host header's
-    port, or the LISTEN port when the Host has none -- behind `tailscale
-    serve` that is 5476 (token_auth.py:1353-1369). --cookie-port sets the
-    listen port being emulated.
-  * Denials: 403 + `X-Auth-Required: true`, JSON {"error","code"} on /api/*;
-    GET/HEAD of a non-API path gets the SPA shell instead (token_auth.py:3097).
+    and `mc_refresh_<P>` (Path=/api/auth, 30 d sliding). <P> is the Host
+    header's port, or the LISTEN port when the Host has none -- behind
+    `tailscale serve` that is 5476 (token_auth.py:1353-1369). Redemption also
+    clears the legacy `mc_token`; rotation does not (token_auth.py:2915,
+    auth_refresh.py:557-561, 673-676).
+  * Denials: 403 + `X-Auth-Required: true`; JSON {"error","code"} on /api/*,
+    an HTML sign-in page elsewhere. GET/HEAD outside the data prefixes gets
+    the SPA shell instead, so the SPA can boot and refresh
+    (token_auth.py:599-687, 3097).
   * `GET /api/auth/me` -> {"user_id","session_exp","refresh_exp"}.
-  * `POST /api/auth/refresh`: 60/min sliding rate limit per remote (429 +
-    Retry-After: 60), checked first; 401 no_refresh_cookie; 401
-    invalid_refresh (no cookie clear; also a boot mismatch); 401
-    refresh_chain_revoked + refresh-cookie clear; a superseded token is
-    forgiven only if it is the chain head, from the same remote, within 60 s
-    (the cached body and the SAME tokens are re-served); any other reuse
-    revokes the chain (auth_refresh.py:398-678, refresh_tokens.py:345-392).
+  * `POST /api/auth/refresh`, in the real order: rate limit (60 per sliding
+    60 s per remote; 429 + Retry-After: 60) -> 401 no_refresh_cookie ->
+    unknown/expired -> 401 invalid_refresh -> revoked chain -> 401
+    refresh_chain_revoked + refresh-cookie clear -> revocation generation or
+    `boot` mismatch -> 401 invalid_refresh (no clear) -> a superseded token is
+    forgiven only as the chain head, from the same remote, within 60 s (the
+    same tokens re-served); any other reuse revokes the chain
+    (auth_refresh.py:398-678, refresh_tokens.py:345-392, 720-769).
   * `boot`: QR-shaped links (and everything minted from them) are
-    boot-bound; `POST /__restart` changes the boot id. CLI-shaped links are
-    not, so their sessions survive a restart (R24).
+    boot-bound; CLI links are not, so their sessions survive a restart (R24).
+  * Revocation generation (`kirocrew logout`): `/__logout-all` bumps it --
+    every access session and refresh token is refused (token_auth.py:1315).
+  * `POST /api/auth/logout`: revokes the chain, denylists the access cookie,
+    clears both, answers {"logged_out": true} (auth_refresh.py:760-820).
   * /api/ws: auth before the upgrade, Origin check, then `slots` and a
     `dashboard` message every 5 s with a constant version (ws.py:513-753).
   * The startup endpoints the SPA needs (theme/boot, ui-prefs,
@@ -46,20 +59,26 @@ What is emulated (server source references are to kiro_crew/dashboard/):
 
 R25's hazard is tracked, not just emulated: every reuse of a superseded
 refresh token outside the grace window is recorded as a LINEAGE VIOLATION.
-Tests assert there are none.
 
 Control (plain HTTP on 127.0.0.1:<control-port>):
-  POST /__mint?kind=cli|qr     -> {"link", "url"}: a fresh sign-in link
+  POST /__mint?kind=cli|qr[&ttl=S]   -> {"link", "url"}: a fresh sign-in link
   POST /__expire               expire every access session now (the 403 path)
-  POST /__revoke               revoke every refresh chain (the terminal path)
-  POST /__restart              new boot id; forget links, pins, grace caches
+  POST /__revoke               revoke every refresh chain, as reuse detection
+                               does; access sessions stay valid
+  POST /__logout-all           bump the revocation generation, as `kirocrew
+                               logout` does: access AND refresh refused
+  POST /__restart[?down=S]     a gateway restart: new boot id; forget links
+                               and grace caches; drop every open connection;
+                               optionally refuse connections for S seconds
+  POST /__drop-next-refresh    the next refresh is carried out (the token is
+                               consumed) but its response is lost
+  POST /__config?expire_in=S   access TTL for sessions minted/rotated from now
   POST /__reset                forget everything (a fresh gateway)
-  POST /__config?expire_in=N   access TTL for sessions minted/rotated from now
   GET  /__state                counters, violations, recent requests, unknown paths
 
-  python3 fake_gateway.py --port 8444 --control-port 8481 --cert server.pem \
+  python3 fake_gateway.py --port 8444 --control-port 8481 --cert server.pem \\
       --key server.key --host gw.tail-scale.ts.net [--expire-in SECONDS]
-  python3 fake_gateway.py --check-bundle      (the R19 smoke test)
+  python3 fake_gateway.py --check-bundle      (the R19 pin and smoke test)
 """
 import argparse
 import base64
@@ -79,34 +98,47 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 # ---------------------------------------------------------------- the pin --
-# The bundle this fake emulates. A different installed version or bundle is a
-# hard failure, not a warning: the fake's semantics were read from THIS
-# version, and a drifted bundle would make every test answer the wrong
-# question. After a KiroCrew upgrade: re-read the auth code, update the fake,
-# re-pin (sha256 of each file below), and have Olof re-run O7.
+# What this fake emulates. A different installed version, bundle or server
+# auth code is a hard failure, not a warning: the fake's semantics were read
+# from THESE files, and drift would make every test answer the wrong question.
+# After a KiroCrew upgrade: re-read the auth code, update the fake, re-pin
+# (--print-pins), and have Olof re-run O7.
 DEFAULT_DIST = os.path.expanduser(
     "~/.kiro/crew-venv/lib/python3.12/site-packages/kiro_crew/static/dist")
 PINNED_VERSION = "0.6.0"
 PINNED_FILES = {
-    # From the installed bundle (--print-pins). index.html names every other
-    # asset by content hash, so pinning it pins the entry graph; the three
-    # bundles are the ones carrying the auth code.
-    "index.html": "def6d3f52bf2c26a7fe42e6982b551670a86a05921a030c4d228d3fe1be83d95",
-    "assets/main-BhsK4HoM.js": "c18250a3aa212370725fe5697951d0f8abe893718afbb2d420ba4d68e89c8b36",
-    "assets/client-oM83i081.js": "ff2ba1fbb605a5b8212bcd7b43e02b1fd41c4a9b432352f6d37f194265a8db3d",
-    "assets/App-GOBYv73C.js": "7bd964479ec2b520645db9a30bad7d99b2d22a01eda36ed447b841b70fe43fa2",
+    # The frontend. index.html names every other asset by content hash, so
+    # pinning it pins the entry graph; the three bundles carry the auth code.
+    "static/dist/index.html": "def6d3f52bf2c26a7fe42e6982b551670a86a05921a030c4d228d3fe1be83d95",
+    "static/dist/assets/main-BhsK4HoM.js": "c18250a3aa212370725fe5697951d0f8abe893718afbb2d420ba4d68e89c8b36",
+    "static/dist/assets/client-oM83i081.js": "ff2ba1fbb605a5b8212bcd7b43e02b1fd41c4a9b432352f6d37f194265a8db3d",
+    "static/dist/assets/App-GOBYv73C.js": "7bd964479ec2b520645db9a30bad7d99b2d22a01eda36ed447b841b70fe43fa2",
+    # The server code the emulation was read from (M4 review: a same-version
+    # rebuild could change these while the frontend stays byte-identical).
+    "dashboard/token_auth.py": "6ccc836c2a25ce20efd8e4bde85c1afe47acba7ddeed7082c147ab966c56127a",
+    "dashboard/refresh_tokens.py": "70049328c17e81a03452379748e8d84e72eafaca02bcfed69873036eb37a8b33",
+    "dashboard/server.py": "b4b7c94e27143d711e9542c934aba2e3999ff73bf984c19c42584d25a7a6e539",
+    "dashboard/origin.py": "9ebaa0b46850f1f8d45a854690ac93521a43b370ba8c37ec699101b710c8bac1",
+    "dashboard/urls.py": "7ff8341ab3a7fb88c7107c7309f8175dc10f504a195faa31286ce1bdf6ec72c1",
+    "dashboard/ws.py": "722228f7e012f36de8455ed520c686a340dbf882116d0fb25becc16fe500f682",
+    "dashboard/boot_id.py": "731c0285aa0b8420aef1f4deea60f087ba9eab7498e16e9fc0a4ddb839a29a8d",
+    "dashboard/revocation_gen.py": "9b1d49a298540939baa57d3aaf553a279174f80e480fea4ee584fdc9323f5f62",
+    "dashboard/tailnet.py": "87d6e7aa460361674ede650d84a5ac133fefd0ef54ae58a52682e00d323eaf3d",
+    "dashboard/handlers/auth_refresh.py": "6f3cabae9adb06ffe30fce71366cc88514281c01d9558ae26b5420e1a9e71047",
+    "dashboard/handlers/tailnet_mobile.py": "5671fa16af6fe1a46d77824b7ccf7644c34ba36b930f81ee68f58af55dd62b19",
+    "dashboard/handlers/core.py": "16f0cefda3db6dda298a4860acbd318b61a5f96fc1e50d08ee43d189f5cc48de",
 }
 # What the app depends on (R19's smoke test): the events it listens for, the
 # banner it hides, and the terminal refresh error it must survive.
 REQUIRED_STRINGS = {
-    "assets/client-oM83i081.js": ["mc-auth-required", "mc-auth-cleared", "mc-session-expired",
-                                  "X-Auth-Required", "/api/auth/refresh"],
-    "assets/main-BhsK4HoM.js": ["refresh_chain_revoked", "/api/auth/me"],
+    "static/dist/assets/client-oM83i081.js": ["mc-auth-required", "mc-auth-cleared", "mc-session-expired",
+                                              "X-Auth-Required", "/api/auth/refresh"],
+    "static/dist/assets/main-BhsK4HoM.js": ["refresh_chain_revoked", "/api/auth/me"],
 }
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-LINK_WINDOW = 300            # seconds a sign-in link can be redeemed
-ACCESS_TTL = 72000           # 20 h: every rotation re-mints this
+LINK_WINDOW = 300            # a sign-in link is redeemable for min(this, ttl)
+ACCESS_TTL = 72000           # 20 h: the cap, and what every rotation re-mints
 REFRESH_TTL = 2592000        # 30 d, sliding
 QR_SESSION_TTL = 3600        # the QR default
 GRACE_SECS = 60
@@ -118,11 +150,18 @@ EXEMPT_EXACT = {"/logo.png", "/favicon.ico", "/manifest.json", "/sw.js", "/pcm-w
                 "/api/token/local", "/api/shutdown", "/api/logout", "/api/theme/boot",
                 "/api/health", "/api/live", "/api/ready"}
 EXEMPT_POST = {"/api/auth/refresh", "/api/auth/logout"}
+# GET/HEAD of anything under these is a data request: no SPA shell for it.
+SHELL_EXCLUDED_PREFIXES = ("/api/", "/v1/", "/assets/", "/static/", "/sprites/", "/vendor/",
+                           "/fonts/", "/app-assets/", "/artifact-app/", "/sandbox-doc/")
+
+
+def package_root(dist):
+    return os.path.dirname(os.path.dirname(dist))
 
 
 def dist_version(dist):
     """The installed kirocrew version, from the dist-info next to the package."""
-    site = os.path.dirname(os.path.dirname(os.path.dirname(dist)))
+    site = os.path.dirname(package_root(dist))
     for name in os.listdir(site):
         if name.startswith("kirocrew-") and name.endswith(".dist-info"):
             with open(os.path.join(site, name, "METADATA")) as f:
@@ -143,19 +182,20 @@ def sha256(path):
 def check_bundle(dist):
     """The R19 pin and smoke test. Returns a list of problems (empty = ok)."""
     problems = []
+    root = package_root(dist)
     v = dist_version(dist)
     if v != PINNED_VERSION:
         problems.append("installed KiroCrew is %s, the fake was written against %s" % (v, PINNED_VERSION))
+    if os.path.exists(os.path.join(root, "BUILD_VERSION")):
+        problems.append("a BUILD_VERSION stamp is present: not the pinned release build")
     for rel, want in PINNED_FILES.items():
-        p = os.path.join(dist, rel)
+        p = os.path.join(root, rel)
         if not os.path.exists(p):
-            problems.append("%s is missing from the bundle" % rel)
-        elif not want:
-            problems.append("%s has no pinned hash (run --print-pins)" % rel)
+            problems.append("%s is missing" % rel)
         elif sha256(p) != want:
             problems.append("%s changed (sha256 %s, pinned %s)" % (rel, sha256(p)[:12], want[:12]))
     for rel, needles in REQUIRED_STRINGS.items():
-        p = os.path.join(dist, rel)
+        p = os.path.join(root, rel)
         if not os.path.exists(p):
             continue
         with open(p, "rb") as f:
@@ -174,6 +214,7 @@ class Gateway:
         self.lock = threading.Lock()
         self.default_expire_in = expire_in
         self.cookie_port = cookie_port
+        self.connections = set()     # open client sockets, dropped by a restart
         self.reset()
 
     def reset(self):
@@ -181,58 +222,65 @@ class Gateway:
         # cannot leak into the next.
         self.expire_in = self.default_expire_in
         self.boot = secrets.token_hex(16)
-        self.links = {}          # link -> {"exp", "kind"}  (in memory, bounded)
-        self.sessions = {}       # access -> {"exp", "boot", "chain"}
-        self.refresh = {}        # refresh -> {"exp", "boot", "chain"}
+        self.gen = 0
+        self.down_until = 0.0
+        self.drop_next_refresh = False
+        self.links = {}          # link -> {"mint", "ttl", "kind", "gen"}  (in memory, bounded)
+        self.sessions = {}       # access -> {"exp", "boot", "chain", "gen"}
+        self.refresh = {}        # refresh -> {"exp", "boot", "chain", "gen"}
         self.chains = {}         # id -> {"revoked", "consumed", "head", "last": {...}}
         self.rate = {}           # remote -> deque of times
         self.counters = {"redemptions": 0, "rotations": 0, "grace_reserves": 0,
-                         "refresh_401": 0, "refresh_429": 0, "denials": 0, "ws_opens": 0,
-                         "auth_me_ok": 0}
+                         "refresh_401": 0, "refresh_429": 0, "refresh_dropped": 0,
+                         "denials": 0, "ws_opens": 0, "auth_me_ok": 0,
+                         "app_auth_checks": 0, "shell_loads": 0, "restarts": 0}
         self.violations = []     # R25: superseded refresh token used outside grace
         self.requests = deque(maxlen=300)
         self.unknown = {}        # path -> count: routes this fake does not implement
 
-    # -- minting (control API only) --
-    def mint_link(self, kind):
-        link = "fk1." + secrets.token_urlsafe(24)
+    def count(self, name):
         with self.lock:
-            self.links[link] = {"exp": time.time() + LINK_WINDOW, "kind": kind}
+            self.counters[name] = self.counters.get(name, 0) + 1
+
+    # -- minting (control API only) --
+    def mint_link(self, kind, ttl=None):
+        link = "fk1." + secrets.token_urlsafe(24)
+        ttl = ttl or (QR_SESSION_TTL if kind == "qr" else ACCESS_TTL)
+        with self.lock:
+            self.links[link] = {"mint": time.time(), "ttl": min(ttl, ACCESS_TTL), "kind": kind, "gen": self.gen}
             while len(self.links) > LINK_SET_MAX:
                 self.links.pop(next(iter(self.links)))
         return link
 
-    def _access_ttl(self, kind):
-        if self.expire_in:
-            return self.expire_in
-        return QR_SESSION_TTL if kind == "qr" else ACCESS_TTL
-
-    def _new_session(self, kind, boot, chain, ttl):
+    def _new_session(self, boot, chain, exp, gen):
         access = "fa." + secrets.token_urlsafe(24)
-        self.sessions[access] = {"exp": time.time() + ttl, "boot": boot, "chain": chain}
+        self.sessions[access] = {"exp": exp, "boot": boot, "chain": chain, "gen": gen}
         return access
 
-    def _new_refresh(self, boot, chain):
+    def _new_refresh(self, boot, chain, gen):
         rt = "fr." + secrets.token_urlsafe(24)
-        self.refresh[rt] = {"exp": time.time() + REFRESH_TTL, "boot": boot, "chain": chain}
+        self.refresh[rt] = {"exp": time.time() + REFRESH_TTL, "boot": boot, "chain": chain, "gen": gen}
         return rt
 
     def redeem(self, link):
-        """-> (access, refresh, session_exp) or (None, reason)."""
+        """-> ((access, refresh, session_exp), None) or (None, reason)."""
+        now = time.time()
         with self.lock:
             rec = self.links.get(link)
             if rec is None:
                 return None, "no active sessions" if link.startswith("fk1.") else "malformed token"
-            if rec["exp"] < time.time():
+            if now > rec["mint"] + min(LINK_WINDOW, rec["ttl"]):
                 return None, "token expired"
+            if rec["gen"] < self.gen:
+                return None, "session revoked"
             boot = self.boot if rec["kind"] == "qr" else None
             chain = secrets.token_hex(8)
             self.chains[chain] = {"revoked": False, "consumed": set(), "head": None, "last": None}
-            ttl = self._access_ttl(rec["kind"])
-            access = self._new_session(rec["kind"], boot, chain, ttl)
-            rt = self._new_refresh(boot, chain)
+            exp = now + self.expire_in if self.expire_in else rec["mint"] + rec["ttl"]
+            access = self._new_session(boot, chain, exp, self.gen)
+            rt = self._new_refresh(boot, chain, self.gen)
             self.counters["redemptions"] += 1
-            return (access, rt, self.sessions[access]["exp"]), None
+            return (access, rt, exp), None
 
     def check_access(self, access):
         """-> (session, None) or (None, reason)."""
@@ -240,6 +288,8 @@ class Gateway:
             s = self.sessions.get(access) if access else None
             if s is None:
                 return None, "Token required" if not access else "invalid signature"
+            if s["gen"] < self.gen:
+                return None, "session revoked"
             if s["boot"] and s["boot"] != self.boot:
                 return None, "session ended at gateway restart"
             if s["exp"] < time.time():
@@ -252,7 +302,8 @@ class Gateway:
             return r["exp"] if r else 0.0
 
     def rotate(self, rt, remote):
-        """The refresh endpoint's core. -> (status, body, cookies-to-set, clear_refresh)."""
+        """The refresh endpoint's core.
+        -> (status, body, tokens-to-set or None, clear_refresh, drop_response)."""
         now = time.time()
         with self.lock:
             q = self.rate.setdefault(remote, deque())
@@ -260,69 +311,100 @@ class Gateway:
                 q.popleft()
             if len(q) >= RATE_LIMIT:
                 self.counters["refresh_429"] += 1
-                return 429, {"error": "rate_limited"}, None, False
+                return 429, {"error": "rate_limited"}, None, False, False
             q.append(now)
             if not rt:
                 self.counters["refresh_401"] += 1
-                return 401, {"error": "no_refresh_cookie"}, None, False
+                return 401, {"error": "no_refresh_cookie"}, None, False, False
             rec = self.refresh.get(rt)
-            if rec is None or rec["exp"] < now or (rec["boot"] and rec["boot"] != self.boot):
+            if rec is None or rec["exp"] < now:
                 self.counters["refresh_401"] += 1
-                return 401, {"error": "invalid_refresh"}, None, False
+                return 401, {"error": "invalid_refresh"}, None, False, False
             chain = self.chains[rec["chain"]]
+            # The real order (refresh_tokens.py:745-768): revoked chain, then
+            # the revocation generation, then boot.
             if chain["revoked"]:
                 self.counters["refresh_401"] += 1
-                return 401, {"error": "refresh_chain_revoked"}, None, True
+                return 401, {"error": "refresh_chain_revoked"}, None, True, False
+            if rec["gen"] < self.gen or (rec["boot"] and rec["boot"] != self.boot):
+                self.counters["refresh_401"] += 1
+                return 401, {"error": "invalid_refresh"}, None, False, False
             if rt in chain["consumed"]:
                 last = chain["last"]
                 if (rt == chain["head"] and last and last["remote"] == remote
                         and now - last["at"] <= GRACE_SECS):
                     self.counters["grace_reserves"] += 1
-                    return 200, last["body"], last["tokens"], False
+                    return 200, last["body"], last["tokens"], False, False
                 chain["revoked"] = True
                 self.violations.append({"at": now, "chain": rec["chain"],
                                         "why": "superseded refresh token reused outside the grace window"})
                 self.counters["refresh_401"] += 1
-                return 401, {"error": "refresh_chain_revoked"}, None, True
+                return 401, {"error": "refresh_chain_revoked"}, None, True, False
             # Success: consume, rotate, remember for the grace window.
             chain["consumed"].add(rt)
             chain["head"] = rt
             ttl = self.expire_in or ACCESS_TTL
-            access = self._new_session("rotation", rec["boot"], rec["chain"], ttl)
-            rt2 = self._new_refresh(rec["boot"], rec["chain"])
+            access = self._new_session(rec["boot"], rec["chain"], now + ttl, rec["gen"])
+            rt2 = self._new_refresh(rec["boot"], rec["chain"], rec["gen"])
             body = {"refreshed_at": now, "session_exp": now + ttl, "refresh_exp": now + REFRESH_TTL}
             tokens = (access, rt2, ttl)
             chain["last"] = {"remote": remote, "at": now, "body": body, "tokens": tokens}
             self.counters["rotations"] += 1
-            return 200, body, tokens, False
+            drop = self.drop_next_refresh
+            self.drop_next_refresh = False
+            if drop:
+                self.counters["refresh_dropped"] += 1
+            return 200, body, tokens, False, drop
 
-    def logout(self, access):
+    def logout(self, access, rt):
         with self.lock:
             self.sessions.pop(access or "", None)
+            rec = self.refresh.get(rt or "")
+            if rec:
+                self.chains[rec["chain"]]["revoked"] = True
 
     def expire_all(self):
         with self.lock:
             for s in self.sessions.values():
                 s["exp"] = 0
 
-    def revoke_all(self):
+    def revoke_chains(self):
         with self.lock:
             for c in self.chains.values():
                 c["revoked"] = True
 
-    def restart(self):
-        """A gateway restart: new boot id; the in-memory link set, IP pins and
-        grace caches are lost. Persisted state (sessions' signing secret,
-        chains) survives, so unbound sessions keep working."""
+    def logout_all(self):
+        """`kirocrew logout`: bump the revocation generation."""
+        with self.lock:
+            self.gen += 1
+            self.links.clear()
+
+    def restart(self, down=0.0):
+        """A gateway restart: new boot id; the in-memory link set and grace
+        caches are lost, and every open connection drops. Persisted state
+        (chains, consumed tokens, the generation) survives, so unbound
+        sessions keep working."""
         with self.lock:
             self.boot = secrets.token_hex(16)
             self.links.clear()
             for c in self.chains.values():
                 c["last"] = None
+            self.down_until = time.time() + down
+            self.counters["restarts"] += 1
+            conns = list(self.connections)
+        for s in conns:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def is_down(self):
+        with self.lock:
+            return time.time() < self.down_until
 
     def snapshot(self):
         with self.lock:
-            return {"boot": self.boot, "counters": dict(self.counters),
+            return {"boot": self.boot, "gen": self.gen, "counters": dict(self.counters),
                     "violations": list(self.violations), "requests": list(self.requests),
                     "unknown": dict(self.unknown), "expire_in": self.expire_in,
                     "cookie_port": self.cookie_port}
@@ -341,15 +423,41 @@ class Page(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     gw = None                 # Gateway
     dist = DEFAULT_DIST
-    allowed_hosts = set()
+    allowed_hosts = set()     # host NAMES (the real check ignores the port)
     allowed_origins = set()
 
     def log_message(self, fmt, *a):
         pass
 
+    # Track the connection, so a restart can drop it; refuse while "down".
+    def setup(self):
+        super().setup()
+        with self.gw.lock:
+            self.gw.connections.add(self.connection)
+
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            with self.gw.lock:
+                self.gw.connections.discard(self.connection)
+
+    def handle(self):
+        if self.gw.is_down():
+            # A gateway mid-restart: accept, then close without a word.
+            self.close_connection = True
+            return
+        super().handle()
+
     # -- helpers --
     def host_header(self):
         return (self.headers.get("Host") or "").strip().lower()
+
+    def host_name(self):
+        h = self.host_header()
+        if h.startswith("["):
+            return h.split("]", 1)[0] + "]"
+        return h.rsplit(":", 1)[0] if ":" in h else h
 
     def cookie_port(self):
         h = self.host_header()
@@ -371,12 +479,13 @@ class Page(BaseHTTPRequestHandler):
     def secure(self):
         return "; Secure"      # always HTTPS here
 
-    def auth_cookie_headers(self, access, rt, access_ttl, clear_refresh=False):
+    def auth_cookies(self, access, rt, access_ttl, legacy_clear=False, clear_refresh=False):
         p = self.cookie_port()
         hs = []
         if access:
             hs.append("mc_token_%s=%s; HttpOnly; Max-Age=%d; Path=/; SameSite=Lax%s"
-                      % (p, access, min(int(access_ttl), 72000), self.secure()))
+                      % (p, access, max(0, min(int(access_ttl), ACCESS_TTL)), self.secure()))
+        if legacy_clear:
             hs.append('mc_token=""; Max-Age=0; Path=/')
         if rt:
             hs.append("mc_refresh_%s=%s; HttpOnly; Max-Age=%d; Path=/api/auth; SameSite=Lax%s"
@@ -406,24 +515,32 @@ class Page(BaseHTTPRequestHandler):
     def json(self, status, obj, extra=(), cookies=()):
         self.send(status, json.dumps(obj), "application/json; charset=utf-8", extra, cookies)
 
+    def is_shell_request(self, path):
+        return self.command in ("GET", "HEAD") and not path.startswith(SHELL_EXCLUDED_PREFIXES)
+
     def deny(self, path, reason):
-        with self.gw.lock:
-            self.gw.counters["denials"] += 1
+        """No valid credential. GET/HEAD navigations get the SPA shell (so it
+        can boot and refresh); everything else a 403 + X-Auth-Required."""
+        if self.is_shell_request(path):
+            return self.serve_file("/index.html")
+        self.gw.count("denials")
         if path.startswith("/api/"):
             return self.json(403, {"error": reason, "code": "forbidden"},
                              extra=[("X-Auth-Required", "true")])
-        # A non-API GET/HEAD gets the SPA shell, which then asks /api/auth/me.
-        return self.serve_file("/index.html")
+        return self.send(403, "<!doctype html><title>Sign in</title><p>Sign in to Kiro Crew.</p>",
+                         "text/html; charset=utf-8", extra=[("X-Auth-Required", "true")])
 
     def serve_file(self, path, cookies=()):
         rel = "index.html" if path in ("/", "/index.html") else path.lstrip("/")
         full = os.path.normpath(os.path.join(self.dist, rel))
         if not full.startswith(os.path.normpath(self.dist) + os.sep) or not os.path.isfile(full):
             # Client-side routes get the shell, as the real SPA fallback does.
-            if "." not in os.path.basename(path) and not path.startswith("/api/"):
+            if "." not in os.path.basename(path) and not path.startswith(SHELL_EXCLUDED_PREFIXES):
                 full = os.path.join(self.dist, "index.html")
             else:
                 return self.send(404, "not found", "text/plain")
+        if full.endswith("index.html"):
+            self.gw.count("shell_loads")
         ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
         if full.endswith((".js", ".mjs")):
             ctype = "text/javascript; charset=utf-8"
@@ -443,8 +560,8 @@ class Page(BaseHTTPRequestHandler):
         path, query = u.path, parse_qs(u.query)
         self.gw.record("%s %s%s" % (self.command, path, "?…" if u.query else ""))
 
-        # 1. Host allowlist (health endpoints exempt).
-        if self.host_header() not in self.allowed_hosts and path not in ("/api/health", "/api/live", "/api/ready"):
+        # 1. Host allowlist, by name (health endpoints exempt).
+        if self.host_name() not in self.allowed_hosts and path not in ("/api/health", "/api/live", "/api/ready"):
             return self.send(403, "Host header not allowed.", "text/plain; charset=utf-8")
         # 2. CSRF for mutating methods: Origin, else Referer, else loopback peer only.
         if self.command in ("POST", "PUT", "DELETE", "PATCH"):
@@ -455,46 +572,60 @@ class Page(BaseHTTPRequestHandler):
             loopback = self.client_address[0] in ("127.0.0.1", "::1")
             if (origin is None and not loopback) or (origin is not None and origin not in self.allowed_origins):
                 return self.send(403, "CSRF check failed: request origin not allowed.", "text/plain; charset=utf-8")
-        # 3. Auth.
         cookies = self.cookies()
         port = self.cookie_port()
+        # 3. Exempt paths: no credential is looked at, and none is redeemed.
+        if self.exempt(path):
+            return self.route(path, None, None, cookies, port, [])
+        # 4. The query token first; the cookie only as a fallback.
         access = cookies.get("mc_token_%s" % port)
-        new_cookies = []
-        session, reason = self.gw.check_access(access)
         link = (query.get("token") or [None])[0]
-        if link and session is None:
-            minted, why = self.gw.redeem(link)
+        new_cookies = []
+        if link:
+            minted, reason = self.gw.redeem(link)
             if minted:
-                a, rt, exp = minted
-                access, session = a, self.gw.check_access(a)[0]
-                new_cookies = self.auth_cookie_headers(a, rt, exp - time.time())
-            else:
-                reason = why
-        if session is None and not self.exempt(path):
+                access, rt, exp = minted
+                new_cookies = self.auth_cookies(access, rt, exp - time.time(), legacy_clear=True)
+                return self.route(path, self.gw.check_access(access)[0], access, cookies, port, new_cookies)
+            session, cookie_reason = self.gw.check_access(access) if access else (None, None)
+            if session is None:
+                return self.deny(path, reason)
+            return self.route(path, session, access, cookies, port, [])
+        session, reason = self.gw.check_access(access)
+        if session is None:
             return self.deny(path, reason)
-        return self.route(path, session, access, cookies, port, new_cookies)
+        return self.route(path, session, access, cookies, port, [])
 
     def route(self, path, session, access, cookies, port, new_cookies):
         m = self.command
         if path == "/api/auth/me" and m == "GET":
-            with self.gw.lock:
-                self.gw.counters["auth_me_ok"] += 1
+            self.gw.count("auth_me_ok")
+            if self.headers.get("X-Latchkey-Check"):
+                self.gw.count("app_auth_checks")
             return self.json(200, {"user_id": "olof", "session_exp": session["exp"],
                                    "refresh_exp": self.gw.refresh_exp(cookies.get("mc_refresh_%s" % port))},
                              cookies=new_cookies)
         if path == "/api/auth/refresh" and m == "POST":
-            status, body, tokens, clear = self.gw.rotate(cookies.get("mc_refresh_%s" % port),
-                                                         self.client_address[0])
+            status, body, tokens, clear, drop = self.gw.rotate(cookies.get("mc_refresh_%s" % port),
+                                                               self.client_address[0])
+            if drop:
+                # The refresh happened; the client never hears about it.
+                self.close_connection = True
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                return None
             extra = [("Retry-After", "60")] if status == 429 else []
-            cks = self.auth_cookie_headers(tokens[0], tokens[1], tokens[2]) if tokens else []
+            cks = self.auth_cookies(tokens[0], tokens[1], tokens[2]) if tokens else []
             if clear:
-                cks += self.auth_cookie_headers(None, None, 0, clear_refresh=True)
+                cks += self.auth_cookies(None, None, 0, clear_refresh=True)
             return self.json(status, body, extra=extra, cookies=cks)
         if path == "/api/auth/logout" and m == "POST":
-            self.gw.logout(access)
-            return self.json(200, {"ok": True}, cookies=[
-                'mc_token_%s=""; Max-Age=0; Path=/' % port,
-                'mc_refresh_%s=""; Max-Age=0; Path=/api/auth' % port])
+            self.gw.logout(cookies.get("mc_token_%s" % port), cookies.get("mc_refresh_%s" % port))
+            return self.json(200, {"logged_out": True}, cookies=[
+                'mc_refresh_%s=""; Max-Age=0; Path=/api/auth' % port,
+                'mc_token_%s=""; Max-Age=0; Path=/' % port])
         if path == "/api/theme/boot":
             return self.json(200, {"mode": "", "color": "", "language": "", "onboarded": True,
                                    "import_onboarded": True, "privacy_acked": True})
@@ -532,8 +663,7 @@ class Page(BaseHTTPRequestHandler):
         self.send_header("Sec-WebSocket-Accept", acc)
         self.end_headers()
         self.close_connection = True
-        with self.gw.lock:
-            self.gw.counters["ws_opens"] += 1
+        self.gw.count("ws_opens")
         stop = threading.Event()
         wlock = threading.Lock()
 
@@ -563,7 +693,10 @@ class Page(BaseHTTPRequestHandler):
         stop.set()
 
     def ws_read(self):
-        b1, b2 = self.rfile.read(2)
+        head = self.rfile.read(2)
+        if len(head) < 2:
+            raise EOFError
+        b1, b2 = head
         op, masked, ln = b1 & 0x0F, b2 & 0x80, b2 & 0x7F
         if ln == 126:
             ln = struct.unpack("!H", self.rfile.read(2))[0]
@@ -612,19 +745,26 @@ class Control(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlsplit(self.path)
         q = parse_qs(u.query)
+        num = lambda k, d=0: float((q.get(k) or [d])[0])
         if u.path == "/__mint":
             kind = (q.get("kind") or ["cli"])[0]
             if kind not in ("cli", "qr"):
                 return self.reply({"error": "kind is cli or qr"}, 400)
-            link = self.gw.mint_link(kind)
+            link = self.gw.mint_link(kind, int(num("ttl")) or None)
             return self.reply({"link": link, "url": "%s/?token=%s" % (self.public_origin, link)})
         if u.path == "/__config":
-            # The access-session TTL for sessions minted or rotated from now on.
             with self.gw.lock:
-                self.gw.expire_in = int((q.get("expire_in") or ["0"])[0])
+                self.gw.expire_in = int(num("expire_in"))
             return self.reply({"ok": True, "expire_in": self.gw.expire_in})
-        actions = {"/__expire": self.gw.expire_all, "/__revoke": self.gw.revoke_all,
-                   "/__restart": self.gw.restart, "/__reset": self.gw.reset}
+        if u.path == "/__restart":
+            self.gw.restart(num("down"))
+            return self.reply({"ok": True})
+        if u.path == "/__drop-next-refresh":
+            with self.gw.lock:
+                self.gw.drop_next_refresh = True
+            return self.reply({"ok": True})
+        actions = {"/__expire": self.gw.expire_all, "/__revoke": self.gw.revoke_chains,
+                   "/__logout-all": self.gw.logout_all, "/__reset": self.gw.reset}
         if u.path in actions:
             actions[u.path]()
             return self.reply({"ok": True})
@@ -647,22 +787,23 @@ def main():
     ap.add_argument("--expire-in", type=int, default=0, help="access-session TTL in seconds (0 = real defaults)")
     ap.add_argument("--dist", default=DEFAULT_DIST)
     ap.add_argument("--check-bundle", action="store_true", help="run the pin/smoke test and exit")
-    ap.add_argument("--print-pins", action="store_true", help="print the installed bundle's hashes and exit")
+    ap.add_argument("--print-pins", action="store_true", help="print the installed files' hashes and exit")
     a = ap.parse_args()
 
     if a.print_pins:
         print("version:", dist_version(a.dist))
         for rel in PINNED_FILES:
-            print('    "%s": "%s",' % (rel, sha256(os.path.join(a.dist, rel))))
+            print('    "%s": "%s",' % (rel, sha256(os.path.join(package_root(a.dist), rel))))
         return
     problems = check_bundle(a.dist)
     if a.check_bundle:
         for p in problems:
             print("FAIL:", p)
-        print("bundle check: %s" % ("ok (KiroCrew %s)" % PINNED_VERSION if not problems else "FAILED"))
+        print("bundle check: %s" % ("ok (KiroCrew %s, %d pinned files)" % (PINNED_VERSION, len(PINNED_FILES))
+                                    if not problems else "FAILED"))
         sys.exit(1 if problems else 0)
     if problems:
-        print("fake_gateway: refusing to start -- the installed bundle is not the pinned one:", file=sys.stderr)
+        print("fake_gateway: refusing to start -- the installed KiroCrew is not the pinned one:", file=sys.stderr)
         for p in problems:
             print("  " + p, file=sys.stderr)
         sys.exit(2)
@@ -672,7 +813,7 @@ def main():
     gw = Gateway(a.expire_in, a.cookie_port)
     Page.gw = Control.gw = gw
     Page.dist = a.dist
-    Page.allowed_hosts = {a.host, "127.0.0.1:%d" % a.port, "localhost:%d" % a.port, "[::1]:%d" % a.port}
+    Page.allowed_hosts = {a.host, "127.0.0.1", "localhost", "[::1]"}
     Page.allowed_origins = {"https://%s" % a.host, "https://127.0.0.1:%d" % a.port,
                             "https://localhost:%d" % a.port}
     Control.public_origin = "https://%s" % a.host
@@ -692,7 +833,7 @@ def main():
     servers.append(ThreadingHTTPServer(("127.0.0.1", a.control_port), Control))
     for s in servers:
         threading.Thread(target=s.serve_forever, daemon=True).start()
-    print("fake gateway (KiroCrew %s bundle) https://%s -> 127.0.0.1:%d, control :%d, cookies mc_*_%d, expire-in %s"
+    print("fake gateway (KiroCrew %s) https://%s -> 127.0.0.1:%d, control :%d, cookies mc_*_%d, expire-in %s"
           % (PINNED_VERSION, a.host, a.port, a.control_port, a.cookie_port, a.expire_in or "default"), flush=True)
     try:
         while True:

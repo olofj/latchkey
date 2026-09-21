@@ -119,10 +119,12 @@ def run(port, cport, ca):
     s, h, body, _ = c.req("POST", "/api/auth/refresh", {"Origin": "https://evil.example"})
     check(s == 403 and b"CSRF check failed" in body, "bad Origin: %d %r" % (s, body))
 
-    step("refresh rotates both cookies")
+    step("refresh rotates both cookies (and only those: the legacy clear is redemption's)")
     first = c.jar["mc_refresh_%s" % P]
     s, h, body, sets = c.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
     check(s == 200 and "session_exp" in json.loads(body), "refresh: %d %r" % (s, body))
+    check(sorted(x.split("=", 1)[0] for x in sets) == ["mc_refresh_%s" % P, "mc_token_%s" % P],
+          "rotation sets exactly the two auth cookies: %s" % sets)
     second = c.jar["mc_refresh_%s" % P]
     check(second != first, "the refresh token did not rotate")
 
@@ -190,20 +192,153 @@ def run(port, cport, ca):
     control(cport, "POST", "/__reset")
     w = Client(port, ca)
     w.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
-    check(ws_status(port, ca, None, ORIGIN) == 403, "a WebSocket without a session must be refused")
-    check(ws_status(port, ca, w.jar, "https://evil.example") == 403, "a foreign Origin must be refused")
-    check(ws_status(port, ca, w.jar, ORIGIN, want_message=True) == 101, "an authenticated WebSocket must open")
+    st, body = ws_status(port, ca, None, ORIGIN)
+    check(st == 403 and b'"forbidden"' in body, "no session: an AUTH denial (JSON), got %d %r" % (st, body[:80]))
+    st, body = ws_status(port, ca, w.jar, "https://evil.example")
+    check(st == 403 and b"origin not allowed" in body, "foreign Origin: an ORIGIN denial, got %d %r" % (st, body[:80]))
+    check(ws_status(port, ca, w.jar, ORIGIN, want_message=True)[0] == 101, "an authenticated WebSocket must open")
+
+    step("a valid ?token= over a valid cookie re-redeems (the query token is validated first)")
+    control(cport, "POST", "/__reset")
+    q = Client(port, ca)
+    q.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    before = dict(q.jar)
+    q.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    check(control(cport, "GET", "/__state")["counters"]["redemptions"] == 2, "the second link must redeem")
+    check(q.jar.get("mc_token_%s" % P) != before.get("mc_token_%s" % P), "and replace the access cookie")
+
+    step("an exempt path never redeems a ?token=")
+    e = Client(port, ca)
+    s, _, _, sets = e.req("GET", "/manifest.json?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    check(s == 200 and not sets, "manifest.json with a link: 200, no cookies (%s)" % sets)
+    check(control(cport, "GET", "/__state")["counters"]["redemptions"] == 2, "no redemption on an exempt path")
+
+    step("a link's window runs from mint: min(300 s, ttl)")
+    short = control(cport, "POST", "/__mint?kind=cli&ttl=2")["link"]
+    time.sleep(2.5)
+    late = Client(port, ca)
+    late.req("GET", "/?token=" + short)
+    check(late.req("GET", "/api/auth/me")[0] == 403, "a link past min(300, ttl) must not redeem")
+
+    step("a signed-out non-API POST is a 403 sign-in page with X-Auth-Required, not the shell")
+    s, h, body, _ = late.req("POST", "/some/form", {"Origin": ORIGIN})
+    check(s == 403 and h.get("X-Auth-Required") == "true" and b"Sign in" in body, "non-API POST: %d %s" % (s, h))
+
+    step("logout-all (the revocation generation): access 403, refresh invalid_refresh, no cookie clear")
+    control(cport, "POST", "/__reset")
+    g = Client(port, ca)
+    g.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    control(cport, "POST", "/__logout-all")
+    s, h, body, _ = g.req("GET", "/api/auth/me")
+    check(s == 403 and json.loads(body).get("error") == "session revoked", "access after logout-all: %d %r" % (s, body))
+    s, _, body, sets = g.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
+    check(s == 401 and json.loads(body).get("error") == "invalid_refresh" and not sets,
+          "refresh after logout-all: %d %r %s" % (s, body, sets))
+
+    step("refresh order: a revoked QR chain after a restart is refresh_chain_revoked, not invalid_refresh")
+    control(cport, "POST", "/__reset")
+    rq = Client(port, ca)
+    rq.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=qr")["link"])
+    control(cport, "POST", "/__revoke")
+    control(cport, "POST", "/__restart")
+    s, _, body, _ = rq.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
+    check(s == 401 and json.loads(body).get("error") == "refresh_chain_revoked", "revoked before boot: %d %r" % (s, body))
+
+    step("a lost refresh response is recovered by the grace window (same client, < 60 s)")
+    control(cport, "POST", "/__reset")
+    d = Client(port, ca)
+    d.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    presented = d.jar["mc_refresh_%s" % P]
+    control(cport, "POST", "/__drop-next-refresh")
+    try:
+        d.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
+        lost = False
+    except (OSError, http.client.HTTPException):
+        lost = True
+    check(lost, "the dropped refresh must fail at the connection level")
+    check(d.jar["mc_refresh_%s" % P] == presented, "the client still holds the consumed token")
+    s, _, _, _ = d.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
+    st = control(cport, "GET", "/__state")
+    check(s == 200 and st["counters"]["grace_reserves"] == 1 and not st["violations"],
+          "retry inside grace: %d, grace %d, violations %s" % (s, st["counters"]["grace_reserves"], st["violations"]))
+
+    step("...but after a restart the grace cache is gone: the retry revokes the chain")
+    control(cport, "POST", "/__reset")
+    d2 = Client(port, ca)
+    d2.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    control(cport, "POST", "/__drop-next-refresh")
+    try:
+        d2.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
+    except (OSError, http.client.HTTPException):
+        pass
+    control(cport, "POST", "/__restart")
+    s, _, body, _ = d2.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
+    check(s == 401 and json.loads(body).get("error") == "refresh_chain_revoked", "retry after restart: %d %r" % (s, body))
+
+    step("a restart drops open connections, and down=S refuses new ones for S seconds")
+    control(cport, "POST", "/__reset")
+    w2 = Client(port, ca)
+    w2.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    ws = open_ws(port, ca, w2.jar)
+    control(cport, "POST", "/__restart?down=2")
+    # Drain: messages sent before the restart may still be buffered. Dropped
+    # means EOF or a reset within the deadline; a timeout means still open.
+    closed, deadline = False, time.time() + 6
+    ws.settimeout(1)
+    while time.time() < deadline and not closed:
+        try:
+            closed = ws.recv(65536) == b""
+        except socket.timeout:
+            continue
+        except OSError:
+            closed = True
+    check(closed, "the open WebSocket must be dropped by a restart")
+    try:
+        w2.req("GET", "/api/auth/me")
+        refused = False
+    except (OSError, http.client.HTTPException):
+        refused = True
+    check(refused, "a request while down must fail at the connection level")
+    time.sleep(2.2)
+    check(w2.req("GET", "/api/auth/me")[0] == 200, "after the downtime a CLI session works again")
+
+    step("logout: revokes the chain and answers logged_out")
+    control(cport, "POST", "/__reset")
+    lo = Client(port, ca)
+    lo.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    kept = dict(lo.jar)
+    s, _, body, _ = lo.req("POST", "/api/auth/logout", {"Origin": ORIGIN})
+    check(s == 200 and json.loads(body) == {"logged_out": True}, "logout: %d %r" % (s, body))
+    lo.jar = kept   # present the cookies logout just cleared, as a saved copy would
+    s, _, body, _ = lo.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
+    check(s == 401 and json.loads(body).get("error") == "refresh_chain_revoked", "the chain is revoked: %r" % body)
 
     step("rate limit: the 61st refresh within a minute is a 429 with Retry-After: 60")
     control(cport, "POST", "/__reset")
     r = Client(port, ca)
-    codes = [r.req("POST", "/api/auth/refresh", {"Origin": ORIGIN}, cookies=False)[0] for _ in range(61)]
-    check(codes[:60] == [401] * 60, "the first 60 should reach the handler (401, no cookie): %s" % codes[:60])
+    codes = [r.req("POST", "/api/auth/refresh", {"Origin": ORIGIN}, cookies=False)[0] for _ in range(60)]
+    check(codes == [401] * 60, "the first 60 should reach the handler (401, no cookie): %s" % codes)
     s, h, _, _ = r.req("POST", "/api/auth/refresh", {"Origin": ORIGIN}, cookies=False)
-    check(s == 429 and h.get("Retry-After") == "60", "want 429 + Retry-After: 60, got %d %s" % (s, h))
+    check(s == 429 and h.get("Retry-After") == "60", "the 61st: want 429 + Retry-After: 60, got %d %s" % (s, h))
 
     control(cport, "POST", "/__reset")
     print("gateway check: ok (%d checks)" % n[0])
+
+
+def open_ws(port, ca, jar):
+    ctx = ssl.create_default_context(cafile=ca)
+    s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=10), server_hostname=HOST)
+    key = base64.b64encode(os.urandom(16)).decode()
+    lines = ["GET /api/ws HTTP/1.1", "Host: " + HOST, "Upgrade: websocket", "Connection: Upgrade",
+             "Sec-WebSocket-Key: " + key, "Sec-WebSocket-Version: 13", "Origin: " + ORIGIN,
+             "Cookie: " + "; ".join("%s=%s" % kv for kv in jar.items())]
+    s.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
+    head = b""
+    while b"\r\n\r\n" not in head:
+        head += s.recv(4096)
+    if b" 101 " not in head.split(b"\r\n", 1)[0]:
+        raise Fail("WebSocket did not open: %r" % head[:80])
+    return s
 
 
 def ws_status(port, ca, jar, origin, want_message=False):
@@ -222,7 +357,20 @@ def ws_status(port, ca, jar, origin, want_message=False):
             break
         head += chunk
     status = int(head.split(b" ", 2)[1])
-    if status == 101 and want_message:
+    body = head.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in head else b""
+    if status != 101:
+        s.settimeout(2)
+        try:
+            while True:
+                more = s.recv(4096)
+                if not more:
+                    break
+                body += more
+        except OSError:
+            pass
+        s.close()
+        return status, body
+    if want_message:
         rest = head.split(b"\r\n\r\n", 1)[1]
         while len(rest) < 2:
             rest += s.recv(4096)
@@ -233,7 +381,7 @@ def ws_status(port, ca, jar, origin, want_message=False):
         if msg.get("type") != "slots":
             raise Fail("first WebSocket message should be slots, got %r" % msg)
     s.close()
-    return status
+    return status, body
 
 
 def main():

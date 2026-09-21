@@ -9,18 +9,21 @@ what came back -- statuses, headers, error codes, cookie names and
 attributes. A difference means the fake has drifted from real KiroCrew, and
 every M4 test result is suspect until it is fixed.
 
-The sequence (identical on both sides):
+The sequence (identical on both sides; nine recorded steps):
    1  GET  /api/auth/me, no cookies            -> 403 + X-Auth-Required
    2  GET  /?token=<link>                      -> the shell, both cookies set
    3  GET  /api/auth/me                        -> 200 {user_id, session_exp, refresh_exp}
    4  (wait for the access session to expire; the fake is told to expire it)
    5  GET  /api/auth/me                        -> 403 + X-Auth-Required
    6  POST /api/auth/refresh                   -> 200, both cookies rotated
+   6b POST /api/auth/refresh, 6's REQUEST token again (the chain head, same
+      client, < 60 s)                          -> 200, the SAME tokens as 6 (grace)
    7  POST /api/auth/refresh                   -> 200, rotated again
-   8  POST /api/auth/refresh, the token from 6's REQUEST (superseded, not the
-      chain head)                              -> 401 refresh_chain_revoked + clear
+   8  POST /api/auth/refresh, 6's request token (superseded, no longer the
+      head)                                    -> 401 refresh_chain_revoked + clear
    9  POST /api/auth/refresh, a foreign Origin -> 403 CSRF, text/plain
-Five refresh calls in all: far below the refresh endpoint's shared 60/min.
+Six refresh calls in all: far below the refresh endpoint's shared 60/min.
+Step 6b is the R25 grace rule, checked against a real server.
 
 Rules it keeps (R19):
   * The link comes from a FILE or an ENVIRONMENT VARIABLE, never an argument,
@@ -33,7 +36,12 @@ Rules it keeps (R19):
   * A gateway on the SAME KiroCrew version as byskebox, and the version the
     fake pins (checked over /api/ws; a mismatch stops the run).
   * Mint the link with a short session, so step 4 does not wait for hours:
-        kirocrew token --ttl 2m        (then run this within 5 minutes)
+        kirocrew token --ttl 2m
+    and run this within 2 minutes: a link is redeemable for min(300 s, ttl).
+  * While at it, note byskebox's `dashboard.tailscale` settings (O4) and its
+    QR shape (`qr_session_until_restart`, `no_refresh`, `require_peer`): they
+    change auth behaviour with no code change, and the fake models only the
+    defaults.
 
 Usage (Olof):
   cd testing/harness && make gateway-up        # the fake, for the comparison
@@ -122,11 +130,12 @@ class Side:
         c.close()
         return r.status, r.headers, body, sets
 
-    def record(self, step, status, headers, body, sets):
+    def record(self, step, status, headers, body, sets, extra=None):
         ctype = (headers.get("Content-Type") or "").split(";")[0]
         entry = {"step": step, "status": status, "content_type": ctype,
                  "x_auth_required": headers.get("X-Auth-Required"),
-                 "cookies": sorted(normalize_cookie(s) for s in sets)}
+                 "cookies": sorted(normalize_cookie(s, bucket_access=(step == "2")) for s in sets)}
+        entry.update(extra or {})
         if ctype == "application/json":
             try:
                 j = json.loads(body)
@@ -143,9 +152,11 @@ KNOWN_ERRORS = {"no_refresh_cookie", "invalid_refresh", "refresh_chain_revoked",
                 "Token required", "token expired", "bad_origin"}
 
 
-def normalize_cookie(s):
+def normalize_cookie(s, bucket_access=False):
     """Name (with the port generalized) and attributes; never the value.
-    Max-Age is bucketed: 0, <=20h, <=30d."""
+    Max-Age is compared rounded to the minute (a request's own latency is
+    seconds), except the redemption's access cookie, whose Max-Age is the
+    link's TTL and so differs by construction: that one is bucketed."""
     parts = [p.strip() for p in s.split(";")]
     name = parts[0].split("=", 1)[0]
     for prefix in ("mc_token_", "mc_refresh_"):
@@ -156,7 +167,10 @@ def normalize_cookie(s):
         k = a.split("=", 1)[0].lower()
         if k == "max-age":
             n = int(a.split("=", 1)[1])
-            attrs.append("max-age=" + ("0" if n == 0 else "<=20h" if n <= 72000 else "<=30d" if n <= 2600000 else ">30d"))
+            if bucket_access and name == "mc_token_<port>":
+                attrs.append("max-age=" + ("0" if n == 0 else "<=20h" if n <= 72000 else ">20h"))
+            else:
+                attrs.append("max-age=%d" % (round(n / 60.0) * 60))
         elif k in ("httponly", "secure"):
             attrs.append(k)
         elif k in ("path", "samesite", "domain"):
@@ -222,14 +236,24 @@ def run_sequence(side, link, expire):
         sys.exit("error: %s did not accept the link (step 3: %d). Expired? Minted for another gateway?" % (side.name, status))
     version = ws_version(side)
     print("     version over /api/ws: %s (the fake pins %s)" % (version, PINNED_VERSION))
-    if version != PINNED_VERSION:
+    if not (version == PINNED_VERSION or (version or "").startswith(PINNED_VERSION + ".")):
         sys.exit("error: %s runs KiroCrew %s, the fake emulates %s -- compare like with like" % (side.name, version, PINNED_VERSION))
     expire(json.loads(body)["session_exp"])
     say(side.record("5", *side.request("GET", "/api/auth/me")))
     refresh_name = next((k for k in side.jar if k.startswith("mc_refresh_")), None)
     first_refresh = side.jar.get(refresh_name) if refresh_name else None
     origin = {"Origin": side.origin()}
-    say(side.record("6", *side.request("POST", "/api/auth/refresh", origin)))
+    status6, headers6, body6, sets6 = side.request("POST", "/api/auth/refresh", origin)
+    say(side.record("6", status6, headers6, body6, sets6))
+    after6 = dict(side.jar)
+    replay = dict(after6)
+    if refresh_name and first_refresh:
+        replay[refresh_name] = first_refresh
+    status, headers, body, sets = side.request("POST", "/api/auth/refresh", origin, cookies=replay)
+    values = lambda ss: sorted(x.split(";", 1)[0] for x in ss)
+    say(side.record("6b", status, headers, body, sets,
+                    {"same_tokens_as_6": values(sets) == values(sets6)}))
+    side.jar = after6          # continue from step 6's tokens, as the page would
     say(side.record("7", *side.request("POST", "/api/auth/refresh", origin)))
     stale = dict(side.jar)
     if refresh_name and first_refresh:
@@ -261,7 +285,7 @@ def main():
         post("/__reset")
     except OSError:
         sys.exit("error: the fake gateway is not running (cd testing/harness && make gateway-up)")
-    fake_link = post("/__mint?kind=cli")["link"]
+    fake_link = post("/__mint?kind=cli&ttl=120")["link"]
     fake_t = run_sequence(fake, fake_link, lambda _exp: post("/__expire"))
     post("/__reset")
     if a.fake_only:
@@ -281,6 +305,9 @@ def main():
     real_t = run_sequence(Side("real", a.gateway), link, wait_for_expiry)
 
     print("--- diff (real vs fake)")
+    if len(real_t) != len(fake_t):
+        print("CONTRACT DRIFT: %d steps recorded against the real gateway, %d against the fake" % (len(real_t), len(fake_t)))
+        sys.exit(1)
     diffs = 0
     for r, f in zip(real_t, fake_t):
         # Secure follows the scheme: an http:// gateway (chonk's loopback)

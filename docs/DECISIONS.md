@@ -1243,3 +1243,132 @@ token while Settings is open, the token sheet cannot stack on top of it.
 
 **Actual:** about 2 h agent wall-clock for R19 through M4, including the
 research pass (not engineer-hours).
+
+## 2026-09-20 — M4 review
+
+Two adversarial reviews. The app review found no security holes and 12
+findings. The fidelity review checked the fake against the real 0.6.0
+source: no high-severity divergence, 5 medium findings and 6 low. **All
+fixed.**
+
+**App (`app/` review-fix commit):**
+1. **(medium-high) Stuck in `needsToken`.** A signed-in document fires no
+   event, and the app re-checked `/api/auth/me` only while `unknown`.
+   - So a sign-in that finished after the 30-s timer, or one whose check
+     failed once, left a working dashboard under a "Signed out" capsule.
+   - Now it re-checks on every `ready` and every finished load while not
+     `active`, checks once more before a timeout counts as failure, and
+     retries once after a check that got no answer.
+2. **(medium) Settings open when the page asked for a token → no way to
+   sign in.** The token sheet is now presented from the root, next to
+   Settings, and waits for Settings' `onDismiss`. The capsule follows the
+   sheet being **on screen**, not the request flag.
+3. **(medium) A failed sign-in load showed its token.** It appeared on the
+   error page, in `url`, and in the ⌘R retry. Failing URLs are now stripped
+   of `token`, and `SessionManager` is told at once rather than after its
+   timeout.
+4. **(low) A stale 200 could override a newer `auth-required`.** Checks now
+   carry a generation, and a check started before the last `auth-required`
+   cannot mark the session active.
+5. **(low) Any script on the page can dispatch the auth events.** While a
+   sign-in is in flight, `auth-required` is believed only if
+   `/api/auth/me` agrees. The message handler was already isolated in its
+   own content world, which the review confirmed.
+6. **(medium) The hidden-banner check ended before the 8-s watchdog.** It
+   now looks after 11 s.
+7. **(low-medium) The "never appears" checks polled every 2 s, so a brief
+   sheet could slip between looks.** Test builds now show a count of
+   `auth-required` events, and the tests assert it does not change. The
+   forced-expiry test also asserts the 403 path actually ran (`denials`
+   increased). The revoked-chain test asserts the reload happened.
+   - That last assertion exposed a **race in my own first design**: with
+     expiry forced too, the interceptor sometimes won and nothing reloaded.
+     The test now revokes only, so the scheduler reaches the revoked chain
+     first.
+8. **(low) `auth_me_ok` counted the page's own calls.** The app's check now
+   sends `X-Latchkey-Check` (servers ignore it), and the fake counts it
+   separately (`app_auth_checks`).
+9. **(low) The M4 R1 scan saw only the last test's data**, because the reset
+   hook removed the others. `-UITestKeepWebData` now keeps them, and the
+   scan covers all 12 tests' data (3,884 WebKit files).
+10. **(low) The "-O and -Onone" claim was false.** `test-token-input.sh` now
+    builds both.
+11. **(low) Chat formatting defeated the parser.**
+    - Backticks, `**`, and trailing `!`, `…` or `.` now parse.
+    - An unusable first `token=` no longer hides a good later one.
+    - `[::1]` counts as the CLI's own local host.
+12. **(low) QR scanner problems.** With permission denied it was a black
+    sheet with no way out; it now shows a message and a Close button. Start
+    and stop now run on one serial queue.
+
+**The fake (parent review-fix commit):**
+- **(medium) Restart.** `/__restart` now drops every connection and can be
+  down for N s. The new `/__drop-next-refresh` loses a refresh response on
+  purpose. With it, two new app tests pin real KiroCrew behaviour:
+  - a lost response is recovered by the 60-s grace window, with no sheet;
+  - a lost response followed by a restart (the grace cache is memory-only)
+    revokes the chain, and the app recovers through the sheet.
+
+  **This is a real-world hazard, not an app bug:** a gateway restart during
+  a refresh signs the phone out. The app cannot prevent it. The test pins
+  that it recovers.
+- **(medium) Revocation.** `/__revoke` meant nothing real. It is now
+  documented as reuse-detection revocation (chains only; access stays
+  valid). The new `/__logout-all` is `kirocrew logout`: the generation
+  bump, where access gets 403 and refresh gets `invalid_refresh` with no
+  clear. It has its own app test.
+- **(medium) Credential order.** A valid `?token=` now re-redeems over a
+  valid cookie (the query token is validated first). An invalid one falls
+  back to the cookie. Exempt paths never redeem.
+- **(medium) `contract_test.py`.**
+  - It no longer expects the legacy `mc_token` clear on rotation; that was
+    a fake bug that would have shown as drift on the first real run.
+  - A new grace step 6b re-presents step 6's token and compares the
+    re-served tokens.
+  - Max-Age is compared exactly (rounded to the minute), except the
+    redemption's access cookie.
+  - The link-window instruction is corrected to min(300 s, ttl).
+  - `0.6.0.N` build versions are accepted, and equal transcript lengths are
+    required.
+- **(medium) The pin now covers the server code the fake emulates**: twelve
+  dashboard modules plus the four frontend files, and a `BUILD_VERSION`
+  stamp is refused. An upgrade that leaves the frontend byte-identical
+  still trips it.
+- **(low)**
+  - The Host check compares hostnames.
+  - Non-GET/HEAD requests and data paths get the 403 sign-in page, not the
+    shell.
+  - Refresh checks run in the real order (revoked chain before generation
+    and boot).
+  - Link windows are timed from mint.
+  - Logout revokes the chain and answers `logged_out`.
+  - Rotation no longer clears the legacy cookie.
+- **`gateway_check.py` now has 27 steps:**
+  - the rate-limit check asserts the 61st call;
+  - WebSocket denials are told apart (auth vs origin);
+  - there is a step for each new behaviour.
+  - One step I wrote had an `or True` in it and could not fail. It was
+    caught before commit, rewritten, and its negative was demonstrated.
+
+**Confirmed faithful by the fidelity review:**
+- Middleware order and the text/plain 403s.
+- Cookie naming and attributes.
+- The refresh codes and their order.
+- The grace rule (head, same remote, 60 s).
+- Access surviving chain revocation.
+- `boot` shapes and restart semantics.
+- The WebSocket gate.
+- The bridge's `<style>`, which the real CSP allows.
+
+It also confirmed that IP pins hide nothing behind `tailscale serve`, since
+every request there comes from 127.0.0.1.
+
+**After the fixes:**
+- `scripts/test-session.sh`: pin 16 files, `gateway-check` 27/27,
+  SessionTests **12/12 in 319 s**, R1 clean (all tests' data, 13 redemptions
+  logged).
+- L1 9/9 in 103 s; L2 4/4 in 86 s.
+- `make test-policy` green; the token parser 30/30 at both `-O` and `-Onone`.
+- `contract_test.py --fake-only` passes all nine steps, with grace re-serving
+  the same tokens.
+
