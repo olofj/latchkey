@@ -294,16 +294,22 @@ func (h *harness) serveLogin(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	ctl, gen := h.ctl, h.gen
 	h.mu.Unlock()
-	ok := ctl != nil && ctl.CompleteAuth(r.URL.Path)
-	if ok {
-		// A login renews the key, as on a real control plane. testcontrol
-		// does not: a re-login after /expire clones the old node, past
-		// expiry and all, onto the new key, which stays expired. It also
-		// does not say which node an auth path belongs to, so every expired
-		// key is renewed (the tests have one app node). Renewed means no
-		// expiry, the harness default.
+	// A login renews the key, as on a real control plane. testcontrol does
+	// not: a re-login after /expire clones the old node, past expiry and all,
+	// onto the new key, which stays expired. It also does not say which node
+	// an auth path belongs to, so every expired key is renewed (the tests
+	// have one app node). Renewed means no expiry, the harness default.
+	//
+	// BEFORE CompleteAuth (R31 review): completing the auth releases the
+	// client's followup register, which retires the old key's entry; renewing
+	// after it could race that delete and write the old entry back (UpdateNode
+	// adds what is missing), leaving a ghost second app node. Before it, the
+	// followup is still parked, so both entries are there to renew. A visit
+	// to an unknown link renews too, harmlessly: only already-expired keys.
+	if ctl != nil {
 		h.updateExpired(func(n *tailcfg.Node) { n.KeyExpiry = time.Time{} })
 	}
+	ok := ctl != nil && ctl.CompleteAuth(r.URL.Path)
 	h.mu.Lock()
 	if h.gen != gen {
 		// A reset raced this visit: the login belonged to a control plane
@@ -493,6 +499,9 @@ type nodeInfo struct {
 	Addresses         []string `json:"addresses"`
 	MachineAuthorized bool     `json:"machineAuthorized"`
 	HarnessPeer       bool     `json:"harnessPeer"`
+	// KeyExpired: the key's expiry has passed -- /expire, or the node
+	// logged out (R32: a real logout expires the key at control).
+	KeyExpired bool `json:"keyExpired"`
 }
 
 type state struct {
@@ -540,6 +549,7 @@ func (h *harness) snapshot() state {
 				Name:              n.Name,
 				Hostname:          n.Hostinfo.Hostname(),
 				MachineAuthorized: n.MachineAuthorized,
+				KeyExpired:        !n.KeyExpiry.IsZero() && n.KeyExpiry.Before(time.Now()),
 			}
 			ni.HarnessPeer = ours[ni.Hostname]
 			for _, a := range n.Addresses {

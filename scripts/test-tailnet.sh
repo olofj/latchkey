@@ -138,6 +138,8 @@ fi
 # ..."), and the node log keeps tsnet's lines on disk (M8.3). A link is a
 # login for whoever holds it: nothing on disk may hold one (R29 review).
 # Validated: tsnet.log must hold the REDACTED form, or the scan proved nothing.
+# That needs the LAST test to log in (testRequireAuthLogin… does): a reset
+# deletes the node logs, so testAResetExpiresTheNodeAtControl sorts early.
 say "no login link in the app container"
 CONTAINER=$(xcrun simctl get_app_container "$UDID" net.lixom.latchkey data 2>/dev/null || true)
 if [[ -z "$CONTAINER" ]]; then

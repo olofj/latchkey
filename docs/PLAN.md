@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | In implementation. M0–M5 done (the M1 device check awaits owner actions O1–O3); revisions from `docs/PLAN-REVISIONS.md` being applied — where they disagree with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
+| Status | In implementation. M0–M5 done; M6's simulator-testable parts done (6.5, 6.7, 6.8 on the L2 harness; 6.6 and the AC numbers need the device); M8 done (8.1–8.6). Revisions R1–R38 applied. Remaining work needs the owner or the phone: the M1 device check (O1–O3, O3b, O5), O4, O7, M6.6, M7. Where a revision disagrees with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
 | Author | Drafted 2026-09-20 from three parallel research passes |
 | Repo | `~/src/latchkey` |
 | Base | Fork of [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) @ `dba0555` (2026-08-24), BSD-3-Clause |
@@ -569,7 +569,7 @@ likely to make the app feel unreliable in daily use.
 | 7.3 | Node login | Interactive login through `ASWebAuthenticationSession` (`TSNet/AuthManager.swift:16-44`). The new node appears in the tailnet under `owner@example.com`, **not** tagged. Confirm in the Tailscale admin console. **R6:** it is already named `latchkey-iphone` by `WorkspaceDefinition.makeDefault()` — renaming it after the first dashboard sign-in would sign the app out, since KiroCrew pins sessions to `login|node name`. **R8:** this login now happens during the M1 device check, not here. |
 | 7.4 | System VPN off | Turn the Tailscale app's VPN off and confirm the dashboard still loads. This is the headline feature — verify it explicitly. |
 | 7.5 | Durable QR sessions — **optional, QR users only (R24)** | CLI-link sessions already survive restarts, so this matters only if QR sign-in is used. `dashboard.qr_session_persist_across_restart` needs **all of:** `trust_identity` on with a non-empty `allowed_logins` (including `owner@example.com`), `qr_session_until_restart` still true, **and** the QR generated from an unbounded desktop session. Keep `pin_scope: node`, and name the node first (R6). Depends on §C O4; needs Olof's consent (§C O6) and a rollback note. |
-| 7.6 | Discovery on the real tailnet | Confirm discovery finds `byskebox` (443 via serve) and nothing else, within R26's budget. ~~`chonk`~~: out of v1 (D4, R26) — its dashboard listens on loopback only. Gateway switching itself is R32's task. |
+| 7.6 | Discovery on the real tailnet | Confirm discovery finds `byskebox` (443 via serve) and nothing else, within R26's budget. ~~`chonk`~~: out of v1 (D4, R26) — its dashboard listens on loopback only. Gateway switching itself was built in M5 (Settings → Gateway, Find gateways…, the unreachable banner's Find; L2-tested), which R32 confirmed. |
 | 7.7 | Weekly re-sign | Document the 7-day rebuild ritual in `README.md`. If it grates, the $99 program makes profiles last a year. |
 
 **AC:**
@@ -583,10 +583,10 @@ likely to make the app feel unreliable in daily use.
 
 | # | Task |
 |---|---|
-| 8.1 | App icon and launch screen. |
+| 8.1 | App icon and launch screen. **Done:** an original icon (`app/scripts/render-app-icon.swift`); the launch screen is the generated system background. |
 | 8.2 | Diagnostics screen: node state, selected gateway, session expiry, proxy endpoint, last error — everything needed to debug a failure without a Mac. **Done early (R29):** Settings → Status, which also shows the node key and provisioning-profile expiry (R31, R33). |
 | 8.3 | Surface tsnet's own logs. Upstream writes Go/tsnet detail to `Logs/tsnet.log`, **not** to `LogRing`/`os_log`, so Settings → Logs currently hides magicsock/DERP/loopback failures. Pipe them in. **Local only (R1/D1):** nothing is uploaded to Tailscale's log service — upload is disabled inside the vendored libtailscale — and every line is redacted (`URL.redactedForLog`, `LogRedaction.scrub`). Revision R29 moves this before M6's device tests. **Done (R29):** upstream actually discarded these lines (the drain goes to the no-op transport). The vendored library now keeps a local, capped `tsnet.log` (plus `stderr.log` for a Go panic), shown in Settings → Node log. |
-| 8.4 | `README.md`: build, install, re-sign, test, troubleshoot. |
+| 8.4 | `README.md`: build, install, re-sign, test, troubleshoot. **Done.** |
 | 8.5 | Clean up upstream oddity: `Aperture/Info.plist:11-28` has a malformed nested `NSAllowsArbitraryLoadsInWebContentUsageDescription` dict. **Done by R28.** |
 | 8.6 | Decide whether to keep `NSAllowsArbitraryLoads`. We only ever load one HTTPS origin with a real cert; tightening ATS is easy hardening. **Done by R28:** ATS on, no exceptions. |
 

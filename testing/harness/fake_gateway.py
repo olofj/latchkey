@@ -51,6 +51,8 @@ What is emulated (server source references are to kiro_crew/dashboard/):
     every access session and refresh token is refused (token_auth.py:1315).
   * `POST /api/auth/logout`: revokes the chain, denylists the access cookie,
     clears both, answers {"logged_out": true} (auth_refresh.py:760-820).
+    Counted as `logouts`, and as `logout_revocations` when a refresh cookie
+    came along (the app's sign-out, R32, must show up as both).
   * /api/ws: auth before the upgrade, Origin check, then `slots` and a
     `dashboard` message every 5 s with a constant version (ws.py:513-753).
   * The startup endpoints the SPA needs (theme/boot, ui-prefs,
@@ -235,7 +237,8 @@ class Gateway:
         self.counters = {"redemptions": 0, "rotations": 0, "grace_reserves": 0,
                          "refresh_401": 0, "refresh_429": 0, "refresh_dropped": 0,
                          "denials": 0, "ws_opens": 0, "auth_me_ok": 0,
-                         "app_auth_checks": 0, "shell_loads": 0, "restarts": 0}
+                         "app_auth_checks": 0, "shell_loads": 0, "restarts": 0,
+                         "logouts": 0, "logout_revocations": 0}
         self.violations = []     # R25: superseded refresh token used outside grace
         self.requests = deque(maxlen=300)
         self.unknown = {}        # path -> count: routes this fake does not implement
@@ -359,11 +362,17 @@ class Gateway:
             return 200, body, tokens, False, drop
 
     def logout(self, access, rt):
+        """`POST /api/auth/logout`. Counted apart: `logouts` is every call,
+        `logout_revocations` those that carried a refresh cookie and so
+        revoked a chain -- the app's sign-out (R32) must be the latter, or
+        its fetch left the cookies out and the gateway kept the session."""
         with self.lock:
+            self.counters["logouts"] += 1
             self.sessions.pop(access or "", None)
             rec = self.refresh.get(rt or "")
             if rec:
                 self.chains[rec["chain"]]["revoked"] = True
+                self.counters["logout_revocations"] += 1
 
     def expire_all(self):
         with self.lock:

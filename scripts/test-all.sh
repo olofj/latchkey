@@ -5,10 +5,11 @@
 #
 # quick (the default, while iterating; about 4-5 min):
 #   host tests (make test-policy), the vendored Go tests, L1 and L2 -- plus the
-#   session and discovery suites when code THEY exercise changed since the
-#   last full pass. Those two take 6 and 1.5 min and guard code most changes
-#   do not touch.
-# --full (before a milestone or review commit; about 13 min):
+#   session, discovery and lifecycle suites when code THEY exercise changed
+#   since the last full pass. Those take 6, 1.5 and 4 min and guard code most
+#   changes do not touch (lifecycle: the recovery paths in TSNet and the
+#   browser, and the vendored chaos hooks).
+# --full (before a milestone or review commit; about 17 min):
 #   everything, including the inherited connection-independent tests. A full
 #   pass that succeeds records the commits it tested, so quick runs know what
 #   changed since.
@@ -50,11 +51,17 @@ touches() { [[ "$CHANGED" == "(no successful full pass recorded)" ]] || grep -qE
 # network path under all of them.
 SESSION_RE='^app/(App/(Session|Browser|Workspace)/|TSNet/|ThirdParty/|UITests/(SessionTests|UITestSupport)\.swift)|^testing/harness/(fake_gateway|tls_accept)\.py|^testing/harness/kirocrew|^scripts/test-session\.sh'
 DISCOVERY_RE='^app/(App/(Discovery|Network|Browser)/|TSNet/|ThirdParty/|UITests/(DiscoveryTests|UITestSupport)\.swift)|^testing/tsnet-harness/|^testing/harness/(fake_gateway|tls_accept)\.py|^scripts/test-discovery\.sh'
+# M6: socket damage and a frozen process, on the L2 harness. About 4 min and
+# a SIGSTOP of the app, so quick runs take it only when the recovery code
+# (TSNet, the browser, the relay policy, the vendored hooks) or its own
+# fixtures changed.
+LIFECYCLE_RE='^app/(App/(Browser|Network|Workspace)/|TSNet/|ThirdParty/|UITests/(LifecycleHarnessTests|UITestSupport)\.swift)|^testing/tsnet-harness/|^testing/harness/(dashboard|tls_accept)\.py|^testing/harness/page_check\.js|^scripts/test-lifecycle\.sh'
 
-RUN_SESSION=$FULL; RUN_DISCOVERY=$FULL
+RUN_SESSION=$FULL; RUN_DISCOVERY=$FULL; RUN_LIFECYCLE=$FULL
 if [[ $FULL -eq 0 ]]; then
     touches "$SESSION_RE" && RUN_SESSION=1
     touches "$DISCOVERY_RE" && RUN_DISCOVERY=1
+    touches "$LIFECYCLE_RE" && RUN_LIFECYCLE=1
 fi
 
 # ------------------------------------------------------------------- suites --
@@ -77,6 +84,8 @@ if [[ $RUN_SESSION -eq 1 ]]; then run "session (M4)" "$ROOT/scripts/test-session
 else RESULTS+=("skip        session (M4): nothing it exercises changed since the last full pass"); fi
 if [[ $RUN_DISCOVERY -eq 1 ]]; then run "discovery (M5)" "$ROOT/scripts/test-discovery.sh" $(build_flag)
 else RESULTS+=("skip        discovery (M5): nothing it exercises changed since the last full pass"); fi
+if [[ $RUN_LIFECYCLE -eq 1 ]]; then run "lifecycle (M6)" "$ROOT/scripts/test-lifecycle.sh" $(build_flag)
+else RESULTS+=("skip        lifecycle (M6): nothing it exercises changed since the last full pass"); fi
 if [[ $FULL -eq 1 ]]; then
     run "inherited (connection-independent)" "$ROOT/scripts/test-inherited.sh"
 fi

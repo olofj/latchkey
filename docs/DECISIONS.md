@@ -1908,3 +1908,240 @@ Status, and a dashboard warning 14 days ahead. What R31 still needed:
 Harness support (`/expire`, `/deauthorize`, and key renewal at login)
 landed with the R29 review. The node's state comes from the app's own
 Status screen: the harness sees registrations, not a client's state.
+
+## 2026-09-21 — M6.8: the ~66 s cold-node flake — gate on peer data, don't raise the timeout
+
+The five inherited iOS UI tests flaked at ~66–68 s against a 60 s
+page-load timeout because upstream fired the first navigation as soon as the
+node reached `Running` and let WebKit sit on the 60 s timeout while the
+netmap (and thus the peer that the gateway name resolves to) was still
+arriving. Latchkey already closes that race: `BrowserViewModel.loadInitial`
+holds the first load until `HomePageAvailabilityChecker` confirms the
+configured gateway is a peer in the current netmap **and** until
+`TailnetProxyPolicy.hasPeerData` is true, so WebKit is never handed a URL it
+cannot yet route — the wait moved out of WebKit's fixed 60 s timeout and into
+a cheap poll that resolves the moment peer data lands. Decision: **keep the
+peer-data gate; do not raise the 60 s timeout.** On the L2 harness (a
+loopback control plane) the new `LifecycleHarnessTests` measure cold joins —
+launch to the dashboard's WebSocket open over the tailnet — at **6.9–7.8 s**
+across five runs, an order of magnitude under the budget, so the flake does
+not reproduce here; the residual real-tailnet risk is DERP/netmap latency on
+a genuinely cold start, which raising the timeout would only paper over,
+and which M6.6's device pass measures directly.
+
+## 2026-09-21 — R31 review
+
+One adversarial review (Fable). No high findings.
+
+**Fixed:**
+1. **(medium) The harness renewed keys after completing the login.** That
+   raced the client's follow-up register, which retires the old key's
+   entry: `UpdateNode` (update or add) could write the old entry back, a
+   ghost second app node. Renewal now happens before `CompleteAuth`, while
+   the follow-up is still parked.
+2. **(medium) `nodeState` read Status once.** After a re-login the node
+   needs its new netmap and a fresh DERP connection before Running. It now
+   waits for Running, up to the join timeout.
+3. **(low) Overlay collisions.** The node banners (Login, Waiting for
+   approval) covered the gateway banner's Find and Change buttons, and were
+   themselves covered by the sign-in capsule. They now sit in the layout
+   above the gateway banner, and the capsule hides while the node is down:
+   no dashboard sign-in works then anyway.
+4. **(low) "Logged in. Connecting…" had no way out.** A 60-s watchdog now
+   brings the Login banner back if the node still sits at NeedsLogin after
+   `LoginFinished`.
+5. **(low) A failed `startLoginInteractive` left the Login button spinning**
+   for its 2-min safety timeout. It now ends the spinner at once.
+6. **(low, device only) The expiry test matched any `expiry-warning`.** A
+   near-expiry profile on a device adds its own. It now matches the key's.
+
+**Recorded, not fixed:**
+- **(medium) The R31 tests prove the node's state, not the page's recovery.**
+  On this harness a revoked device may not even interrupt the page:
+  testcontrol keeps sending peers to an unauthorized node, where a real
+  control plane sends none. So the R31 entry's "every load failed" is true
+  of a real tailnet, not shown here. Proving the page recovers needs the
+  fake dashboard to reconnect as KiroCrew's page does; M6 is adding that,
+  and these tests will then require a fresh `ws:open`.
+- **(low, unconfirmed) The login sheet is a third presenter**, outside the
+  Settings, Find and token-sheet exclusion rules. Two rare cases: a token
+  redemption in flight when the key expires, and a sticky login request
+  whose URL arrives while Settings is open. To watch for at M6/M7 on the
+  device.
+- **(low) The harness writes whole node clones back**, which can clobber
+  testcontrol's live map mutations. It also renews every expired key on
+  any login. Harness-only; one app node per test.
+
+## 2026-09-21 — R30: the logging relay stays on, bounded and self-healing
+
+Built by a Fable agent, reviewed adversarially by another, and the fixes
+applied by a third.
+
+**Kept on.** The relay was not disabled outside test builds. The build on
+the phone is Debug via Xcode's Run, where test hooks are off. The relay's
+per-connection log is the only on-device evidence of what reached tailnet
+proxy and what it answered: M6.6 needs it, and it is what makes a missing
+`socks[n]` line mean something. It is loopback-only and passes tsnet's
+credential through, so it is not a security boundary.
+
+**Bounded.**
+- At most 64 concurrent sessions.
+- At the cap, the longest-silent session goes, but only once it has been
+  quiet for 60 s. Traffic in either direction counts as activity, and
+  KiroCrew's WebSocket heartbeats every 30 s.
+- Otherwise the newcomer is refused.
+
+**Restarted on evidence, never on a timer.** It restarts when a main-frame
+load fails with -1000/-1004/-1005 while all of these hold:
+- the node is Running;
+- LocalAPI answers;
+- the relay accepted nothing since the navigation began;
+- and the final word, a loopback self-probe of the relay's port is refused
+  or unanswered.
+
+The probe settles the question, because the "accepted nothing" inference
+misreads pooled connections and loads that never dialled.
+
+The same probe also runs:
+- on return to the foreground: it gathers evidence and rebuilds nothing,
+  per M6.1;
+- after two unanswered session checks.
+
+A listener that reports `.failed` after being ready is replaced directly.
+
+All restarts share a budget of 2 a minute and run off the main actor. If no
+listener will start, the app falls back to tsnet's proxy directly; that is
+counted, shown in Status and logged once. The page retries a
+transport-failed load only when the endpoint generation moved, never on the
+status poll's rule-only republish.
+
+**Review.** No leak path. Every publish, restart and fallback goes through
+`ProxyConfigurationFactory`, which keeps `allowFailover` off and uses the
+same rules. The fixed findings:
+- the mechanism could not see the defunct-after-suspension case (the probe
+  now covers it);
+- false restarts;
+- retries on any republish;
+- a 3-s main-thread wait;
+- an ignored post-ready failure;
+- a silent fallback;
+- a listener data race;
+- two gaps in the host tests.
+
+**Tests:**
+- Host: 89 relay checks, run against the real relay over loopback.
+- L2: `testDefunctRelayListenerIsRestartedByAFailedPageLoad`. The probe
+  refuses, the relay restarts, the endpoint is replaced and the page is
+  retried, about 0.1 s from the tap to recovery.
+
+**Open, for the device:** whether iOS ever kills the relay's listener
+independently of tsnet's. Upstream's premise is not measured here; M6.6 will
+show it.
+
+## 2026-09-21 — R32: sign out, and one way to leave the tailnet
+
+Settings now has two ways out, each named for what it ends.
+
+**Sign out of the dashboard.**
+- Asks the gateway to revoke the session from the page. A page-world POST
+  is the only request that carries both the HttpOnly refresh cookie and the
+  Origin header the CSRF check wants.
+- Blanks the page and waits for the commit, so no script can set a cookie
+  afterwards.
+- Wipes the workspace's web data, whatever the gateway said.
+- Reloads. The sheet says "this device only" if the gateway did not
+  confirm.
+
+**Reset app** is the only way to leave the tailnet. In order:
+1. the same dashboard sign-out, while the tailnet is still up;
+2. LocalAPI `POST /logout`, where control expires the key;
+3. everything on the device goes: node state, web data, node logs and the
+   gateway choice;
+4. first run.
+
+The separate "Log out of Tailscale" was folded in. It deleted the same
+things but skipped the dashboard step, leaving a live 30-day session at the
+gateway.
+
+**Finding: upstream's logout never left the tailnet.** It was
+`LocalBackend.DeleteProfile`, which is local only and never contacts
+control (confirmed in `ipn/ipnlocal/local.go`). Every reinstall left an
+orphan with a valid key.
+
+A logged-out node stays listed as expired in the admin console until it is
+removed there; removing it frees the name.
+
+**A failed control logout deletes nothing** (a timeout, a 5xx, or no
+loopback). The key that could still be expired lives in the state that
+would go. The user chooses:
+- **Retry**;
+- **Delete anyway** (the node stays in the admin console with a valid key
+  until removed there);
+- **Cancel** (the node stays, and the dashboard is signed out).
+
+**Gateway switching** was already built in M5, which R32 confirmed.
+
+**Review findings, all fixed:**
+- a failed logout deleted anyway;
+- the redundant Logout;
+- the page was not stopped before the wipe;
+- one test could not fail for a broken local clear. The unreachable-gateway
+  test now relaunches while the chain is still valid;
+- the copy overstated what goes;
+- log accuracy on 204, and dead code;
+- the Settings view model is now held across re-renders.
+
+**Test support:** testcontrol now honours a logout by expiring the key
+(vendored, its own commit), and the harness reports each node's key state.
+
+**Tests:**
+- Host: 26 sign-out checks and 12 session-fetch checks.
+- Session suite, three tests: sign-out revokes the session at the gateway
+  and on the device; sign-out with the gateway unreachable clears only the
+  device and says so; reset ends the session and starts over.
+- L2: `testAResetExpiresTheNodeAtControl`. The old path would fail it.
+
+## 2026-09-21 — M6: lifecycle tests on the L2 harness (6.5, 6.7; R14)
+
+`LifecycleHarnessTests` and `scripts/test-lifecycle.sh` run with no
+account. They were built by a Fable agent.
+
+**The fake dashboard now behaves like KiroCrew's page:**
+- it reconnects its WebSocket with backoff: 1 s, doubling, capped at 10 s,
+  reset on open;
+- it refetches over HTTP on reconnect and on `visibilitychange`;
+- the server stamps each report with its receive time;
+- `POST /__drop_ws` cuts sockets as a gateway restart does.
+
+`page_check.js` pins the backoff in Node.
+
+**Tests, 6/6:**
+- A defunct loopback listener is replaced reactively, and the page
+  reconnects through the replacement: damage to recovered in 1.6 s, the page
+  back 1.2 s later.
+- Every TCP socket shut down: the app survives and the page reconnects in
+  1.8 s. This test **found a crash**, a nil `Logf` in the vendored debug and
+  close paths, fixed in its own commit.
+- R30's relay-listener recovery.
+- Home, then a SIGSTOP freeze of 7 s or 30 s, then resume. The page is kept
+  (same document, no reload), nothing reached the dashboard while frozen,
+  and a fresh request crosses the tailnet 0.45–0.55 s after activation.
+
+The freezer is host-side: it is triggered by the app's "Background:" log
+line and SIGSTOPs, then SIGCONTs, the app's pid.
+
+On the simulator, `shutdown()` on a *listening* socket returns ENOTCONN. So
+the shutdown-all case exercises the page's recovery, not the listener
+replacement; the defunct-loopback test covers that.
+
+**Still device-only (M6.6):** real suspension, jetsam and listener
+reclamation, and time-to-interactive after 1 min, 10 min, 1 h and
+overnight, run untethered. The simulator never truly suspends a process.
+That, and M6's AC numbers, need the phone (O1–O3).
+
+**Test tiers:**
+- The lifecycle suite runs in the full tier, and in the quick tier only
+  when recovery code or its fixtures change.
+- `testAResetExpiresTheNodeAtControl` is named to sort early. The L2
+  login-link scan proves itself on the last test's login, and a reset
+  deletes the node logs.

@@ -13,12 +13,27 @@ Page routes (HTTPS):
   GET  /healthz     {"ok":true}
   GET  /redirect-away   302 to another origin (R3: a blocked redirect must not
                     paint the error page over a working dashboard)
-  POST /__report    the page's self-report; stored per Host
+  GET  /?again      the page again, from its own "Open again" link: a
+                    same-origin main-frame navigation a test can cause (R30)
+  POST /__report    the page's self-report; stored per Host, stamped with the
+                    time it was received (M6: "after the resume" needs a clock
+                    the frozen app cannot have run)
 
 Control routes (plain HTTP, 127.0.0.1:<control-port>):
   GET  /__state     {"reports": {host: latest report}, "requests": {host: n},
-                     "paths": [recent "HOST METHOD PATH | USER-AGENT" lines]}
+                     "paths": [recent "HOST METHOD PATH | USER-AGENT" lines],
+                     "ws_open": n}
   POST /__reset     clear all of the above
+  POST /__drop_ws   close every open WebSocket server-side, as a gateway
+                    restart does; the page must reconnect by itself (M6.4)
+
+The page reconnects its WebSocket the way KiroCrew's does (PLAN M6.4): on
+close, after 1 s, doubling, capped at 10 s, reset to 1 s when a connection
+opens; each reconnect refetches (KiroCrew has no replay cursor, so anything
+missed is recovered by HTTP). The report counts reconnects and refetches, so a
+test can tell the page's own reconnect from an app-side reload (a reload is a
+new `doc`). A reconnect attempt goes where every other request goes -- through
+the app's proxy -- so the anti-leak counts (L1) stay at zero when it fails.
 
 Why a server-side observation channel (R13): the accessibility tree is
 unreliable for dynamic web content, and an evaluateJavaScript poll fights
@@ -51,6 +66,8 @@ STATE_LOCK = threading.Lock()
 REPORTS = {}          # host -> latest report dict
 REQUESTS = {}         # host -> count of page-side requests
 PATHS = deque(maxlen=200)
+REPORT_SEQ = 0        # every stored report gets the next number
+WS_OPEN = set()       # the handlers of WebSocket connections currently open
 
 
 def host_of(handler):
@@ -67,6 +84,7 @@ PAGE = """<!doctype html><meta charset=utf-8>
 <h1 id=title>FAKE DASHBOARD</h1>
 <p id=wsstate>ws:idle</p><p id=sse>sse:idle</p><p id=echo></p>
 <p><a id=away href="/redirect-away" style="font-size:22px">Redirect away</a></p>
+<p><a id=again href="/?again" style="font-size:22px">Open again</a></p>
 <p><button id=signin style="font-size:22px" onclick="signIn()">Sign in with token</button></p>
 <script>
 // A random id per document, so a test can tell a report from THIS page load
@@ -79,6 +97,13 @@ var DOC = Math.random().toString(36).slice(2);
 function signIn() {
   location.assign('/?' + 'tok' + 'en=' + ['OFFLINE', 'TEST', 'TOKEN', '7f3a'].join('-'));
 }
+// The page's own reconnect, as KiroCrew's (PLAN M6.4): on close, wait 1 s,
+// doubling, capped at 10 s; reset to 1 s once a connection opens. Every
+// reconnect refetches over HTTP, because the protocol has no replay cursor.
+// The counters go in the report, so a test can tell this reconnect from an
+// app-side reload: a reload starts a new document, and a new DOC.
+var WS_OPENS = 0, RECONNECTS = 0, REFETCHES = 0, VISIBLE_FETCHES = 0, DELAY = 1000;
+function set(id, text) { document.getElementById(id).textContent = text; }
 function report() {
   var s = {
     doc: DOC,
@@ -88,17 +113,50 @@ function report() {
     echo: document.getElementById('echo').textContent,
     search: location.search,
     href_path: location.pathname,
+    ws_opens: WS_OPENS,
+    reconnects: RECONNECTS,
+    refetches: REFETCHES,
+    visible_fetches: VISIBLE_FETCHES,
+    next_delay_ms: DELAY,
     ts: Date.now()
   };
   fetch('/__report', {method: 'POST', body: JSON.stringify(s),
                       headers: {'Content-Type': 'application/json'}}).catch(function(){});
 }
-var ws = new WebSocket('wss://' + location.host + '/ws');
-ws.onopen = function () { document.getElementById('wsstate').textContent = 'ws:open'; ws.send('ping'); report(); };
-ws.onmessage = function (e) { document.getElementById('echo').textContent = 'echo:' + e.data; report(); };
-ws.onclose = function () { document.getElementById('wsstate').textContent = 'ws:closed'; report(); };
+// A fresh HTTP request, never from a cache: what KiroCrew does after a
+// reconnect and when the page becomes visible again (PLAN 6.3).
+function refetch() {
+  return fetch('/healthz', {cache: 'no-store'})
+    .then(function (r) { return r.ok; }).catch(function () { return false; });
+}
+function connect() {
+  var ws = new WebSocket('wss://' + location.host + '/ws');
+  ws.onopen = function () {
+    WS_OPENS += 1;
+    DELAY = 1000;
+    set('wsstate', 'ws:open');
+    ws.send('ping');
+    if (WS_OPENS > 1) {
+      refetch().then(function (ok) { if (ok) { REFETCHES += 1; } report(); });
+    }
+    report();
+  };
+  ws.onmessage = function (e) { set('echo', 'echo:' + e.data); report(); };
+  ws.onclose = function () {
+    set('wsstate', 'ws:closed');
+    report();
+    var wait = DELAY;
+    DELAY = Math.min(DELAY * 2, 10000);
+    setTimeout(function () { RECONNECTS += 1; connect(); }, wait);
+  };
+}
+connect();
 var es = new EventSource('/events');
-es.onmessage = function (e) { document.getElementById('sse').textContent = 'sse:' + e.data; };
+es.onmessage = function (e) { set('sse', 'sse:' + e.data); };
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState !== 'visible') { return; }
+  refetch().then(function (ok) { if (ok) { VISIBLE_FETCHES += 1; } report(); });
+});
 report();
 setInterval(report, 1000);
 </script>"""
@@ -154,7 +212,14 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self.body(b"bad json", "text/plain", 400)
+        # Stamped with the server's clock: "received after the app resumed"
+        # cannot be judged by a timestamp the page took, and a frozen app
+        # cannot forge a receive time.
+        global REPORT_SEQ
         with STATE_LOCK:
+            REPORT_SEQ += 1
+            data["received_at"] = time.time()
+            data["received_seq"] = REPORT_SEQ
             REPORTS[host_of(self)] = data
         return self.body(b'{"ok":true}', "application/json")
 
@@ -190,6 +255,10 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")
         self.send_header("Sec-WebSocket-Accept", acc)
+        # Registered before the 101 goes out, so a client that sees the
+        # upgrade can count on /__state's ws_open including it.
+        with STATE_LOCK:
+            WS_OPEN.add(self)
         self.end_headers()
         self.close_connection = True
         try:
@@ -205,6 +274,17 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
                     self.ws_write(op, b"echo:" + payload)
         except Exception:
             return
+        finally:
+            with STATE_LOCK:
+                WS_OPEN.discard(self)
+
+    def drop(self):
+        """Cut this WebSocket's TCP connection from another thread, as a
+        gateway restart does: no close frame, the client sees the FIN."""
+        try:
+            self.request.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
     def ws_read(self):
         b1, b2 = self.rfile.read(2)
@@ -250,20 +330,66 @@ class Control(BaseHTTPRequestHandler):
         if self.path != "/__state":
             return self.reply({"error": "not found"}, 404)
         with STATE_LOCK:
-            return self.reply({"reports": REPORTS, "requests": REQUESTS, "paths": list(PATHS)})
+            return self.reply({"reports": REPORTS, "requests": REQUESTS, "paths": list(PATHS),
+                               "ws_open": len(WS_OPEN)})
 
     def do_POST(self):
-        if self.path != "/__reset":
-            return self.reply({"error": "not found"}, 404)
-        with STATE_LOCK:
-            REPORTS.clear()
-            REQUESTS.clear()
-            PATHS.clear()
-        return self.reply({"ok": True})
+        if self.path == "/__reset":
+            with STATE_LOCK:
+                REPORTS.clear()
+                REQUESTS.clear()
+                PATHS.clear()
+            return self.reply({"ok": True})
+        if self.path == "/__drop_ws":
+            with STATE_LOCK:
+                open_now = list(WS_OPEN)
+            for h in open_now:
+                h.drop()
+            return self.reply({"ok": True, "dropped": len(open_now)})
+        return self.reply({"error": "not found"}, 404)
 
 
 class V6Server(ThreadingHTTPServer):
     address_family = socket.AF_INET6
+
+
+def ws_drop_probe(port, control_port, ca):
+    """Self-test (make check): an open WebSocket is counted by /__state and cut
+    by POST /__drop_ws within 3 s. Exits non-zero otherwise."""
+    import os
+    import urllib.request
+    ctx = ssl.create_default_context(cafile=ca)
+    s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=5),
+                        server_hostname="dash.localtest.me")
+    key = base64.b64encode(os.urandom(16)).decode()
+    s.sendall(("GET /ws HTTP/1.1\r\nHost: dash.localtest.me\r\nUpgrade: websocket\r\n"
+               "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n" % key).encode())
+    head = b""
+    while b"\r\n\r\n" not in head:
+        chunk = s.recv(1024)
+        if not chunk:
+            raise SystemExit("ws_drop_probe: no upgrade response")
+        head += chunk
+    if not head.startswith(b"HTTP/1.1 101"):
+        raise SystemExit("ws_drop_probe: upgrade refused: %r" % head[:80])
+    ctl = "http://127.0.0.1:%d" % control_port
+    state = json.load(urllib.request.urlopen(ctl + "/__state", timeout=5))
+    if state.get("ws_open", 0) < 1:
+        raise SystemExit("ws_drop_probe: /__state does not count the open socket: %r" % state.get("ws_open"))
+    reply = json.load(urllib.request.urlopen(urllib.request.Request(ctl + "/__drop_ws", method="POST"), timeout=5))
+    if reply.get("dropped", 0) < 1:
+        raise SystemExit("ws_drop_probe: /__drop_ws dropped nothing: %r" % reply)
+    s.settimeout(3)
+    try:
+        data = s.recv(16)
+    except (ssl.SSLError, OSError):
+        data = b""           # a reset is a cut too
+    if data:
+        raise SystemExit("ws_drop_probe: the socket was not cut; got %r" % data)
+    s.close()
+    state = json.load(urllib.request.urlopen(ctl + "/__state", timeout=5))
+    if state.get("ws_open", 1) != 0:
+        raise SystemExit("ws_drop_probe: a dropped socket is still counted: %r" % state.get("ws_open"))
 
 
 def serve(server):

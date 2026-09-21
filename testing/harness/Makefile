@@ -241,7 +241,18 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	if curl -sS --fail --max-time 5 --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ >/dev/null 2>&1; then \
 	    echo "FAIL: a closed proxy listener still served the load" >&2; exit 1; fi; \
 	curl -s -X POST $$CTL/open >/dev/null; \
-	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; echo "    ok (and it recovers on /open)"
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; echo "    ok (and it recovers on /open)"; \
+	echo "==> M6: a report is stamped with the time the server received it"; \
+	curl -s -X POST $$DCTL/__reset >/dev/null; \
+	curl -sS --fail --cacert ca.pem -H 'Content-Type: application/json' -d '{"doc":"probe"}' \
+	    https://dash.localtest.me:$(DASH_PORT)/__report >/dev/null; \
+	curl -s $$DCTL/__state | $(PY) -c "import json, sys, time; r = json.load(sys.stdin)['reports']['dash.localtest.me']; \
+	    assert abs(r['received_at'] - time.time()) < 5 and r['received_seq'] >= 1, r"; echo "    ok"; \
+	echo "==> M6: /__drop_ws cuts an open WebSocket, as a gateway restart does"; \
+	$(PY) -c "from dashboard import ws_drop_probe; ws_drop_probe($(DASH_PORT), $(DASH_CONTROL_PORT), 'ca.pem')"; echo "    ok"; \
+	echo "==> M6.4: the page reconnects as KiroCrew's does (1 s doubling to 10 s, reset on open, refetch)"; \
+	command -v node >/dev/null || { echo "FAIL: node is needed for page_check.js (brew install node)" >&2; exit 1; }; \
+	node page_check.js
 	@$(MAKE) --no-print-directory harness-down
 
 .PHONY: help

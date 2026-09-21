@@ -316,6 +316,9 @@ def run(port, cport, ca):
     kept = dict(lo.jar)
     s, _, body, _ = lo.req("POST", "/api/auth/logout", {"Origin": ORIGIN})
     check(s == 200 and json.loads(body) == {"logged_out": True}, "logout: %d %r" % (s, body))
+    c = control(cport, "GET", "/__state")["counters"]
+    check(c["logouts"] == 1 and c["logout_revocations"] == 1,
+          "a logout with the refresh cookie is counted as a revocation (R32): %r" % c)
     lo.jar = kept   # present the cookies logout just cleared, as a saved copy would
     s, _, body, _ = lo.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
     check(s == 401 and json.loads(body).get("error") == "refresh_chain_revoked", "the chain is revoked: %r" % body)
