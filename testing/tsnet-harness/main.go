@@ -15,15 +15,19 @@
 //     suffix tail-scale.ts.net -- the same fixture tailnet name the offline
 //     suite uses, and NXDOMAIN in public DNS, so a name that leaks past the
 //     node fails instead of resolving.
+//
 //   - DERP and STUN on 127.0.0.1.
+//
 //   - Two peers. "dash" forwards tailnet :443 to the fake dashboard
 //     (dashboard.py, which terminates TLS with the test CA's leaf for
 //     dash.tail-scale.ts.net), and journals every connection with its tailnet
 //     source address -- the proof a load went through the tailnet. "plain"
 //     serves nothing: a second peer that is not a gateway.
+//
 //   - The login page testcontrol lacks. With RequireAuth the node's
 //     BrowseToURL is <control>/auth/<id>; visiting it completes that login,
 //     as a browser that already has an identity-provider session would.
+//
 //   - A plain-HTTP API for the tests (default 127.0.0.1:8491):
 //
 //     GET  /state     control URL, mode, nodes, logins, journal
@@ -37,7 +41,20 @@
 //
 // The harness sets the same no-log-upload knob as the app (decision D1):
 // tsnet otherwise starts a logtail uploader to log.tailscale.com for every
-// node, test nodes included.
+// node, test nodes included. It also turns the port mapper off, so harness
+// nodes never probe or ask the LAN router for mappings.
+//
+// What is and is not loopback-only: the control plane, the API, DERP and the
+// dashboard target are 127.0.0.1. STUN and each node's WireGuard UDP socket
+// bind all interfaces, as Tailscale's own code does; every address they are
+// told to talk to is loopback.
+//
+// Isolation between tests: a reset starts a new control plane, and events
+// (journal, logins) are stamped with the reset they belong to, so a straggler
+// from the previous test can never satisfy the next one. Nodes still attached
+// to an old control plane keep talking to it, isolated; the tests terminate
+// their app, and one that reconnected later would join the new tailnet as a
+// second app node, which TailnetHarnessTests treats as a failure.
 //
 //	tsnet-harness [-control 127.0.0.1:8490] [-api 127.0.0.1:8491] \
 //	              [-dashboard 127.0.0.1:8443] [-state DIR] [-v]
@@ -78,6 +95,9 @@ func init() {
 	// D1: no node in this process uploads logs. Must run before any tsnet
 	// server starts; envknob is read when the logger is built.
 	envknob.SetNoLogsNoSupport()
+	// No NAT-PMP/PCP/UPnP: the tailnet is all loopback (as Tailscale's own
+	// integration tests set it).
+	envknob.Setenv("TS_DISABLE_PORTMAPPER", "1")
 }
 
 type options struct {
@@ -95,12 +115,14 @@ type Mode struct {
 }
 
 type loginEvent struct {
+	Gen       int       `json:"generation"`
 	Path      string    `json:"path"`
 	Completed bool      `json:"completed"`
 	At        time.Time `json:"at"`
 }
 
 type connEvent struct {
+	Gen   int       `json:"generation"`
 	Peer  string    `json:"peer"`
 	From  string    `json:"from"` // tailnet source address of the connection
 	At    time.Time `json:"at"`
@@ -157,9 +179,9 @@ func main() {
 		log.Fatal(err)
 	}
 	o.stateDir = d
-	for _, a := range []string{o.controlAddr, o.apiAddr} {
+	for _, a := range []string{o.controlAddr, o.apiAddr, o.dashboardAddr} {
 		if !isLoopback(a) {
-			log.Fatalf("%s is not a loopback address; the harness never listens beyond this host", a)
+			log.Fatalf("%s is not a loopback address; the control plane, the API and the dashboard target are loopback only", a)
 		}
 	}
 
@@ -220,11 +242,19 @@ func (h *harness) logf(prefix string) logger.Logf {
 	}
 }
 
-// serveControl is the control plane: testcontrol for everything except the
-// login page, which testcontrol does not serve.
+// serveControl is the control plane: the login page testcontrol lacks, and
+// testcontrol's own routes. Anything else is a 404 here, because testcontrol
+// answers an unhandled path with `go panic(...)`, and a stray GET / (or a
+// favicon fetch) would take the whole harness down.
 func (h *harness) serveControl(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/auth/") {
+	p := r.URL.Path
+	if strings.HasPrefix(p, "/auth/") {
 		h.serveLogin(w, r)
+		return
+	}
+	if !(p == "/key" || p == "/ts2021" || p == "/generate_204" ||
+		strings.HasPrefix(p, "/machine/") || strings.HasPrefix(p, "/c2n/")) {
+		http.NotFound(w, r)
 		return
 	}
 	h.mu.Lock()
@@ -242,11 +272,17 @@ func (h *harness) serveControl(w http.ResponseWriter, r *http.Request) {
 // provider. Idempotent: testcontrol completes an auth path at most once.
 func (h *harness) serveLogin(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
-	ctl := h.ctl
+	ctl, gen := h.ctl, h.gen
 	h.mu.Unlock()
 	ok := ctl != nil && ctl.CompleteAuth(r.URL.Path)
 	h.mu.Lock()
-	h.logins = append(h.logins, loginEvent{Path: r.URL.Path, Completed: ok, At: time.Now()})
+	if h.gen != gen {
+		// A reset raced this visit: the login belonged to a control plane
+		// that no longer exists. Neither record it nor call it a success.
+		ok = false
+	} else {
+		h.logins = append(h.logins, loginEvent{Gen: gen, Path: r.URL.Path, Completed: ok, At: time.Now()})
+	}
 	h.mu.Unlock()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -342,13 +378,14 @@ func (h *harness) startPeer(ctx context.Context, ctl *testcontrol.Server, gen in
 			s.Close()
 			return nil, err
 		}
-		go h.forward(name, ln, forward)
+		go h.forward(gen, name, ln, forward)
 	}
 	return p, nil
 }
 
-// forward relays each tailnet connection to target, journaling its source.
-func (h *harness) forward(name string, ln net.Listener, target string) {
+// forward relays each tailnet connection to target, journaling its source
+// under the generation this peer belongs to.
+func (h *harness) forward(gen int, name string, ln net.Listener, target string) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -356,13 +393,15 @@ func (h *harness) forward(name string, ln net.Listener, target string) {
 		}
 		go func() {
 			defer c.Close()
-			ev := connEvent{Peer: name, From: c.RemoteAddr().String(), At: time.Now()}
+			ev := connEvent{Gen: gen, Peer: name, From: c.RemoteAddr().String(), At: time.Now()}
 			up, err := net.DialTimeout("tcp", target, 5*time.Second)
 			if err != nil {
 				ev.Error = err.Error()
 			}
 			h.mu.Lock()
-			h.journal = append(h.journal, ev)
+			if ev.Gen == h.gen {
+				h.journal = append(h.journal, ev)
+			}
 			h.mu.Unlock()
 			if err != nil {
 				return
@@ -401,9 +440,21 @@ func (h *harness) snapshot() state {
 		Generation: h.gen,
 		Control:    h.baseURL,
 		Mode:       h.mode,
-		Logins:     append([]loginEvent{}, h.logins...),
-		Journal:    append([]connEvent{}, h.journal...),
+		Logins:     []loginEvent{},
+		Journal:    []connEvent{},
 		Nodes:      []nodeInfo{},
+	}
+	// reset() clears both lists, but an old peer's straggler can append after
+	// that; its generation gives it away.
+	for _, e := range h.logins {
+		if e.Gen == h.gen {
+			st.Logins = append(st.Logins, e)
+		}
+	}
+	for _, e := range h.journal {
+		if e.Gen == h.gen {
+			st.Journal = append(st.Journal, e)
+		}
 	}
 	ctl := h.ctl
 	ours := map[string]bool{}

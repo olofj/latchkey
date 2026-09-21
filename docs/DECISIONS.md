@@ -994,3 +994,97 @@ once that reading is done, so they are not corrected twice.
 when M3 finished. The offline M4 work does not depend on the answer: it runs
 against the fake backend. Anything that does depend on it waits: M7.5, and
 any assumption about `trust_identity` on the real gateway.
+
+## 2026-09-20 — M3 review
+
+Two independent adversarial reviews: one of the app side (`bed6baefd`), one
+of the Go harness and scripts (`54c318d`). Fifteen findings, all fixed:
+
+**App (`app/` review-fix commit):**
+
+1. **(high) The approval gate was hidden after a web login.**
+   - `LoginFinished` sets `loggedInConnecting`, which only `Running` cleared.
+     A tailnet that requires approval therefore showed "Logged in.
+     Connecting…" indefinitely, and the gate appeared only after a relaunch.
+   - My approval test never logged in, so it could not see this.
+   - Fix: NeedsMachineAuth clears the flag, and the view and `mapState` check
+     it first, since `LoginFinished` can arrive after the state.
+   - New test `testLoginThenApprovalShowsTheApprovalGate` (auth and machine
+     together). **Demonstrated both ways:** on the unfixed code it fails at
+     "after the login, the gate explains the pending approval"; with the fix
+     it passes.
+2. **(low)** The login test's "nothing loads before login" check is weak by
+   construction: there is no netmap, so the name cannot resolve. Its comment
+   now says so. The approval tests carry the real check, and
+   `assertNoDashboardLoad` now also requires an empty `dash` journal, which
+   catches a tailnet connection that failed TLS or sent another Host.
+3. **(low)** The join test claimed SSE but checked only WebSocket. It now
+   requires an SSE tick.
+4. **(low)** `-TestControlURL ""`, the flag as the last argument, and
+   `-TestControlURL=…` all fell back to the real control plane. A present
+   but unusable argument is now fatal, via the new
+   `TestHooks.anyArgument(hasPrefix:)`.
+5. **(low)** The loopback check accepted `127.0.0.01` and `127.+0.+0.+1`.
+   Swift parses these as numbers, but Go treats them as DNS names, so a node
+   would have tried DNS and then Tailscale's public resolvers. The check is
+   now an exact allowlist: `127.0.0.1`, `::1`, `localhost`.
+6. **(low)** The host test's `<crash>` accepted any failure. It now requires
+   the override's own message on stderr. It also checks that
+   `LATCHKEY_TEST_HOOKS` is defined only in the Testing configuration of
+   `project.pbxproj`. That check is validated: a copy with Testing renamed
+   fails it.
+
+**Harness and scripts (parent review-fix commit):**
+
+1. **(medium) Events could leak across resets.**
+   - A straggler from the previous test's old `dash` peer, or a login racing
+     a reset, could land in the new journal as "dash from 100.64.0.3". That
+     is the next app's address too, since testcontrol numbers by node count.
+   - Every journal and login event now carries its reset generation. Only the
+     current generation is kept or shown, and a login that raced a reset is
+     neither recorded nor reported as a success.
+2. **(medium) The scripts could pass with nothing run.**
+   `scripts/test-tailnet.sh` and `scripts/test-offline.sh` passed on
+   `xcodebuild`'s exit code alone, which is 0 when a stale build or a wrong
+   name runs zero tests. Both now require every `func test…` in their file
+   to pass.
+3. **(low–medium) The wildcard guard in `gen-certs.sh` checked nothing with
+   `/usr/bin/openssl`.** LibreSSL has no `-checkhost`, so it printed nothing
+   and the guard passed. It now reads the SAN text. The regex is validated
+   both ways, and the whole script was run under LibreSSL.
+4. **(low–medium)** Both preflights read grep's exit 2 (a missing file) as
+   "clean". Exit code 2 or higher is now an error.
+5. **(low)** "A reset forgets earlier nodes" inspected a brand-new server,
+   which is empty by construction. It now starts a fresh probe while an
+   earlier one is still running, and requires the new probe's peers to be
+   exactly {dash, plain}.
+   - **Considered and rejected:** closing old control connections on reset.
+     That would make a still-running old node reconnect and join the new
+     tailnet, which is worse isolation.
+6. **(low)** The address check used `curl -k` and asserted nothing. It now
+   dials dash **by address** (`socks5://` with a pinned `--resolve`), with
+   full certificate verification. It also requires a new `dash` journal
+   entry, and it says when the host has no conflicting route.
+7. **(low–medium)** `make check` over a running `make up` killed the live
+   dashboard and deleted the live state directory. `check` now refuses in
+   that case, and it has its own state directory.
+8. **(low)** A stray `GET /` on `:8490` reached testcontrol's `go panic` and
+   killed the harness. Only testcontrol's own routes reach it now; anything
+   else gets a 404. `down` also checks that the pid's cwd is ours before
+   killing it.
+9. **(low)** The port mapper would probe the LAN router. It is now disabled
+   (`TS_DISABLE_PORTMAPPER`, as Tailscale's integration tests do).
+   `-dashboard` must also be loopback. The docs now say plainly that STUN and
+   WireGuard UDP bind all interfaces, as Tailscale's own code does.
+
+**Confirmed sound by the reviewers:**
+- No log upload (`SetNoLogsNoSupport` empties logtail's transport).
+- No path to the real control plane or DERP.
+- The override applies at the single `Configuration` site and is never
+  persisted.
+- Harness and test field names line up.
+- The `logins` evidence can come only from the app's auth session.
+- No data races on `h.mu`.
+
+After the fixes: self-test ok, `make test-policy` ok, L2 4/4 in 83 s, L1
+9/9 (see the commit).

@@ -73,9 +73,13 @@ openssl x509 -in server.pem -noout -text | grep -q "DNS:dash.tail-scale.ts.net" 
 openssl x509 -in server.pem -noout -text | grep -q "DNS:dash.localtest.me" \
     || { echo "error: leaf is missing dash.localtest.me — the anti-leak test (R10) needs it" >&2; exit 1; }
 # The M2 mismatch test needs a tailnet name this leaf does NOT cover. A
-# wildcard would cover it, and did once (M3).
-if openssl x509 -in server.pem -noout -checkhost wrong.tail-scale.ts.net | grep -q "does match"; then
-    echo "error: leaf covers wrong.tail-scale.ts.net — the certificate-mismatch test needs it not to" >&2; exit 1
+# wildcard would cover it, and did once (M3). Read the SAN text rather than
+# use -checkhost, which macOS's LibreSSL does not have: there it printed
+# nothing and the guard passed without checking (M3 review).
+SANS=$(openssl x509 -in server.pem -noout -text | grep -A1 "Subject Alternative Name" | tail -1)
+[[ -n "$SANS" ]] || { echo "error: could not read the leaf's subjectAltName" >&2; exit 1; }
+if grep -qE 'DNS:\*|DNS:wrong\.tail-scale\.ts\.net' <<<"$SANS"; then
+    echo "error: leaf covers wrong.tail-scale.ts.net (a wildcard or the name itself) — the certificate-mismatch test needs it not to" >&2; exit 1
 fi
 
 echo "ok: ca.pem, ca.der, server.pem, server.key"

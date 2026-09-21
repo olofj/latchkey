@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -92,17 +93,32 @@ func runSelftest(h *harness, caFile string) error {
 
 	step("R17: harness 100.64.x addresses live in userspace netstacks")
 	route, _ := exec.Command("route", "-n", "get", dashIP).CombinedOutput()
-	iface := "none"
+	iface := ""
 	for _, line := range strings.Split(string(route), "\n") {
 		if f := strings.Fields(line); len(f) == 2 && f[0] == "interface:" {
 			iface = f[1]
 		}
 	}
-	if _, err := curl("-k", "--proxy", proxy, "https://"+dashIP+"/healthz"); err != nil {
-		return fmt.Errorf("dash by tailnet IP %s through the node: %w", dashIP, err)
+	// Dial dash by its tailnet ADDRESS (socks5://, not socks5h://, and a
+	// pinned resolve), with full certificate verification, and require the
+	// dash peer to journal it: the harness's own dash answered, whatever the
+	// host's routing table says about that address.
+	before := journalCount(h, "dash", probeIP)
+	if out, err := curl("--cacert", caFile, "--proxy", "socks5://tsnet:"+cred+"@"+addr,
+		"--resolve", "dash."+MagicDNSSuffix+":443:"+dashIP,
+		"https://dash."+MagicDNSSuffix+"/healthz"); err != nil {
+		return fmt.Errorf("dash by tailnet address %s through the node: %w\n%s", dashIP, err, out)
 	}
-	ok("dash at %s reached through the node; the host itself routes %s via %q, which the netstack never consults",
-		dashIP, dashIP, iface)
+	if journalCount(h, "dash", probeIP) <= before {
+		return fmt.Errorf("the connection to %s was not journaled by the harness's dash peer", dashIP)
+	}
+	if strings.HasPrefix(iface, "utun") {
+		ok("dash at %s reached through the node and journaled, while the host routes %s via %s (a VPN claiming 100.64/10): the netstack never consults host routes",
+			dashIP, dashIP, iface)
+	} else {
+		ok("dash at %s reached through the node and journaled; no conflicting host route here (%q), so this run shows less than it does on a host running Tailscale",
+			dashIP, iface)
+	}
 	probe.Close()
 
 	// --- RequireAuth: the node waits at NeedsLogin until its login URL is visited.
@@ -177,16 +193,31 @@ func runSelftest(h *harness, caFile string) error {
 	}
 	ok("Running after /approve")
 
-	step("a reset forgets earlier nodes")
+	step("a reset isolates earlier nodes (one is still running)")
 	if _, err := apiPost(api + "/reset"); err != nil {
 		return err
 	}
-	for _, n := range h.snapshot().Nodes {
-		if !n.HarnessPeer {
-			return fmt.Errorf("node %s survived the reset", n.Hostname)
-		}
+	// p3 is still up and still attached to the previous control plane. A
+	// node joining the new one must see exactly the harness's peers.
+	p4, _, err := h.probe(ctx, "probe-after-reset", "Running")
+	if err != nil {
+		return err
 	}
-	ok("only the harness's own peers remain")
+	defer p4.Close()
+	lc4, _ := p4.LocalClient()
+	st4, err := lc4.Status(ctx)
+	if err != nil {
+		return err
+	}
+	var peers4 []string
+	for _, p := range st4.Peer {
+		peers4 = append(peers4, p.HostName)
+	}
+	sort.Strings(peers4)
+	if strings.Join(peers4, ",") != "dash,plain" {
+		return fmt.Errorf("after a reset a new node sees peers %v, want exactly [dash plain]", peers4)
+	}
+	ok("a new node sees exactly %v, not the still-running probe-machine", peers4)
 	return nil
 }
 
@@ -253,12 +284,17 @@ func stays(ctx context.Context, s *tsnet.Server, state string, d time.Duration) 
 }
 
 func journalHas(h *harness, peer, fromIP string) bool {
+	return journalCount(h, peer, fromIP) > 0
+}
+
+func journalCount(h *harness, peer, fromIP string) int {
+	n := 0
 	for _, ev := range h.snapshot().Journal {
 		if ev.Peer == peer && ev.Error == "" && strings.HasPrefix(ev.From, fromIP+":") {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 func curl(args ...string) (string, error) {

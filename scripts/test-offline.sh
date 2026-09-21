@@ -39,13 +39,22 @@ say() { printf '::: %s\n' "$*"; }
 # ---------------------------------------------------------------- preflight --
 say "preflight"
 # R10: a real tailnet name in a test config is how a leak turns into a pass.
-if grep -rIl "example" "$APP/UITests/OfflineHarnessTests.swift" "$HARNESS"/*.py \
-        "$HARNESS/Makefile" "$HARNESS/leaf.cnf" 2>/dev/null; then
+# grep exits 2 on a missing file, which must not read as "clean" (M3 review).
+set +e
+grep -rIl "example" "$APP/UITests/OfflineHarnessTests.swift" "$HARNESS"/*.py \
+    "$HARNESS/Makefile" "$HARNESS/leaf.cnf"
+PRE_RC=$?
+set -e
+if [[ $PRE_RC -eq 0 ]]; then
     echo "error: the offline test config references the real tailnet (example.ts.net)." >&2
     echo "       On this Mac those names route through the host's own VPN, so a leak" >&2
     echo "       would SUCCEED instead of failing. Use tail-scale.ts.net / localtest.me." >&2
     exit 1
+elif [[ $PRE_RC -ge 2 ]]; then
+    echo "error: the preflight could not read a file it checks (renamed or missing?)" >&2
+    exit 1
 fi
+EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/OfflineHarnessTests.swift")
 if ifconfig 2>/dev/null | grep -A4 '^utun' | grep -qE 'inet 100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.'; then
     say "WARNING: the host's Tailscale is up (a utun interface holds a 100.64/10 address)."
     say "         Accepted (decision D7): the tests use no tailnet names or addresses,"
@@ -113,6 +122,13 @@ set -e
 TEST_RC=$(( SUITE_RC | SIGNIN_RC ))
 cat "$LOG_DIR/suite.log" "$LOG_DIR/signin.log" > "$LOG_DIR/test.log"
 grep -E "Test Case .*(passed|failed)" "$LOG_DIR/test.log" | sed 's/^/    /' || true
+# Both passes together must pass every test in the file: a stale build or a
+# wrong name runs nothing and still exits 0 (M3 review).
+PASSED=$(grep -cE "Test Case .*OfflineHarnessTests.* passed" "$LOG_DIR/test.log" || true)
+if [[ $TEST_RC -eq 0 && "$PASSED" -ne "$EXPECTED" ]]; then
+    echo "error: $PASSED of $EXPECTED OfflineHarnessTests passed (a stale build? try --build)" >&2
+    TEST_RC=1
+fi
 
 # ----------------------------------------------------------------- R1 check --
 # testSignInTokenIsStrippedFromTheAddress loads /?token=OFFLINE-TEST-TOKEN-7f3a

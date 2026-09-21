@@ -36,12 +36,22 @@ say() { printf '::: %s\n' "$*"; }
 
 # ---------------------------------------------------------------- preflight --
 say "preflight"
-if grep -rIl "example" "$APP/UITests/TailnetHarnessTests.swift" "$TSNET"/*.go \
-        "$TSNET/Makefile" "$HARNESS/leaf.cnf" 2>/dev/null; then
+# grep exits 1 for "no match" and 2 for an error such as a missing file --
+# and 2 must not read as "clean" (M3 review).
+set +e
+grep -rIl "example" "$APP/UITests/TailnetHarnessTests.swift" "$TSNET"/*.go \
+    "$TSNET/Makefile" "$HARNESS/leaf.cnf"
+PRE_RC=$?
+set -e
+if [[ $PRE_RC -eq 0 ]]; then
     echo "error: the L2 test config references the real tailnet (example.ts.net)." >&2
     echo "       Use the fixture tailnet, tail-scale.ts.net." >&2
     exit 1
+elif [[ $PRE_RC -ge 2 ]]; then
+    echo "error: the preflight could not read a file it checks (renamed or missing?)" >&2
+    exit 1
 fi
+EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/TailnetHarnessTests.swift")
 
 # ------------------------------------------------------------------ harness --
 teardown() {
@@ -92,6 +102,13 @@ set +e
 TEST_RC=$?
 set -e
 grep -E "Test Case .*(passed|failed)" "$LOG_DIR/test.log" | sed 's/^/    /' || true
+# A green xcodebuild is not enough: with a stale build or a wrong test name it
+# runs NOTHING and exits 0 (M3 review). Every test in the file must pass.
+PASSED=$(grep -cE "Test Case .*TailnetHarnessTests.* passed" "$LOG_DIR/test.log" || true)
+if [[ $TEST_RC -eq 0 && "$PASSED" -ne "$EXPECTED" ]]; then
+    echo "error: $PASSED of $EXPECTED TailnetHarnessTests passed (a stale build? try --build)" >&2
+    TEST_RC=1
+fi
 
 # ------------------------------------------------------------------ summary --
 ELAPSED=$(( $(date +%s) - START ))

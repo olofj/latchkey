@@ -20,6 +20,7 @@ BIN          := $(RUN_DIR)/tsnet-harness
 PID          := $(RUN_DIR)/tsnet-harness.pid
 LOG          := $(RUN_DIR)/tsnet-harness.log
 STATE        := $(CURDIR)/$(RUN_DIR)/state
+CHECK_STATE  := $(CURDIR)/$(RUN_DIR)/check-state
 
 .PHONY: build
 build:  ## Build the harness
@@ -56,9 +57,16 @@ up: build down  ## Start the fake dashboard and the harness
 
 .PHONY: down
 down:  ## Stop the harness and the fake dashboard
+	@# Kill the pid only if it is still ours (its cwd is this directory): a
+	@# harness that died leaves its pidfile behind, and the number may since
+	@# belong to something else (M3 review).
 	@if [ -f $(PID) ]; then \
-	    pid=$$(cat $(PID)); kill $$pid 2>/dev/null || true; \
-	    for i in $$(seq 1 50); do kill -0 $$pid 2>/dev/null || break; sleep 0.1; done; \
+	    pid=$$(cat $(PID)); \
+	    cwd=$$(lsof -a -p $$pid -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1); \
+	    if [ "$$cwd" = "$(CURDIR)" ]; then \
+	        kill $$pid 2>/dev/null || true; \
+	        for i in $$(seq 1 50); do kill -0 $$pid 2>/dev/null || break; sleep 0.1; done; \
+	    fi; \
 	    rm -f $(PID); \
 	fi
 	@$(MAKE) -C ../harness --no-print-directory harness-down >/dev/null
@@ -81,12 +89,22 @@ reap:  ## Stop strays on the harness ports (only processes run from here)
 
 .PHONY: check
 check: build  ## Host-side self-test (needs the fake dashboard; starts and stops it)
+	@# Refuse to run over a live harness: this starts and stops the shared
+	@# fake dashboard and needs the same ports (M3 review).
+	@if [ -f $(PID) ] && kill -0 $$(cat $(PID)) 2>/dev/null; then \
+	    echo "error: the harness is running (make up); stop it first with make down" >&2; exit 1; \
+	fi
+	@for port in $(CONTROL_PORT) $(API_PORT); do \
+	    if lsof -nP -iTCP:$$port -sTCP:LISTEN -t >/dev/null 2>&1; then \
+	        echo "error: 127.0.0.1:$$port is in use; a stray? make reap" >&2; exit 1; \
+	    fi; \
+	done
 	@$(MAKE) -C ../harness --no-print-directory harness-up
 	@status=0; \
 	$(BIN) -selftest -ca ../harness/ca.pem -control 127.0.0.1:$(CONTROL_PORT) \
-	    -api 127.0.0.1:$(API_PORT) -dashboard 127.0.0.1:$(DASH_PORT) -state $(STATE) || status=$$?; \
+	    -api 127.0.0.1:$(API_PORT) -dashboard 127.0.0.1:$(DASH_PORT) -state $(CHECK_STATE) || status=$$?; \
 	$(MAKE) -C ../harness --no-print-directory harness-down >/dev/null; \
-	rm -rf $(STATE); \
+	rm -rf $(CHECK_STATE); \
 	exit $$status
 
 .PHONY: help
