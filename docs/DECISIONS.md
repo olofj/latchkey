@@ -1372,3 +1372,37 @@ every request there comes from 127.0.0.1.
 - `contract_test.py --fake-only` passes all nine steps, with grace re-serving
   the same tokens.
 
+## 2026-09-20 — Before M5: R27 and R28
+
+**R27: the proxy rules no longer follow the peer list.**
+`App/Network/StableProxyPolicy` publishes exactly
+`[100.64.0.0/10, fd7a:115c:a1e0::/48, <MagicDNS suffix>]`. `TSNetManager`
+builds its proxy configuration from that, not from upstream's
+`TailnetProxyPolicy.make`.
+- Peers joining, leaving or being renamed no longer republish the
+  configuration under a live dashboard. It changes only if the suffix does.
+- It is still a scoped split tunnel: nothing public is proxied, which is the
+  thing upstream's AGENTS.md warns about.
+- `hasPeerData` and the proxy-everything test mode still come from
+  upstream's policy.
+- Chose R27's first option over a republish-mid-WebSocket test. It removes
+  the churn instead of testing that WebKit survives it. The app only ever
+  loads FQDN origins; bare names are rewritten first.
+- Host-tested (`test-proxy-config`, 26 checks). The tests include a control
+  showing upstream's own policy DOES change under the same churn.
+- PLAN §7.3's "M6.4 tests the republish" is moot: there is no republish on
+  peer churn to survive.
+
+**R28: App Transport Security is on, with no exceptions.** The whole
+`NSAppTransportSecurity` dictionary is gone:
+- `NSAllowsArbitraryLoads`;
+- `NSAllowsArbitraryLoadsInWebContent`;
+- the malformed `NSAllowsArbitraryLoadsInWebContentUsageDescription`
+  block, which held a doubly nested exception dict under a key ATS does not
+  know.
+
+Everything the app loads is HTTPS with a trusted certificate. The loopback
+LocalAPI and SOCKS traffic needs no exception: L2 passes 4/4 with the node's
+LocalAPI on loopback HTTP. L1 passes 9/9 and M4 12/12, both over HTTPS with
+the test CA trusted in the simulator. AGENTS.md now says not to add the keys
+back for a plain-HTTP gateway (chonk is out of v1, D4).

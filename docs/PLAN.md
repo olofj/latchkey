@@ -684,6 +684,7 @@ WebKit's source routes `createWebSocketTask` onto the same proxied session, and
 the planning run proved a WebSocket completing through the stub SOCKS5 proxy at
 the curl level. What is **not** yet verified is a WKWebView WebSocket surviving a
 `matchDomains` republication. M2.5 tests the first; M6.4 tests the second.
+**Resolved differently (R27):** the published rules no longer change when peers do (`StableProxyPolicy`: the tailnet ranges plus the MagicDNS suffix), so there is no republication under a live WebSocket to survive.
 
 ### 7.4 Exit nodes are broken upstream — *accepted, not mitigated*
 `README.tsnet-exit-nodes-dont-work.md` documents the cause: `Dialer.UserDial`
