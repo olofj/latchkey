@@ -99,11 +99,36 @@ expectEqual(LogRedaction.scrub("go to: https://login.tailscale.com/a/4653479012c
 expectEqual(LogRedaction.scrub("opening http://127.0.0.1:8490/auth/0123456789abcdef0123"),
             "opening http://127.0.0.1:8490/auth/…", "a control plane's /auth/<id> is removed")
 let dashPath = "loaded https://gw.example.ts.net/chat/a/b"
-expectEqual(LogRedaction.scrub(dashPath), dashPath, "only a LEADING /a/ or /auth/ is a login path")
+expectEqual(LogRedaction.scrub(dashPath), dashPath, "a short segment under /a/ anywhere is left alone")
+expectEqual(LogRedaction.scrub("loaded https://gw.example.ts.net/chat/a/abcdefgh1234"),
+            "loaded https://gw.example.ts.net/chat/a/…",
+            "an 8+ code under /a/ ANYWHERE is cut: over-redacting a path beats missing a login code")
 expectEqual(LogRedaction.scrub("https://login.tailscale.com/a/"), "https://login.tailscale.com/a/",
             "nothing after the prefix: nothing to hide")
 expectEqual(LogRedaction.scrub("https://h.example/a/b"), "https://h.example/a/b",
             "a short ordinary path under /a/ is not a login code")
+
+section("scrub: a login code followed by punctuation, or with no scheme (R29 review)")
+let code = "4653479012c06"
+for line in [
+    "go to https://login.tailscale.com/a/\(code).",
+    "(https://login.tailscale.com/a/\(code))",
+    "https://login.tailscale.com/a/\(code), then",
+    "{AuthURL:https://login.tailscale.com/a/\(code)}",
+    "[https://login.tailscale.com/a/\(code)]",
+    "`https://login.tailscale.com/a/\(code)`",
+    "http://127.0.0.1:8490/auth/\(code)abcdef;",
+    #"{"url":"https://login.tailscale.com/a/\#(code)\n"}"#,
+    "visit login.tailscale.com/a/\(code) to sign in",
+] {
+    expectAbsent(LogRedaction.scrub(line), code, "code removed from: \(line)")
+}
+expectEqual(LogRedaction.scrub("go to https://login.tailscale.com/a/\(code)."),
+            "go to https://login.tailscale.com/a/….", "the sentence's full stop survives")
+expectEqual(LogRedaction.scrub("(see https://gw.example.net/x?token=abc)"),
+            "(see https://gw.example.net/x?…)", "a closing parenthesis is not part of the URL")
+expectEqual(LogRedaction.scrub("listening on http://[::1]:8080/ and http://[::1]."),
+            "listening on http://[::1]:8080/ and http://[::1].", "an IPv6 host keeps its brackets")
 
 section("scrub: several URLs in one line")
 let two = "a https://a.example/x?token=AAA then https://b.example/y?token=BBB end"

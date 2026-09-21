@@ -147,6 +147,16 @@ this machine.
   Each takes `--build`. Each fails unless every test in its file passed; a
   stale build that runs nothing is not a pass. Add coverage there, not to
   the tailnet-dependent suite.
+- **`scripts/test-all.sh` runs them by tier.** The default quick tier (about
+  4–5 min) is host tests, the vendored Go tests, L1 and L2, plus session or
+  discovery only when code they exercise changed since the last full pass.
+  `--full` (about 13 min) runs everything, including the inherited tests
+  (`scripts/test-inherited.sh`), and records what it passed. Use quick while
+  iterating and `--full` before every milestone or review commit.
+- The fake servers handshake TLS per connection (`testing/harness/
+  tls_accept.py`). Wrapping the listening socket instead lets one silent
+  client, such as a peer's half-open forward left by a killed app, stall
+  every later connection.
 
 Xcode 27 specifics worth knowing: `xcresulttool get object` is deprecated and
 needs `--legacy`; use `xcrun xcresulttool get test-results summary|tests`
@@ -161,9 +171,18 @@ network loss, blackhole the stub proxy.
   `xcrun simctl spawn booted log stream --predicate 'subsystem == "net.lixom.latchkey"'`.
   In the app they are under Settings → Diagnostics → Logs, which is the only
   diagnostic channel on a device that cannot be attached to a Mac.
-- **tsnet's own Go logs do not reach `os_log`.** They go to `Logs/tsnet.log`,
-  so magicsock/DERP/loopback failures are invisible in Settings → Logs. M8.3
-  pipes them in; until then, read the file.
+- **tsnet's own Go logs do not reach `os_log`.** The vendored library keeps
+  them in `Logs/tsnet.log` (`latchkey_locallog.go`, R29): capped, 0600,
+  redacted BEFORE writing (login links, query strings), and shown in Settings
+  → Node log. Raw process stderr goes to `stderr.log` (a Go panic from the
+  last run), and is not kept at all under Xcode or XCTest, where it mirrors
+  the unified log. `scripts/test-tailnet.sh` fails if any login link reaches
+  the app container. Anything that writes logs or caches to disk must keep
+  that true; LocalAPI sessions are ephemeral for the same reason.
+- **A vendored Go change needs `make framework`.** libtailscale's c-archive
+  targets never rebuild on their own; the app Makefile removes them and stamps
+  the xcframework with a hash of its sources. `make check-framework` (run by
+  every `make framework`) fails when they differ.
 - `TSNet/SocksLogProxy.swift` is a pass-through SOCKS5 relay in front of tsnet
   that logs **every** connection attempt and its outcome. tsnet's own SOCKS
   server logs only failures, and not the reply code, so without the relay the

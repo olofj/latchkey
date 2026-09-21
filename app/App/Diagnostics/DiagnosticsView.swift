@@ -32,7 +32,10 @@ struct DiagnosticsView: View {
     var dismissAction: () -> Void
     @State private var copied = false
     /// Expiry dates only: the cookies themselves are not kept.
-    @State private var cookies: SessionCookies.Summary?
+    @State private var cookies: [String: SessionCookies.Summary]?
+    /// Bumped every 2 s: the proxy endpoint and the page's last error are not
+    /// observable, so the screen rereads them (and the cookies) on a clock.
+    @State private var tick = 0
 
     var body: some View {
         NavigationStack {
@@ -62,18 +65,24 @@ struct DiagnosticsView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button(copied ? "Copied" : "Copy") {
-                        UIPasteboard.general.string = sections.map { s in
+                        LocalCopy.text(sections.map { s in
                             "[\(s.title)]\n" + s.rows.map { "\($0.label): \($0.value)" }.joined(separator: "\n")
-                        }.joined(separator: "\n\n")
+                        }.joined(separator: "\n\n"))
                         copied = true
                     }
+                    .accessibilityIdentifier("diagnostics-copy-button")
                 }
             }
         }
         .accessibilityIdentifier("diagnostics-view")
         .task {
-            let all = await workspace.dataStore.httpCookieStore.allCookies()
-            cookies = SessionCookies.summary(of: all, host: URL(string: homePage.url)?.host() ?? "")
+            while !Task.isCancelled {
+                let all = await workspace.dataStore.httpCookieStore.allCookies()
+                cookies = SessionCookies.summaries(of: all, host: URL(string: homePage.url)?.host() ?? "")
+                tick &+= 1
+                if copied, tick % 2 == 0 { copied = false }
+                try? await Task.sleep(for: .seconds(2))
+            }
         }
     }
 
@@ -83,6 +92,7 @@ struct DiagnosticsView: View {
     private struct Block { let title: String; let rows: [Row] }
 
     private var sections: [Block] {
+        _ = tick   // reread the unobserved values on the 2-s clock
         let status = model.localStatus
         let me = status?.SelfStatus
         let keyExpiry = Expiry.parseKeyExpiry(me?.KeyExpiry)
@@ -95,7 +105,8 @@ struct DiagnosticsView: View {
                 Row(label: "Tailnet", value: status?.CurrentTailnet?.MagicDNSSuffix ?? "—"),
                 Row(label: "Addresses", value: (status?.TailscaleIPs ?? []).map { "\($0)" }.joined(separator: "\n").nonEmpty ?? "—"),
                 Row(label: "Peers", value: "\(status?.Peer?.count ?? 0)"),
-                Row(label: "Key expires", value: keyExpiry.map(Self.date) ?? (me == nil ? "—" : "never (expiry disabled)")),
+                Row(label: "Key expires", value: keyExpiry.map(Self.date)
+                        ?? (me == nil ? "—" : model.state == .Running ? "never (expiry disabled)" : "not known until connected")),
             ]),
             Block(title: "Gateway", rows: [
                 Row(label: "Gateway", value: homePage.hasGateway ? homePage.url : "none chosen"),
@@ -104,8 +115,8 @@ struct DiagnosticsView: View {
             ]),
             Block(title: "Dashboard session", rows: [
                 Row(label: "Session", value: session.state.rawValue + (session.isRedeeming ? " (signing in)" : "")),
-                Row(label: "Session expires", value: cookies.map { SessionCookies.describe($0.refresh, now: Date()) } ?? "reading…"),
-                Row(label: "Access expires", value: cookies.map { SessionCookies.describe($0.access, now: Date()) } ?? "reading…"),
+                Row(label: "Session expires", value: cookies.map { SessionCookies.describe($0, \.refresh, now: Date()) } ?? "reading…"),
+                Row(label: "Access expires", value: cookies.map { SessionCookies.describe($0, \.access, now: Date()) } ?? "reading…"),
                 Row(label: "Last message", value: session.message ?? "—"),
             ]),
             Block(title: "Proxy", rows: [
@@ -120,7 +131,8 @@ struct DiagnosticsView: View {
             Block(title: "App", rows: [
                 Row(label: "Version", value: Self.version),
                 Row(label: "Build", value: Self.configuration),
-                Row(label: "Profile expires", value: profile.map(Self.date) ?? "no profile (simulator)"),
+                Row(label: "Profile expires", value: profile.map(Self.date)
+                        ?? (Self.profileURL == nil ? "no profile (simulator or App Store build)" : "profile unreadable")),
                 Row(label: "Warnings", value: warnings.map(Expiry.message).joined(separator: "\n").nonEmpty ?? "none"),
             ]),
         ]
@@ -146,9 +158,10 @@ struct DiagnosticsView: View {
 
     // MARK: - Static facts
 
+    static let profileURL = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision")
+
     static let profileExpiry: Date? = {
-        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
-              let data = try? Data(contentsOf: url) else { return nil }
+        guard let url = profileURL, let data = try? Data(contentsOf: url) else { return nil }
         return Expiry.profileExpiration(data)
     }()
 

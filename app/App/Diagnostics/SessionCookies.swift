@@ -31,17 +31,35 @@ enum SessionCookies {
         var refresh: Found = .none
     }
 
-    nonisolated static func summary(of cookies: [HTTPCookie], host: String) -> Summary {
-        var out = Summary()
+    /// The session for each cookie port on `host`. KiroCrew names its
+    /// cookies after the port IT listens on (`mc_token_5476`), which behind
+    /// `tailscale serve` is not the URL's port (R37), so the gateway URL
+    /// cannot pick one. One port is the normal case; more means several
+    /// dashboards, or an old port's cookies, on this host -- shown apart,
+    /// never merged into one misleading date.
+    nonisolated static func summaries(of cookies: [HTTPCookie], host: String) -> [String: Summary] {
+        var out: [String: Summary] = [:]
         for c in cookies where matches(domain: c.domain, host: host) {
             let found: Found = c.expiresDate.map { .expires($0) } ?? .untilQuit
-            if c.name.hasPrefix("mc_token_") {
-                out.access = later(out.access, found)
-            } else if c.name.hasPrefix("mc_refresh_") {
-                out.refresh = later(out.refresh, found)
+            if let port = c.name.stripPrefix("mc_token_") {
+                out[port, default: Summary()].access = later(out[port, default: Summary()].access, found)
+            } else if let port = c.name.stripPrefix("mc_refresh_") {
+                out[port, default: Summary()].refresh = later(out[port, default: Summary()].refresh, found)
             }
         }
         return out
+    }
+
+    /// One Status value from `summaries`: the one session's, or one line per
+    /// port.
+    nonisolated static func describe(_ summaries: [String: Summary], _ part: KeyPath<Summary, Found>, now: Date) -> String {
+        switch summaries.count {
+        case 0: return describe(.none, now: now)
+        case 1: return describe(summaries.first!.value[keyPath: part], now: now)
+        default:
+            return summaries.keys.sorted().map { "port \($0): " + describe(summaries[$0]![keyPath: part], now: now) }
+                .joined(separator: "\n")
+        }
     }
 
     /// `domain` as WebKit stores it: the host itself for a host-only cookie,
@@ -65,6 +83,8 @@ enum SessionCookies {
         }
     }
 
+    /// Within one port, the longest-lived copy (a host-only and a domain
+    /// cookie of the same name can both exist).
     private nonisolated static func later(_ a: Found, _ b: Found) -> Found {
         switch (a, b) {
         case (.none, _): return b
@@ -72,5 +92,11 @@ enum SessionCookies {
         case (.untilQuit, _), (_, .untilQuit): return .untilQuit
         case (.expires(let x), .expires(let y)): return .expires(max(x, y))
         }
+    }
+}
+
+private extension String {
+    nonisolated func stripPrefix(_ prefix: String) -> String? {
+        hasPrefix(prefix) ? String(dropFirst(prefix.count)) : nil
     }
 }

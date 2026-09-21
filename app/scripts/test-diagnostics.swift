@@ -2,6 +2,10 @@
 // SessionCookies.swift (M8.2, M8.3, R31, R33).
 import Foundation
 
+extension FileHandle {
+    func then(_ body: (FileHandle) -> Void) { body(self) }
+}
+
 var failures = 0
 var checks = 0
 func expect(_ cond: Bool, _ what: String) {
@@ -25,6 +29,16 @@ expect(all.first?.hasSuffix("old one") == true && all.last?.contains("login.tail
 expect(!all.joined().contains("4653479012c06"), "a login code in tsnet's output is redacted on the way out")
 expect(NodeLog.tail(in: dir, maxLines: 2) == Array(all.suffix(2)), "tail keeps the newest lines")
 expect(NodeLog.tail(in: dir, source: .stderr).isEmpty, "the stderr log is its own file")
+let dir2 = FileManager.default.temporaryDirectory.appending(path: "kr-nodelog2-\(UUID().uuidString)")
+try! FileManager.default.createDirectory(at: dir2, withIntermediateDirectories: true)
+try! "line-0001\nline-0002\nline-0003\n".write(to: dir2.appending(path: "tsnet.log"), atomically: true, encoding: .utf8)
+expect(NodeLog.tail(in: dir2, tailBytes: 15) == ["line-0003"],
+       "a byte-limited tail drops the partial first line: \(NodeLog.tail(in: dir2, tailBytes: 15))")
+let sig1 = NodeLog.signature(in: dir2)
+try! FileHandle(forWritingTo: dir2.appending(path: "tsnet.log")).then { h in
+    h.seekToEndOfFile(); h.write(Data("line-0004\n".utf8)); h.closeFile()
+}
+expect(sig1.count == 1 && NodeLog.signature(in: dir2) != sig1, "the signature changes when the log grows")
 try! "2026-09-21T10:00:04.000Z panic: runtime error\n".write(
     to: dir.appending(path: "stderr.log"), atomically: true, encoding: .utf8)
 expect(NodeLog.tail(in: dir, source: .stderr) == ["2026-09-21T10:00:04.000Z panic: runtime error"]
@@ -36,6 +50,9 @@ let k2 = Expiry.parseKeyExpiry("2026-12-20T11:22:33.123456789Z")
 expect(k1 != nil && k2 != nil, "RFC 3339 with and without fractional seconds")
 expect(Expiry.parseKeyExpiry(nil) == nil && Expiry.parseKeyExpiry("") == nil && Expiry.parseKeyExpiry("soon") == nil,
        "absent (expiry disabled) or garbage: nil")
+expect(Expiry.parseKeyExpiry("0001-01-01T00:00:00Z") == nil && Expiry.parseKeyExpiry("1969-12-31T23:59:59Z") == nil,
+       "Go's zero time, or anything before 1970, is no expiry -- not an expired key")
+expect(Expiry.parseKeyExpiry("2026-12-20T04:22:33-07:00") == k1, "a UTC offset is honoured")
 
 print("== provisioning profile")
 let plist = """
@@ -60,7 +77,17 @@ expect(Expiry.warnings(keyExpiry: now.addingTimeInterval(10 * 86400), profileExp
 expect(Expiry.warnings(keyExpiry: nil, profileExpiry: now.addingTimeInterval(47 * 3600), now: now) == [.profile(expiresIn: 47 * 3600)],
        "profile inside 48 hours: warn")
 expect(Expiry.warnings(keyExpiry: now.addingTimeInterval(-1), profileExpiry: now.addingTimeInterval(3600), now: now)
-       == [.profile(expiresIn: 3600), .keyExpired], "most urgent first: the profile, then the expired key")
+       == [.keyExpired, .profile(expiresIn: 3600)], "most urgent first: the expired key, then the profile")
+expect(Expiry.warnings(keyExpiry: now.addingTimeInterval(3600), profileExpiry: now.addingTimeInterval(40 * 3600), now: now)
+       == [.key(expiresIn: 3600), .profile(expiresIn: 40 * 3600)], "whichever has less time left comes first")
+expect(Expiry.warnings(keyExpiry: nil, profileExpiry: now.addingTimeInterval(-60), now: now) == [.profileExpired],
+       "an expired profile")
+expect(Expiry.warnings(keyExpiry: now.addingTimeInterval(Expiry.keyWarning), profileExpiry: now.addingTimeInterval(Expiry.profileWarning), now: now).count == 2
+       && Expiry.warnings(keyExpiry: now.addingTimeInterval(Expiry.keyWarning + 1), profileExpiry: now.addingTimeInterval(Expiry.profileWarning + 1), now: now).isEmpty,
+       "exactly 14 days / 48 h warns; a second more does not")
+expect(Expiry.isAhead(.key(expiresIn: 1)) && Expiry.isAhead(.profile(expiresIn: 1))
+       && !Expiry.isAhead(.keyExpired) && !Expiry.isAhead(.profileExpired),
+       "the dashboard shows only what is still ahead")
 expect(Expiry.describe(3 * 86400 + 5) == "3 days" && Expiry.describe(5 * 3600) == "5 hours"
        && Expiry.describe(90 * 60) == "an hour" && Expiry.describe(600) == "under an hour", "human durations")
 expect(!Expiry.message(.key(expiresIn: 86400 * 3)).isEmpty, "every warning has a message")
@@ -78,18 +105,23 @@ let jar = [
     cookie("mc_refresh_443", "other.tail-scale.ts.net", expires: now.addingTimeInterval(90 * 86400), path: "/api/auth"),
     cookie("unrelated", gw, expires: now.addingTimeInterval(99 * 86400)),
 ]
-let sum = SessionCookies.summary(of: jar, host: gw)
-expect(sum.access == .expires(now.addingTimeInterval(3600)), "access cookie expiry: \(sum.access)")
+let sums = SessionCookies.summaries(of: jar, host: gw)
+let sum = sums["443"] ?? SessionCookies.Summary()
+expect(sums.count == 1 && sum.access == .expires(now.addingTimeInterval(3600)), "access cookie expiry: \(sums)")
 expect(sum.refresh == .expires(now.addingTimeInterval(30 * 86400)),
        "refresh cookie expiry, and another gateway's cookie is not this one's: \(sum.refresh)")
-expect(SessionCookies.summary(of: jar, host: "") == SessionCookies.Summary(), "no gateway: no session")
-expect(SessionCookies.summary(of: [cookie("mc_token_443", gw, expires: nil)], host: gw).access == .untilQuit,
+expect(SessionCookies.summaries(of: jar, host: "").isEmpty, "no gateway: no session")
+expect(SessionCookies.summaries(of: [cookie("mc_token_443", gw, expires: nil)], host: gw)["443"]?.access == .untilQuit,
        "a cookie without an expiry lasts until the app quits")
-expect(SessionCookies.summary(of: [cookie("mc_token_443", ".tail-scale.ts.net", expires: now)], host: gw).access == .expires(now),
+expect(SessionCookies.summaries(of: [cookie("mc_token_443", ".tail-scale.ts.net", expires: now)], host: gw)["443"]?.access == .expires(now),
        "a domain cookie covers the gateway")
+let twoPorts = SessionCookies.summaries(of: jar + [cookie("mc_refresh_8443", gw, expires: now.addingTimeInterval(2 * 86400), path: "/api/auth")], host: gw)
+let twoShown = SessionCookies.describe(twoPorts, \.refresh, now: now)
+expect(twoPorts.count == 2 && twoShown.hasPrefix("port 443: ") && twoShown.contains("\nport 8443: ") && twoShown.contains("(in 2 days)"),
+       "two dashboards on one host are shown apart, not merged: \(twoShown)")
 expect(!SessionCookies.matches(domain: ".ts.net", host: "ts.net.evil") && !SessionCookies.matches(domain: "w.tail-scale.ts.net", host: gw),
        "no suffix confusion")
-let shown = [SessionCookies.describe(sum.access, now: now), SessionCookies.describe(sum.refresh, now: now),
+let shown = [SessionCookies.describe(sums, \.access, now: now), SessionCookies.describe(sums, \.refresh, now: now),
              SessionCookies.describe(.none, now: now), SessionCookies.describe(.expires(now.addingTimeInterval(-60)), now: now)]
 expect(shown[0].hasSuffix("(in an hour)") && shown[1].hasSuffix("(in 30 days)") && shown[2] == "none" && shown[3].hasPrefix("expired"),
        "described: \(shown)")

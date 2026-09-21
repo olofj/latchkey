@@ -25,6 +25,13 @@ struct LatchkeyApp: App {
     @State private var workspaceManager: WorkspaceManager?
 
     init() {
+        // Nothing this app fetches with URLSession belongs on disk: LocalAPI
+        // responses carry the node's state and, while it waits for a login,
+        // the login link (R29 review found them in Cache.db). TailscaleKit's
+        // LocalAPI sessions are ephemeral now; this keeps any session that
+        // falls back to the shared cache in memory too. WebKit has its own.
+        URLCache.shared = URLCache(memoryCapacity: 4 << 20, diskCapacity: 0)
+
         // Only construct the (heavy) WorkspaceManager — which initializes the
         // process logger and starts tsnet nodes — in normal mode. Harness modes
         // bypass it and own their node lifecycle.

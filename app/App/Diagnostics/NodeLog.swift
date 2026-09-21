@@ -23,7 +23,8 @@ enum NodeLog {
         /// tsnet's own lines: magicsock, DERP, control, the loopback listener.
         case tsnet = "tsnet.log"
         /// The process's raw stderr, as logtail replays it: a Go panic from
-        /// the previous run -- and, under Xcode, everything the app prints.
+        /// the previous run. Not kept at all in launches by Xcode or XCTest,
+        /// where it is a mirror of the unified log (latchkey_locallog.go).
         case stderr = "stderr.log"
     }
 
@@ -34,12 +35,32 @@ enum NodeLog {
             .filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    /// The last `maxLines` lines across both files, oldest first, redacted.
-    nonisolated static func tail(in dir: URL, source: Source = .tsnet, maxLines: Int = 2000) -> [String] {
+    /// Name, size and modification time of `source`'s files: when it has not
+    /// changed there is nothing new to read.
+    nonisolated static func signature(in dir: URL, source: Source = .tsnet) -> [String] {
+        files(in: dir, source: source).map { url in
+            let a = try? FileManager.default.attributesOfItem(atPath: url.path)
+            return "\(url.lastPathComponent) \((a?[.size] as? Int) ?? -1) \((a?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+        }
+    }
+
+    /// The last `maxLines` lines across both files, oldest first, redacted
+    /// (again: the vendored writer already redacts before writing). Reads at
+    /// most the last `tailBytes` of each file.
+    nonisolated static func tail(in dir: URL, source: Source = .tsnet, maxLines: Int = 2000,
+                                 tailBytes: Int = 512 * 1024) -> [String] {
         var lines: [Substring] = []
         for url in files(in: dir, source: source) {
-            guard let data = try? Data(contentsOf: url) else { continue }
-            let text = String(decoding: data, as: UTF8.self)
+            guard let handle = try? FileHandle(forReadingFrom: url) else { continue }
+            defer { try? handle.close() }
+            let size = (try? handle.seekToEnd()) ?? 0
+            let start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+            guard (try? handle.seek(toOffset: start)) != nil,
+                  let data = try? handle.readToEnd() else { continue }
+            var text = Substring(String(decoding: data, as: UTF8.self))
+            if start > 0, let newline = text.firstIndex(of: "\n") {
+                text = text[text.index(after: newline)...]   // a partial first line
+            }
             lines.append(contentsOf: text.split(separator: "\n", omittingEmptySubsequences: true))
         }
         return lines.suffix(maxLines).map { LogRedaction.scrub(String($0)) }

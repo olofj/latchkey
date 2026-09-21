@@ -173,7 +173,9 @@ final class TailnetHarnessTests: XCTestCase {
         XCTAssertTrue(row("diag-tailnet").contains("tail-scale.ts.net"), row("diag-tailnet"))
         XCTAssertTrue(row("diag-gateway").contains(Self.gatewayHost), row("diag-gateway"))
         XCTAssertTrue(row("diag-in-the-tailnet").hasSuffix("yes"), row("diag-in-the-tailnet"))
-        XCTAssertTrue(row("diag-endpoint").contains("127.0.0.1:"), "the SOCKS endpoint, never the credential: \(row("diag-endpoint"))")
+        let endpoint = row("diag-endpoint")
+        XCTAssertNotNil(endpoint.firstMatch(of: /(^|[ ,])127\.0\.0\.1:[0-9]+$/),
+                        "the SOCKS endpoint as host:port only -- never a credential: \(endpoint)")
         app.buttons["diagnostics-done-button"].tap()
 
         let nodeLog = app.buttons["node-log-button"]
@@ -181,28 +183,56 @@ final class TailnetHarnessTests: XCTestCase {
         nodeLog.tap()
         let filter = app.textFields["node-log-filter"]
         XCTAssertTrue(filter.waitForExistence(timeout: 10))
-        filter.tap()
-        filter.typeText("magicsock:")
+        let count = app.staticTexts["node-log-count"]
+        func setFilter(_ text: String) {
+            filter.tap()
+            let current = filter.value as? String ?? ""
+            let n = current == filter.placeholderValue ? 0 : current.count
+            filter.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: n) + text)
+        }
+        func shownCount() -> Int { Int(count.label.split(separator: " ").first ?? "") ?? -1 }
+        setFilter("magicsock:")
         // A line tsnet itself logged, from this launch (the logs were
         // reset). The process's raw stderr -- which under XCTest echoes what
         // the test types, filter text included -- never goes in tsnet.log.
         let tsnetLine = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'magicsock:'")).firstMatch
         XCTAssertTrue(tsnetLine.waitForExistence(timeout: 10),
                       "tsnet's own magicsock lines reach the node log: \(app.staticTexts["node-log-count"].label)")
-        XCTAssertFalse(tsnetLine.label.contains("RAW-STDERR"), "raw stderr stays out of tsnet's log: \(tsnetLine.label)")
 
-        // Raw stderr: under XCTest, os_log is mirrored to it, so it is a copy
+        // Raw stderr never lands in tsnet.log. Under XCTest the process's
+        // stderr is busy -- an unsplit writer put thousands of RAW-STDERR
+        // lines here -- so a count of zero means something.
+        setFilter("RAW-STDERR")
+        XCTAssertEqual(shownCount(), 0, "raw stderr stays out of tsnet's log: \(count.label)")
+
+        // Under XCTest os_log is mirrored to stderr, so raw stderr is a copy
         // of the unified log and is not kept (the vendored writer's rule).
-        // tsnet.log records the decision; the stderr source stays empty.
-        filter.tap()
-        filter.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "magicsock:".count))
-        filter.typeText("raw stderr")
+        // tsnet.log records the decision.
+        setFilter("raw stderr")
         let decision = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'raw stderr not kept'")).firstMatch
         XCTAssertTrue(decision.waitForExistence(timeout: 10),
-                      "the node log says the mirrored stderr is not kept: \(app.staticTexts["node-log-count"].label)")
+                      "the node log says the mirrored stderr is not kept: \(count.label)")
+
+        // The view follows the log: state changes the harness causes now, with
+        // the view open, appear without reopening it (the 2-s reread).
+        setFilter("Switching ipn state")
+        let before = shownCount()
+        XCTAssertGreaterThan(before, 0, "startup's own state changes are there: \(count.label)")
+        let node = try await appNode()
+        _ = try await Self.post("\(Self.harnessAPI)/deauthorize?hostname=\(node.hostname)")
+        _ = try await Self.post("\(Self.harnessAPI)/approve?hostname=\(node.hostname)")
+        var after = before
+        for _ in 0..<15 where after < before + 2 {
+            try await Task.sleep(for: .seconds(1))
+            after = shownCount()
+        }
+        XCTAssertGreaterThanOrEqual(after, before + 2,
+                                    "two new state changes appear while the view is open: \(before) -> \(count.label)")
+
+        // The stderr source: nothing, since it is not kept here.
         app.segmentedControls["node-log-source"].buttons["stderr"].tap()
         XCTAssertTrue(app.staticTexts["Nothing on stderr"].waitForExistence(timeout: 10),
-                      "nothing of the unified log's mirror is on disk: \(app.staticTexts["node-log-count"].label)")
+                      "nothing of the unified log's mirror is on disk: \(count.label)")
     }
 
     // MARK: - Launch

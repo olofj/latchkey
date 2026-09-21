@@ -48,14 +48,15 @@ enum LogRedaction {
     /// (anyone holding it can finish the login -- with THEIR account) and a
     /// control plane's `/auth/<id>` (testcontrol, headscale). The path is
     /// kept up to the secret, so the line still says what it was (M8.3).
-    /// A secret is one alphanumeric segment of 8+ characters after the
-    /// prefix; an ordinary short path like `/a/b` is left alone.
+    /// A secret is a run of 8+ ASCII letters and digits right after the
+    /// prefix, whatever follows it (punctuation that ended up in the path, an
+    /// escaped newline); an ordinary short path like `/a/b` is left alone.
     nonisolated static func redactSecretPath(_ path: String) -> String {
         for prefix in ["/a/", "/auth/"] where path.hasPrefix(prefix) {
             let rest = path.dropFirst(prefix.count)
-            let segment = rest.prefix { $0 != "/" }
-            if segment.count >= 8, segment.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) {
-                return prefix + "…" + rest.dropFirst(segment.count)
+            let secret = rest.prefix { $0.isASCII && ($0.isLetter || $0.isNumber) }
+            if secret.count >= 8 {
+                return prefix + "…" + rest.dropFirst(secret.count)
             }
         }
         return path
@@ -104,12 +105,14 @@ enum LogRedaction {
         return scrub(out)
     }
 
-    /// Redacts every URL and every bare `token=` parameter in free text.
+    /// Redacts every URL, every login code in a path, and every bare
+    /// `token=` parameter in free text.
     ///
-    /// Cheap on the common path: most log lines contain neither `://` nor
-    /// `token`, and those return untouched without a regex running.
+    /// Cheap on the common path: most log lines contain none of `://`, `/a/`,
+    /// `/auth/` or `token`, and those return untouched without a regex running.
     nonisolated static func scrub(_ message: String) -> String {
-        guard message.contains("://") || message.range(of: "token", options: .caseInsensitive) != nil
+        guard message.contains("://") || message.contains("/a/") || message.contains("/auth/")
+                || message.range(of: "token", options: .caseInsensitive) != nil
         else { return message }
 
         var result = message
@@ -118,10 +121,15 @@ enum LogRedaction {
         // URLs. Replace back to front so earlier ranges stay valid.
         for match in urlPattern.matches(in: result, range: whole).reversed() {
             guard let range = Range(match.range, in: result) else { continue }
-            let candidate = String(result[range])
+            let (candidate, tail) = trimTrailingPunctuation(String(result[range]))
             let replacement = URL(string: candidate).map(redact) ?? stripParameters(candidate)
-            result.replaceSubrange(range, with: replacement)
+            result.replaceSubrange(range, with: replacement + tail)
         }
+
+        // A login code in a path that was not a parseable URL: no scheme
+        // (`login.tailscale.com/a/<code>`), or text the URL parse mangled.
+        result = secretPathPattern.stringByReplacingMatches(
+            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "/$1/…")
 
         // A `token=` that is not inside a URL — a form body, a JSON field, a
         // message that quotes a query string. Reported as a marker so the
@@ -130,6 +138,19 @@ enum LogRedaction {
         result = bareTokenPattern.stringByReplacingMatches(
             in: result, range: remaining, withTemplate: "[token redacted]")
         return result
+    }
+
+    /// Sentence punctuation after a URL (`…/a/<code>.`, `(…/a/<code>)`) is not
+    /// part of it; a closing bracket is, if the URL opened one (`http://[::1]`).
+    nonisolated private static func trimTrailingPunctuation(_ candidate: String) -> (String, String) {
+        var url = Substring(candidate)
+        while let last = url.last {
+            let unbalanced = (last == ")" && url.filter { $0 == "(" }.count < url.filter { $0 == ")" }.count)
+                || (last == "]" && url.filter { $0 == "[" }.count < url.filter { $0 == "]" }.count)
+            guard ".,;:!?}".contains(last) || unbalanced else { break }
+            url = url.dropLast()
+        }
+        return (String(url), String(candidate.dropFirst(url.count)))
     }
 
     /// Fallback for text that looks like a URL but does not parse as one:
@@ -145,7 +166,10 @@ enum LogRedaction {
     // documented thread-safe for matching; this module's default actor
     // isolation is MainActor, and `scrub` runs on libtailscale's Go threads.
     nonisolated(unsafe) private static let urlPattern = try! NSRegularExpression(
-        pattern: #"[A-Za-z][A-Za-z0-9+.\-]*://[^\s"'<>]+"#)
+        pattern: #"[A-Za-z][A-Za-z0-9+.\-]*://[^\s"'<>\\`{]+"#)
+
+    nonisolated(unsafe) private static let secretPathPattern = try! NSRegularExpression(
+        pattern: #"/(a|auth)/[A-Za-z0-9]{8,}"#)
 
     nonisolated(unsafe) private static let bareTokenPattern = try! NSRegularExpression(
         pattern: #"(?i)\btoken=[^&\s"',;}]*"#)

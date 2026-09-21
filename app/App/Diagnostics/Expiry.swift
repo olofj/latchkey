@@ -23,16 +23,29 @@ enum Expiry {
     nonisolated static let profileWarning: TimeInterval = 48 * 3600
 
     /// `ipnstate.PeerStatus.KeyExpiry` (Go's time.Time: RFC 3339, with or
-    /// without fractional seconds).
+    /// without fractional seconds). Go's zero time (`0001-01-01T00:00:00Z`)
+    /// and anything before 1970 mean "no expiry", not "expired" (TailscaleKit's
+    /// own `Node` guards the same way).
     nonisolated static func parseKeyExpiry(_ raw: String?) -> Date? {
-        guard let raw, !raw.isEmpty else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = fractional.date(from: raw) { return d }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: raw)
+        guard let raw, !raw.isEmpty,
+              let d = fractionalFormatter.date(from: raw) ?? plainFormatter.date(from: raw),
+              d.timeIntervalSince1970 > 0
+        else { return nil }
+        return d
     }
+
+    // Built once: a dashboard render parses the key expiry. The formatters
+    // are thread-safe for parsing and never mutated after this.
+    nonisolated(unsafe) private static let fractionalFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    nonisolated(unsafe) private static let plainFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
 
     /// `ExpirationDate` from an `embedded.mobileprovision`: a CMS-signed blob
     /// with an XML plist inside it. Nil when there is none (the simulator,
@@ -54,18 +67,28 @@ enum Expiry {
         case profileExpired
     }
 
-    /// What to warn about now, most urgent first.
+    /// What to warn about now, most urgent (least time left) first.
     nonisolated static func warnings(keyExpiry: Date?, profileExpiry: Date?, now: Date) -> [Warning] {
-        var out: [Warning] = []
+        var out: [(left: TimeInterval, warning: Warning)] = []
         if let p = profileExpiry {
             let left = p.timeIntervalSince(now)
-            if left <= 0 { out.append(.profileExpired) } else if left <= profileWarning { out.append(.profile(expiresIn: left)) }
+            if left <= 0 { out.append((left, .profileExpired)) } else if left <= profileWarning { out.append((left, .profile(expiresIn: left))) }
         }
         if let k = keyExpiry {
             let left = k.timeIntervalSince(now)
-            if left <= 0 { out.append(.keyExpired) } else if left <= keyWarning { out.append(.key(expiresIn: left)) }
+            if left <= 0 { out.append((left, .keyExpired)) } else if left <= keyWarning { out.append((left, .key(expiresIn: left))) }
         }
-        return out
+        return out.sorted { $0.left < $1.left }.map(\.warning)
+    }
+
+    /// Whether a warning is about something still ahead: the dashboard shows
+    /// only those. An expired key already has its own banner (Login), and an
+    /// expired profile never gets this far.
+    nonisolated static func isAhead(_ w: Warning) -> Bool {
+        switch w {
+        case .key, .profile: return true
+        case .keyExpired, .profileExpired: return false
+        }
     }
 
     /// "3 days", "5 hours", "under an hour".
@@ -79,9 +102,9 @@ enum Expiry {
     nonisolated static func message(_ w: Warning) -> String {
         switch w {
         case .key(let left):
-            return "Your Tailscale key expires in \(describe(left)). Sign in again from Settings before then, or renew the key in the admin console."
+            return "Your Tailscale key expires in \(describe(left)). To avoid an interruption, disable key expiry for this device in the Tailscale admin console; otherwise, sign in again when it expires."
         case .keyExpired:
-            return "Your Tailscale key has expired. Sign in again from Settings."
+            return "Your Tailscale key has expired. Sign in again to reconnect."
         case .profile(let left):
             return "This build of Latchkey stops launching in \(describe(left)). Rebuild and install it from Xcode on your Mac."
         case .profileExpired:

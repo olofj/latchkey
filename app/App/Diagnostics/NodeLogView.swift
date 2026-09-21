@@ -12,7 +12,6 @@
 //  switch to the process's raw stderr (a Go panic from the last run).
 //
 
-import Combine
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -24,8 +23,10 @@ struct NodeLogView: View {
     @State private var source: NodeLog.Source = .tsnet
     @State private var filter = ""
     @State private var lines: [String] = []
+    /// NodeLog.signature of what `lines` was read from; nil: not read yet
+    /// (for this source).
+    @State private var readFrom: [String]?
     @State private var copied = false
-    private let tick = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     private var shown: [String] {
         let f = filter.trimmingCharacters(in: .whitespaces).lowercased()
@@ -33,6 +34,7 @@ struct NodeLogView: View {
     }
 
     var body: some View {
+        let shown = self.shown   // once per render: it lowercases every line
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("Log", selection: $source) {
@@ -82,7 +84,7 @@ struct NodeLogView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button(copied ? "Copied" : "Copy") {
-                        UIPasteboard.general.string = shown.joined(separator: "\n")
+                        LocalCopy.text(shown.joined(separator: "\n"))
                         copied = true
                     }
                     .disabled(shown.isEmpty)
@@ -90,15 +92,31 @@ struct NodeLogView: View {
             }
         }
         .accessibilityIdentifier("node-log-view")
-        .task(id: source) { await reload() }
-        .onReceive(tick) { _ in Task { await reload() } }
+        // Every 2 s, for the source on screen; restarted when it changes.
+        .task(id: source) {
+            readFrom = nil
+            var ticks = 0
+            while !Task.isCancelled {
+                await reload()
+                ticks += 1
+                if copied, ticks % 2 == 0 { copied = false }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
     }
 
     private func reload() async {
         let dir = WorkspaceStore.logsDir
         let source = source
-        let read = await Task.detached(priority: .utility) { NodeLog.tail(in: dir, source: source) }.value
+        let known = readFrom
+        let read = await Task.detached(priority: .utility) { () -> (signature: [String], lines: [String])? in
+            let signature = NodeLog.signature(in: dir, source: source)
+            guard signature != known else { return nil }   // nothing new
+            return (signature, NodeLog.tail(in: dir, source: source))
+        }.value
         // The switch may have moved on while this read ran.
-        if source == self.source, read != lines { lines = read }
+        guard let read, source == self.source else { return }
+        readFrom = read.signature
+        if read.lines != lines { lines = read.lines }
     }
 }

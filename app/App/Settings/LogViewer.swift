@@ -193,7 +193,7 @@ struct LogViewer: View {
 
     private func copyToPasteboard(_ text: String) {
 #if canImport(UIKit)
-        UIPasteboard.general.string = text
+        LocalCopy.text(text)   // this device only (R29 review)
 #else
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)

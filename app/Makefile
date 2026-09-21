@@ -31,8 +31,14 @@ XCFRAMEWORK  := ThirdParty/libtailscale/swift/build/Build/Products/Release-iphon
 # Since the R16 vendoring this list also covers tailscale-patched/: when it was
 # a nested submodule, `git ls-files` here did not descend into it, so an edit
 # to the patched Go tree never triggered a rebuild -- a latent stale-binary
-# bug that the vendoring fixes for free.
-LIBTSCALE_SOURCES := $(shell git -C ThirdParty/libtailscale ls-files '*.go' '*.c' '*.h' 'swift/TailscaleKit/*.swift' 'swift/TailscaleKit/**/*.swift' | sed 's|^|ThirdParty/libtailscale/|')
+# bug that the vendoring fixes for free. Files not yet added count too (-co),
+# as they are while a change is being written and tested; generated headers
+# are gitignored, so they do not.
+LIBTSCALE_SOURCES := $(shell git -C ThirdParty/libtailscale ls-files -co --exclude-standard '*.go' '*.c' '*.h' 'swift/TailscaleKit/*.swift' 'swift/TailscaleKit/**/*.swift' | sed 's|^|ThirdParty/libtailscale/|')
+# What the framework was built from: a hash of those sources' contents,
+# written next to it by the rule that built it (check-framework).
+FRAMEWORK_STAMP := $(XCFRAMEWORK:.xcframework=.sources-sha256)
+SOURCES_HASH = printf '%s\n' $(LIBTSCALE_SOURCES) | xargs cat | shasum -a 256 | cut -d' ' -f1
 LIBTSCALEDIR := ThirdParty/libtailscale/swift
 
 # Device IPA build (see `make ipa`). Archive + export live under build/.
@@ -87,7 +93,7 @@ test-lock-resume: framework  ## Background + genuinely freeze app process; asser
 
 # ----- libtailscale -----
 .PHONY: framework
-framework: $(XCFRAMEWORK)  ## Build TailscaleKit.xcframework (skipped if it exists)
+framework: $(XCFRAMEWORK) check-framework  ## Build TailscaleKit.xcframework (skipped if current)
 
 $(XCFRAMEWORK): $(LIBTSCALE_SOURCES)
 	@echo
@@ -99,18 +105,17 @@ $(XCFRAMEWORK): $(LIBTSCALE_SOURCES)
 	cd ThirdParty/libtailscale && rm -f libtailscale_ios.a libtailscale_ios_sim.a \
 		libtailscale_ios_sim_arm64.a libtailscale_ios_sim_x86_64.a
 	cd $(LIBTSCALEDIR) && make ios-fat
-	@$(MAKE) --no-print-directory check-framework
+	@$(SOURCES_HASH) > $(FRAMEWORK_STAMP)
 
-# Every Latchkey Go file in the vendored tree must be in both slices (Go
-# records each source path in the binary). Catches a stale archive.
+# The framework was built, by the rule above, from exactly the sources on disk
+# now. Runs on every `make framework`, so a failed or interrupted build, or a
+# framework from elsewhere, stays an error until it is rebuilt -- rather than
+# the next run finding the xcframework newer than its sources and moving on.
 .PHONY: check-framework
 check-framework:
-	@for go in $$(git -C ThirdParty/libtailscale ls-files 'latchkey_*.go' | grep -v '_test\.go$$'); do \
-		for bin in $(XCFRAMEWORK)/*/TailscaleKit.framework/TailscaleKit; do \
-			strings "$$bin" | grep -q "libtailscale/$$go" \
-				|| { echo "STALE: $$bin lacks $$go -- rebuild with 'make framework'"; exit 1; }; \
-		done; \
-	done; echo "framework: every vendored latchkey_*.go is linked in"
+	@test -f $(FRAMEWORK_STAMP) && [ "$$(cat $(FRAMEWORK_STAMP))" = "$$($(SOURCES_HASH))" ] \
+		|| { echo "STALE: TailscaleKit.xcframework was not built from the current libtailscale sources; run 'make -B framework'" >&2; exit 1; }
+	@echo "framework: built from the current libtailscale sources"
 
 # ----- app -----
 .PHONY: app

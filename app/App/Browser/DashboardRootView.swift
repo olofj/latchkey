@@ -327,18 +327,6 @@ private struct DashboardContent: View {
 
     private var gatewayContent: some View {
         VStack(spacing: 0) {
-            // R31, R33: the two clocks that end the app, warned about ahead.
-            ForEach(expiryWarnings, id: \.self) { message in
-                Label(message, systemImage: "clock.badge.exclamationmark")
-                    .font(.subheadline)
-                    .padding(.leading, 12)
-                    .padding(.trailing, 52)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.thinMaterial)
-                    .overlay(alignment: .bottom) { Divider() }
-                    .accessibilityIdentifier("expiry-warning")
-            }
             if homePageAvailability == .unavailable {
                 GatewayUnreachableBanner(onSettings: onSettings,
                                          onFindGateways: { showingGatewayPicker = true })
@@ -346,6 +334,19 @@ private struct DashboardContent: View {
             BrowserView(model: tab.viewModel)
                 .frame(minHeight: 0, maxHeight: .infinity)
                 .layoutPriority(-1)
+            // R31, R33: the two clocks that end the app, warned about ahead.
+            // At the bottom: the top edge is where the gear, the way back to
+            // the dashboard, the sign-in capsule and the login banner go.
+            ForEach(expiryWarnings, id: \.self) { message in
+                Label(message, systemImage: "clock.badge.exclamationmark")
+                    .font(.subheadline)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.thinMaterial)
+                    .overlay(alignment: .top) { Divider() }
+                    .accessibilityIdentifier("expiry-warning")
+            }
         }
         .overlay(alignment: .top) {
             if statusViewModel.needsAuth {
@@ -390,9 +391,11 @@ private struct DashboardContent: View {
         tab.viewModel.load(url: gateway)
     }
 
+    /// Only what is still ahead: an expired key has the login banner.
     private var expiryWarnings: [String] {
         Expiry.warnings(keyExpiry: Expiry.parseKeyExpiry(model.localStatus?.SelfStatus?.KeyExpiry),
                         profileExpiry: DiagnosticsView.profileExpiry, now: Date())
+            .filter(Expiry.isAhead)
             .map(Expiry.message)
     }
 
@@ -506,7 +509,10 @@ private struct LoginBanner: View {
                 isStartingLogin = false
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 12)
+        // Room for the settings gear, which sits over this corner: it would
+        // take taps meant for Login (R29 review; as GatewayUnreachableBanner).
+        .padding(.trailing, 52)
         .padding(.vertical, 8)
         .background(.thinMaterial)
         .overlay(alignment: .bottom) { Divider() }
