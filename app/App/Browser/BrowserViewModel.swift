@@ -56,6 +56,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// expanded to its FQDN before loading.
     private var allowedOrigin: String?
 
+    /// True while the page on screen was opened by a same-origin new-window
+    /// request (KiroCrew's "pop out chat", "open in new tab"). With one window
+    /// and no back button that page would otherwise strand the user, so the
+    /// dashboard shows a way back while this is set.
+    @Published private(set) var showsReturnToDashboard = false
+
+    /// Blank popups waiting to learn where they are going (`PopupCatcher`).
+    private var popupCatchers: [ObjectIdentifier: PopupCatcher] = [:]
+
     /// Budget for automatic reloads after the web content process dies (R7).
     private var contentRecovery = ContentProcessRecovery()
     /// Set when the content process died while the app was in the
@@ -372,8 +381,20 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // Retry the attempted URL shown in the error overlay. Do not ask
         // WKWebView to reload its still-committed old page: that mismatch is
         // both confusing and dangerous in browser chrome.
+        //
+        // Only a URL the navigation policy would allow here (R3). `load(url:)`
+        // is the app's own path and makes its target's origin the trusted one,
+        // so retrying a failed foreign URL through it would load that site in
+        // place and trust it — the phishing opening R3 exists to close.
+        // Anything else retries the gateway itself.
         if let failedURL = navError?.url {
-            load(url: failedURL)
+            if NavigationPolicy.decide(url: failedURL, isMainFrame: true,
+                                       allowedOrigin: allowedOrigin) == .allow {
+                load(url: failedURL)
+            } else {
+                logger.log("Reload: not retrying off-gateway URL \(failedURL.redactedForLog); reloading the gateway")
+                load(url: initialURL)
+            }
             return
         }
         guard let webView else {
@@ -604,17 +625,23 @@ extension BrowserViewModel: WKUIDelegate {
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
-        guard navigationAction.targetFrame == nil,
-              let url = navigationAction.request.url
-        else { return nil }
-        switch navigationDecision(for: url, isMainFrame: true, in: webView) {
-        case .allow:
-            webView.load(navigationAction.request)
-        case .openExternally:
-            openExternally(url)
-        case .cancel:
-            logger.log("New-window request refused by navigation policy: \(url.redactedForLog)")
+        guard navigationAction.targetFrame == nil else { return nil }
+
+        // `window.open()` / `window.open('')`: the destination comes later,
+        // once the page sets the new window's location. Hand WebKit a
+        // throwaway view that catches it, rather than nil — nil makes
+        // window.open return null and the page's action silently dies — or
+        // loading about:blank here, which would blank the dashboard with no
+        // way back.
+        guard let url = navigationAction.request.url, !PopupCatcher.isBlank(url) else {
+            let catcher = PopupCatcher(
+                configuration: configuration,
+                route: { [weak self] destination in self?.routeNewWindow(to: destination) },
+                finish: { [weak self] done in self?.popupCatchers[ObjectIdentifier(done)] = nil })
+            popupCatchers[ObjectIdentifier(catcher)] = catcher
+            return catcher.webView
         }
+        routeNewWindow(to: url)
         return nil
     }
 }
@@ -632,6 +659,10 @@ extension BrowserViewModel: WKNavigationDelegate {
         startupLoad = nil
         refreshState(from: webView, includeCommittedURL: true)
         failedInitialURL = nil
+        // Back on the dashboard's root: the way-back control has done its job.
+        if showsReturnToDashboard, webView.url?.path == "/" || webView.url?.path == "" {
+            showsReturnToDashboard = false
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -678,6 +709,7 @@ extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         let ns = error as NSError
         guard !(ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled) else { return }
+        if handlePolicyInterruption(ns) { return }
         let failedURL = ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? url ?? initialURL
         if retryStartupLoadIfAppropriate(error, failedURL: failedURL) { return }
         startupLoad = nil
@@ -687,6 +719,7 @@ extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         let ns = error as NSError
         guard !(ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled) else { return }
+        if handlePolicyInterruption(ns) { return }
         // Prefer the failing URL carried by CFNetwork. `webView.url` can be the
         // provisional destination or the old committed page depending on the
         // failure phase, so it is never used as address-bar truth here.
@@ -732,6 +765,60 @@ extension BrowserViewModel {
         webView.perform(selector)
     }
 #endif
+
+    /// Decides where a new-window request goes (R3). Same-origin web pages
+    /// and same-origin blobs load here, in place, with a way back shown; other
+    /// origins go to the system; anything the policy cancels is dropped.
+    fileprivate func routeNewWindow(to url: URL) {
+        guard let webView else { return }
+        switch navigationDecision(for: url, isMainFrame: true, in: webView) {
+        case .allow:
+            guard !PopupCatcher.isBlank(url), url.scheme?.lowercased() != "about" else {
+                logger.log("New-window request for \(url.redactedForLog) ignored: nothing to show")
+                return
+            }
+            logger.log("New-window request loads in place: \(url.redactedForLog)")
+            showsReturnToDashboard = true
+            webView.load(URLRequest(url: url))
+        case .openExternally:
+            openExternally(url)
+        case .cancel:
+            logger.log("New-window request refused by navigation policy: \(url.redactedForLog)")
+        }
+    }
+
+    /// WebKit reports a navigation the policy cancelled mid-flight — a
+    /// same-origin link that redirects off the gateway, say — as a failure:
+    /// WebKitErrorDomain 102, "frame load interrupted". That is the policy
+    /// doing its job, not a network error, and must not paint the error page
+    /// over a working dashboard. Returns true when the error was handled.
+    fileprivate func handlePolicyInterruption(_ error: NSError) -> Bool {
+        guard error.domain == "WebKitErrorDomain", error.code == 102 else { return false }
+        startupLoad = nil
+        if webView?.url != nil {
+            // A page is showing; leave it. The destination already went to
+            // the system (or was refused) in decidePolicyFor.
+            logger.log("Navigation interrupted by policy; keeping the current page")
+            return true
+        }
+        // Nothing has ever committed: the app's own first load was redirected
+        // somewhere the policy will not show. Say so plainly rather than
+        // leaving a blank view.
+        let attempted = (error.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? initialURL
+        navigationError(error, for: initialURL)
+        navErrorMessage = "The gateway redirected to \(attempted.redactedForLog), which is not the gateway this app is set to, so it was not opened here. Check the gateway address in Settings."
+        return true
+    }
+
+    /// The way back from a page opened by a new-window request.
+    func returnToDashboard() {
+        showsReturnToDashboard = false
+        if let webView, webView.canGoBack {
+            webView.goBack()
+        } else {
+            load(url: initialURL)
+        }
+    }
 
     fileprivate func reloadIfContentProcessDiedInBackground() {
         guard reloadWhenActive, let webView else { return }

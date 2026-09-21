@@ -159,6 +159,12 @@ private struct DashboardContent: View {
         .overlay(alignment: .topTrailing) {
             settingsAffordance
         }
+        .overlay(alignment: .topLeading) {
+            // Its own view, observing the BrowserViewModel directly: this view
+            // observes the BrowserTab, which does not republish the view
+            // model's changes, so reading the flag here would never update.
+            ReturnToDashboardAffordance(model: tab.viewModel)
+        }
         .overlay(alignment: .bottomTrailing) {
             // A concrete accessibility element for UI automation. An
             // identifier applied to a container view is not reliably surfaced.
@@ -273,6 +279,32 @@ private struct DashboardContent: View {
         HomePageAvailabilityChecker.check(
             urlString: homePage.url,
             status: model.localStatus)
+    }
+}
+
+/// Shown only after a same-origin new-window request loaded in place
+/// (KiroCrew's "pop out chat", "open in new tab"). One window and no back
+/// button would otherwise leave the user stranded on that page (R3 review).
+/// Styled to match the gear.
+struct ReturnToDashboardAffordance: View {
+    @ObservedObject var model: BrowserViewModel
+
+    var body: some View {
+        if model.showsReturnToDashboard {
+            Button {
+                model.returnToDashboard()
+            } label: {
+                Label("Dashboard", systemImage: "chevron.backward")
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.thinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 10)
+            .padding(.top, 4)
+            .accessibilityIdentifier("return-to-dashboard-button")
+        }
     }
 }
 

@@ -45,12 +45,39 @@ private nonisolated final class BounceSchemeHandler: NSObject, WKURLSchemeHandle
             return
         }
 
+        if url.path == "/popped" {
+            // The destination of the harness's same-origin popup (R3 review).
+            let page = """
+            <!doctype html><meta name='viewport' content='width=device-width'>
+            <title>Popped</title>
+            <body><h1 id='popped'>POPPED PAGE</h1>
+            <script>webkit.messageHandlers.bounce.postMessage({popup: 'popped-page'});</script>
+            </body>
+            """
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "text/html; charset=utf-8"])!
+            urlSchemeTask.didReceive(response)
+            urlSchemeTask.didReceive(Data(page.utf8))
+            urlSchemeTask.didFinish()
+            return
+        }
+
         let html = """
         <!doctype html><meta name='viewport' content='width=device-width'>
         <title>Proxy bounce test</title>
         <body>
           <p id='loads'>loads: 0</p>
           <p id='fetch'>fetch: pending</p>
+          <!-- R3 review: the two window.open shapes KiroCrew uses. -->
+          <button id='popup-later' style='font-size:20px'
+            onclick="var w = window.open('', '_blank');
+                     webkit.messageHandlers.bounce.postMessage({popup: w ? 'window' : 'null'});
+                     if (w) { w.opener = null; setTimeout(function () { w.location = 'bounce-test://page/popped'; }, 300); }"
+            >Open popup later</button>
+          <button id='popup-blank' style='font-size:20px'
+            onclick="var w = window.open();
+                     webkit.messageHandlers.bounce.postMessage({popup: w ? 'blank-window' : 'null'});"
+            >Open blank popup</button>
           <script>
             let loads = Number(sessionStorage.getItem('bounce-loads') || '0') + 1;
             sessionStorage.setItem('bounce-loads', String(loads));
@@ -87,6 +114,9 @@ private nonisolated final class BounceSchemeHandler: NSObject, WKURLSchemeHandle
 private final class BounceMessageBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     @Published var loadCount = 0
     @Published var fetchStatus = "not-started"
+    /// What the page's last window.open returned, or "popped-page" once the
+    /// popup's destination has loaded (R3 review).
+    @Published var popupStatus = "none"
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
@@ -94,6 +124,7 @@ private final class BounceMessageBridge: NSObject, ObservableObject, WKScriptMes
         logger.log("bounce harness: script message \(body)")
         if let loads = body["loads"] as? Int { loadCount = loads }
         if let fetch = body["fetch"] as? String { fetchStatus = fetch }
+        if let popup = body["popup"] as? String { popupStatus = popup }
     }
 }
 
@@ -144,6 +175,8 @@ private struct BounceBridgeStatus: View {
                 .accessibilityIdentifier("bounce-load-count")
             Text(bridge.fetchStatus == "fetch-completed" ? "FETCH COMPLETE" : "FETCH PENDING")
                 .accessibilityIdentifier("bounce-fetch-status")
+            Text("POPUP \(bridge.popupStatus)")
+                .accessibilityIdentifier("bounce-popup-status")
         }
     }
 }
@@ -164,6 +197,8 @@ struct ProxyBounceTestHarnessView: View {
                     .accessibilityIdentifier("simulate-web-content-termination")
             }
             .padding()
+            // The production control, so the test exercises the real thing.
+            ReturnToDashboardAffordance(model: model.browser)
             Divider()
             BrowserView(model: model.browser)
         }

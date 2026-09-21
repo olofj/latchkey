@@ -1173,6 +1173,62 @@ final class LatchkeyUITests: XCTestCase {
                        "an automatic recovery must not show the network-error page")
     }
 
+    /// R3 review: KiroCrew opens windows blank and sets their location after
+    /// an async call (`w = window.open('', '_blank'); … w.location = url`).
+    /// With one web view, the app must hand WebKit a stand-in window (so
+    /// window.open does not return null), catch its destination, load a
+    /// same-origin one in place, and offer a way back.
+    func testBlankPopupThatNavigatesLaterLoadsInPlaceWithWayBack() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestProxyBounceHarness"]
+        app.launch()
+
+        let loads = app.staticTexts["bounce-load-count"]
+        XCTAssertTrue(waitForLabel(loads, "ONE LOAD", timeout: 20), "harness should load once")
+
+        let open = app.webViews.buttons["Open popup later"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10), "popup button should render")
+        open.tap()
+
+        let popup = app.staticTexts["bounce-popup-status"]
+        XCTAssertTrue(waitForLabel(popup, "POPUP popped-page", timeout: 15),
+                      "the popup's later destination should load in place; got '\(popup.label)'")
+        let back = app.buttons["return-to-dashboard-button"]
+        XCTAssertTrue(back.waitForExistence(timeout: 5),
+                      "a page opened by a new-window request must offer a way back")
+
+        back.tap()
+        XCTAssertTrue(app.webViews.buttons["Open popup later"].waitForExistence(timeout: 15),
+                      "the way back should return to the original page")
+        XCTAssertFalse(back.exists, "the way-back control should go away once used")
+    }
+
+    /// A popup that never navigates must not blank the page it came from,
+    /// and window.open must still return a window rather than null.
+    func testBlankPopupThatNeverNavigatesLeavesPageAlone() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestProxyBounceHarness"]
+        app.launch()
+
+        let loads = app.staticTexts["bounce-load-count"]
+        XCTAssertTrue(waitForLabel(loads, "ONE LOAD", timeout: 20), "harness should load once")
+
+        let open = app.webViews.buttons["Open blank popup"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10), "blank-popup button should render")
+        open.tap()
+
+        let popup = app.staticTexts["bounce-popup-status"]
+        XCTAssertTrue(waitForLabel(popup, "POPUP blank-window", timeout: 10),
+                      "window.open() should return a window, not null; got '\(popup.label)'")
+        // Give a wrong implementation time to blank the page.
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertTrue(app.webViews.buttons["Open blank popup"].exists,
+                      "the original page must still be showing")
+        XCTAssertEqual(loads.label, "ONE LOAD", "the original page must not have reloaded")
+        XCTAssertFalse(app.buttons["return-to-dashboard-button"].exists,
+                       "nothing loaded in place, so there is nothing to return from")
+    }
+
     private func waitForLabel(_ element: XCUIElement, _ label: String,
                               timeout: TimeInterval) -> Bool {
         let expectation = XCTNSPredicateExpectation(
