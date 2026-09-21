@@ -23,7 +23,7 @@ private nonisolated final class BounceSchemeHandler: NSObject, WKURLSchemeHandle
 
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
         guard let url = urlSchemeTask.request.url else { return }
-        logger.log("bounce harness: scheme request \(url)")
+        logger.log("bounce harness: scheme request \(url.redactedForLog)")
         let id = ObjectIdentifier(urlSchemeTask as AnyObject)
         if url.path == "/slow" {
             let task = Task { [weak self, weak urlSchemeTask] in

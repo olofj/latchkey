@@ -180,7 +180,7 @@ final class StatusViewModel:  ObservableObject {
 
     func showAuth() {
         if let authURL {
-            logger.log("showAuth: opening auth sheet with cached URL: \(authURL)")
+            logger.log("showAuth: opening auth sheet with cached URL: \(LogRedaction.scrub(authURL))")
             openAuthSession(authURL)
         } else {
             // No URL yet — request a fresh interactive login and open the

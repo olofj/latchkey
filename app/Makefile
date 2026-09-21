@@ -138,9 +138,10 @@ ipa: framework  ## Archive + export a dev-signed .ipa for a real iOS device
 # simulator, no signing. See scripts/proxy-semantics/ for how the expectations
 # were measured against a real SOCKS proxy.
 .PHONY: test-policy
-test-policy:  ## Run split-tunnel and hostname-qualification unit tests (fast, host-only)
+test-policy:  ## Run the host-only unit tests (fast; no simulator, no framework)
 	@./scripts/test-proxy-policy.sh
 	@./scripts/test-hostname-qualifier.sh
+	@./scripts/test-log-redaction.sh
 
 .PHONY: test-ios-ui
 test-ios-ui: framework app  ## Run every required iOS UI test on the simulator
@@ -154,15 +155,6 @@ test-ios-ui: framework app  ## Run every required iOS UI test on the simulator
 
 .PHONY: test
 test: test-policy test-ios-ui  ## Run the complete required iOS suite
-
-# ----- process-log crash recovery + symbolication test -----
-# A real Go panic is retained by the global filch, uploaded to the local fake
-# log service after relaunch, and symbolicated through TailscaleKit's dSYM.
-.PHONY: crashtest
-crashtest: app  ## Verify real Go panic recovery through global logtail
-	@echo
-	@echo "::: Running process-log crash recovery test on $(SIM_NAME) :::"
-	./scripts/run-crashtest.sh "$(SIM_NAME)"
 
 # ----- commit/submodule history preservation -----
 # Run after EVERY commit. git-subtrac is content-addressed/idempotent, so this

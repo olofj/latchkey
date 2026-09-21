@@ -35,6 +35,12 @@ struct Logger: TailscaleKit.LogSink {
     /// `nonisolated` `Sendable` globals and the free `print`/`os_log`
     /// functions, so it is concurrency-safe.
     nonisolated func log(_ message: String) {
+        // Scrub before anything is written anywhere (revision R1). Call sites
+        // redact the URLs they log; this is the backstop for everything they
+        // cannot see — an interpolated NSError's userInfo, libtailscale's own
+        // messages arriving through this same sink, and future log lines.
+        let message = LogRedaction.scrub(message)
+
         // Keep the pre-existing stdout behaviour — `xcodebuild test` captures
         // the app's stdout, so these `tsnet:` lines show up in the test log.
         print("tsnet: \(message)")
@@ -49,9 +55,11 @@ struct Logger: TailscaleKit.LogSink {
         // attached to a Mac (no `log stream`, no Console.app).
         LogRing.shared.append(message)
 
-        // Mirror Swift/application diagnostics into the same persistent
-        // process-wide logtail as every tsnet backend and Go runtime stderr.
-        TailscaleLogging.log(message)
+        // Upstream had a fourth sink here, `TailscaleLogging.log(message)`,
+        // mirroring every app line into the process-wide logtail — whose
+        // BaseURL is Tailscale's hosted log service. Removed per decision D1:
+        // no app or tsnet logs leave the device. libtailscale's own upload is
+        // disabled separately, inside the vendored Go code.
     }
 }
 
@@ -178,7 +186,13 @@ nonisolated final class LogRing: @unchecked Sendable {
                     : entries
                 recent = ordered.suffix(80).map(\.line).joined(separator: "\n")
             }
-            TailscaleLogging.log("fatal error: Latchkey detected log spin loop rate=\(appendsThisSecond)/s appends=\(lifetimeAppends) wraps=\(lifetimeWraps) busErrors=\(lifetimeBusErrors)\n\(recent)")
+            // Upstream wrote this into the process logtail so it would be
+            // uploaded on the next launch. With upload off (D1), the unified
+            // log is where it survives the abort: a fault-level entry is
+            // persisted and retrievable with `log show` or a sysdiagnose.
+            os_log("fatal error: Latchkey detected log spin loop rate=%{public}llu/s appends=%{public}llu wraps=%{public}llu busErrors=%{public}llu\n%{public}@",
+                   log: LatchkeyLog.tsnet, type: .fault,
+                   appendsThisSecond, lifetimeAppends, lifetimeWraps, lifetimeBusErrors, recent)
             Darwin.abort()
         }
         if entries.count < capacity {

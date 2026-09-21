@@ -266,7 +266,7 @@ private struct DashboardContent: View {
               tab.viewModel.url == HomePageAvailabilityChecker.unreachableFallbackURL,
               let gateway = URL(string: homePage.url)
         else { return }
-        logger.log("Gateway \(homePage.url) appeared in the tailnet; leaving the fallback page")
+        logger.log("Gateway \(gateway.redactedForLog) appeared in the tailnet; leaving the fallback page")
         tab.viewModel.load(url: gateway)
     }
 

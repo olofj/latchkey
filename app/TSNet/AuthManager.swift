@@ -15,7 +15,7 @@ final class AuthManager: NSObject, ASWebAuthenticationPresentationContextProvidi
 
     func showAuth(authURL: String, onEnded: @escaping () -> Void = {}) {
         guard let url = URL(string: authURL) else {
-            logger.log("AuthManager.showAuth: invalid URL: \(authURL)")
+            logger.log("AuthManager.showAuth: invalid URL: \(LogRedaction.scrub(authURL))")
             return
         }
 
@@ -40,7 +40,7 @@ final class AuthManager: NSObject, ASWebAuthenticationPresentationContextProvidi
         // start() returns false if presentation can't begin (no anchor, not
         // foregrounded, …) — surface that so "tap Login, nothing happens" is
         // debuggable instead of silent.
-        logger.log("AuthManager.showAuth: session.start() -> \(started) for \(authURL)")
+        logger.log("AuthManager.showAuth: session.start() -> \(started) for \(LogRedaction.scrub(authURL))")
     }
 
     nonisolated private static func makeCompletion(

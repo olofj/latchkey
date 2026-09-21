@@ -188,7 +188,7 @@ final class TabManager: ObservableObject {
             logger.log("Refusing to open non-http(s) URL externally: \(url.scheme ?? "nil")")
             return
         }
-        logger.log("Opening externally: \(url)")
+        logger.log("Opening externally: \(url.redactedForLog)")
         UIApplication.shared.open(url)
 #endif
     }

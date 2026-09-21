@@ -151,26 +151,9 @@ final class TSNetManager {
         return ProcessInfo.processInfo.arguments.contains("-Ephemeral")
     }
 
-    /// The deliberate-crash mode requested via launch args, or nil if no crash
-    /// is requested. `-CrashTest` alone → mode 0; `-CrashTestMode 1` panics in
-    /// a background goroutine. TEST/DEBUG ONLY.
     nonisolated static func tcpChaosTestRequested() -> Bool {
         ProcessInfo.processInfo.arguments.contains("-UITestDefunctLoopback")
             || ProcessInfo.processInfo.arguments.contains("-UITestShutdownTCPConnections")
-    }
-
-    nonisolated static func flushLogsRequested() -> Bool {
-        ProcessInfo.processInfo.arguments.contains("-UITestFlushLogs")
-    }
-
-    nonisolated static func crashTestMode() -> Int? {
-        let args = ProcessInfo.processInfo.arguments
-        guard args.contains("-CrashTest") else { return nil }
-        if let i = args.firstIndex(of: "-CrashTestMode"), i + 1 < args.count,
-           let m = Int(args[i + 1]) {
-            return m
-        }
-        return 0
     }
 
     nonisolated private func startTailscale() async {
@@ -178,34 +161,12 @@ final class TSNetManager {
             // This sets up a localAPI client attached to the local node.
             let node = try await MainActor.run { try setupNode() }
 
-            // Test/debug hook: deliberately crash the Go runtime to verify the
-            // process-wide filch/logtail recovery path. Gated by a launch arg so
-            // it can never fire in normal/TestFlight use. Done right after
-            // node creation (before `up()`) so it's connection-independent and
-            // deterministic. Mode 0 panics synchronously and does not return.
-            if let mode = Self.crashTestMode() {
-                logger.log("CrashTest: triggering deliberate Go runtime panic (mode \(mode))")
-                // TailscaleNode is an actor, so cross the boundary with `await`
-                // (mode 0 panics inside the call and aborts before this resumes).
-                await node.crashTest(mode: mode)
-            }
-
             // Create a localAPIClient instance for our local node
             let localAPIClient = LocalAPIClient(localNode: node, logger: logger)
             await MainActor.run { setLocalAPIClient(localAPIClient) }
 
             try await tailscaleUp(localAPI: localAPIClient, consumer: consumer)
 
-            // Test-only synchronization point: after startup leftovers have
-            // drained, force one subsequent acknowledged HTTP upload.
-            if Self.flushLogsRequested() {
-                do {
-                    try await TailscaleLogging.flush()
-                    logger.log("UITest log flush succeeded")
-                } catch {
-                    logger.log("UITest log flush failed: \(error)")
-                }
-            }
         } catch {
             await MainActor.run { startInFlight = false }
             fatalError("Error setting up Tailscale: \(error)")
@@ -587,11 +548,18 @@ final class TSNetManager {
     /// is logged instead, so the condition is visible rather than fatal.
     @MainActor
     func proxyEverythingRequested() -> Bool {
-        if let id = model.prefs?.ExitNodeID, !id.isEmpty {
+        let id = model.prefs?.ExitNodeID ?? ""
+        if !id.isEmpty, id != lastIgnoredExitNodeID {
+            // Once per distinct value: this runs on every 5 s policy poll.
             logger.log("prefs carry ExitNodeID '\(id)' but exit nodes are not supported; ignoring for routing")
         }
+        lastIgnoredExitNodeID = id
         return Self.proxyEverythingOverride()
     }
+
+    /// The last `ExitNodeID` reported as ignored, so the warning above fires
+    /// once per value instead of every poll.
+    @MainActor private var lastIgnoredExitNodeID = ""
 
     /// Debug/diagnostic escape hatch: `-ProxyEverything` (launch arg) or
     /// `APERTURE_PROXY_EVERYTHING=1` restores the pre-fix behaviour of routing

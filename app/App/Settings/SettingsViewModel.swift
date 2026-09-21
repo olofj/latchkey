@@ -151,7 +151,7 @@ final class SettingsViewModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         homePageNormalizationTask?.cancel()
         let normalized = URLInputNormalizer.normalized(from: trimmed)
-        logger.log("Settings: normalized home page \(trimmed) -> \(normalized)")
+        logger.log("Settings: normalized home page \(LogRedaction.scrub(trimmed)) -> \(LogRedaction.scrub(normalized))")
         if homePage != normalized {
             homePage = normalized
         }

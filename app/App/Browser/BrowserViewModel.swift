@@ -293,18 +293,18 @@ final class BrowserViewModel: NSObject, ObservableObject {
                 urlString: initialURL.absoluteString,
                 status: tsnetModel.localStatus) {
             case .wait:
-                logger.log("loadInitial: holding \(initialURL) until home-page availability is known")
+                logger.log("loadInitial: holding \(initialURL.redactedForLog) until home-page availability is known")
                 return
             case .load(let decidedURL):
                 if decidedURL != initialURL {
-                    logger.log("Home page host is not in this tailnet; opening \(decidedURL)")
+                    logger.log("Home page host is not in this tailnet; opening \(decidedURL.redactedForLog)")
                 }
                 target = decidedURL
             }
         }
 
         if needsPeerDataToRoute(target), tsnetModel.proxyPolicy?.hasPeerData != true {
-            logger.log("loadInitial: holding \(target) until tailnet peer data arrives")
+            logger.log("loadInitial: holding \(target.redactedForLog) until tailnet peer data arrives")
             return
         }
         didLoadInitial = true
@@ -396,7 +396,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
                       pending.url == failedURL,
                       ContinuousClock.now < pending.deadline
                 else { return }
-                logger.log("Startup page transport not ready; retrying \(failedURL)")
+                logger.log("Startup page transport not ready; retrying \(failedURL.redactedForLog)")
                 self.loadResolved(failedURL)
             } catch {
                 return
@@ -473,7 +473,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         case .unchanged(let unchanged):
             return unchanged
         case .qualified(let qualified):
-            logger.log("Expanded known tailnet short name \(url) -> \(qualified)")
+            logger.log("Expanded known tailnet short name \(url.redactedForLog) -> \(qualified.redactedForLog)")
             return qualified
         case .unknown(let label):
             reportUnknownTailnetHost(label, attemptedURL: url)
@@ -514,7 +514,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     func navigationError(_ error: Error, for url: URL) {
         blankingContent = false
-        logger.log("Navigation error for \(url): \(error)")
+        logger.log("Navigation error for \(url.redactedForLog): \(LogRedaction.describe(error))")
         navError = (error, url)
         navErrorMessage = Self.describe(error)
         navErrorKind = Self.categorize(error)
@@ -527,7 +527,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     func reportURLParseFailure(_ raw: String) {
-        logger.log("URL parse failure (URL(string:) returned nil): \(raw)")
+        logger.log("URL parse failure (URL(string:) returned nil): \(LogRedaction.scrub(raw))")
         navError = (URLError(.badURL), nil)
         navErrorMessage = "The URL has a format error — check the escaped text above for unexpected characters."
         navErrorKind = .urlFormat
@@ -608,7 +608,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     private func maybeDumpLoadedPage(_ view: WKWebView) {
         guard ProcessInfo.processInfo.arguments.contains("-UITestLogResponses") else { return }
-        let js = "JSON.stringify({href:location.href,title:document.title,contentType:document.contentType,body:(document.body?document.body.innerText:'(no body)').substring(0,300)})"
+        let js = "JSON.stringify({href:location.origin+location.pathname,title:document.title,contentType:document.contentType,body:(document.body?document.body.innerText:'(no body)').substring(0,300)})"
         view.evaluateJavaScript(js) { result, error in
             if let error { logger.log("LOADED-PAGE error: \(error)") }
             else { logger.log("LOADED-PAGE: \(result ?? "(null)")") }
@@ -690,7 +690,7 @@ extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
         if ProcessInfo.processInfo.arguments.contains("-UITestLogResponses") {
-            logger.log("RESP-LOG action: \(navigationAction.request.url?.absoluteString ?? "(nil)") type=\(navigationAction.navigationType.rawValue)")
+            logger.log("RESP-LOG action: \(navigationAction.request.url?.redactedForLog ?? "(nil)") type=\(navigationAction.navigationType.rawValue)")
         }
         decisionHandler(.allow)
     }
@@ -699,7 +699,7 @@ extension BrowserViewModel: WKNavigationDelegate {
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
         if ProcessInfo.processInfo.arguments.contains("-UITestLogResponses") {
             let response = navigationResponse.response
-            let url = response.url?.absoluteString ?? "(nil)"
+            let url = response.url?.redactedForLog ?? "(nil)"
             if let http = response as? HTTPURLResponse {
                 logger.log("RESP-LOG response: \(http.statusCode) \(url) mime=\(response.mimeType ?? "?")")
             }
