@@ -123,3 +123,72 @@ func TestOSLogMirroredReadsTheEnvironment(t *testing.T) {
 		}
 	}
 }
+
+// Nothing that can finish a login reaches the disk: tsnet's and control's
+// real login-link lines, a raw stderr URL with userinfo and a token, and a
+// code with punctuation after it or no scheme at all.
+func TestLocalLogRedactsBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	w := newLocalLog(dir, true)
+	secrets := []string{"1a2b3c4d5e6f", "0123456789abcdef0123", "fk1.sessionsecret", "pw", "fragsecret", "9f8e7d6c5b4a"}
+	w.Write([]byte("control: AuthURL is https://login.tailscale.com/a/1a2b3c4d5e6f\n"))
+	w.Write([]byte("To start this tsnet server, restart with TS_AUTHKEY set, or go to: http://127.0.0.1:8490/auth/0123456789abcdef0123\n"))
+	w.Write([]byte("RAW-STDERR: visit https://user:pw@gw.example.net/?token=fk1.sessionsecret#fragsecret now\n"))
+	w.Write([]byte("see login.tailscale.com/a/9f8e7d6c5b4a.\n"))
+	ts, _ := os.ReadFile(dir + "/tsnet.log")
+	raw, _ := os.ReadFile(dir + "/stderr.log")
+	for _, secret := range secrets {
+		if strings.Contains(string(ts)+string(raw), secret) {
+			t.Errorf("%q reached the disk:\n%s\n%s", secret, ts, raw)
+		}
+	}
+	for _, want := range []string{"https://login.tailscale.com/a/…\n", "go to: http://127.0.0.1:8490/auth/…\n", "login.tailscale.com/a/….\n"} {
+		if !strings.Contains(string(ts), want) {
+			t.Errorf("tsnet.log lacks %q (what the line was should survive):\n%s", want, ts)
+		}
+	}
+	if !strings.Contains(string(raw), "visit https://…@gw.example.net/?… now\n") {
+		t.Errorf("stderr.log: %s", raw)
+	}
+}
+
+// tsnet repeats the login line every 5 s while it waits: one line and a
+// count, not a file full of them.
+func TestLocalLogCollapsesRepeats(t *testing.T) {
+	dir := t.TempDir()
+	w := newLocalLog(dir, true)
+	for i := 0; i < 5; i++ {
+		w.Write([]byte("go to: http://127.0.0.1:8490/auth/0123456789abcdef0123\n"))
+	}
+	w.Write([]byte("magicsock: next\n"))
+	ts, _ := os.ReadFile(dir + "/tsnet.log")
+	if n := strings.Count(string(ts), "go to:"); n != 1 {
+		t.Errorf("the repeated line was written %d times:\n%s", n, ts)
+	}
+	if !strings.Contains(string(ts), "(the line before repeated 4 more times)\n") || !strings.HasSuffix(string(ts), " magicsock: next\n") {
+		t.Errorf("tsnet.log: %s", ts)
+	}
+}
+
+// The mode comes from the launch: normally raw stderr (a Go panic) is kept;
+// under Xcode or XCTest it is a mirror of the unified log and is not.
+func TestLatchkeyLocalLogTakesTheModeFromTheLaunch(t *testing.T) {
+	for _, c := range []struct {
+		env    string
+		kept   bool
+		header string
+	}{
+		{"", true, "raw stderr (a Go panic from the last run) is kept in stderr.log"},
+		{"YES", false, "raw stderr not kept: os_log is mirrored to it"},
+	} {
+		t.Setenv("OS_ACTIVITY_DT_MODE", c.env)
+		dir := t.TempDir()
+		w := latchkeyLocalLog(dir)
+		w.Write([]byte("RAW-STDERR: panic: from the last run\n"))
+		ts, _ := os.ReadFile(dir + "/tsnet.log")
+		_, err := os.Stat(dir + "/stderr.log")
+		if (err == nil) != c.kept || !strings.Contains(string(ts), c.header) {
+			t.Errorf("OS_ACTIVITY_DT_MODE=%q: stderr.log kept=%v, tsnet.log %q", c.env, err == nil, ts)
+		}
+	}
+}
