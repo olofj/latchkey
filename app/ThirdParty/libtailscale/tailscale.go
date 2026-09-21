@@ -74,9 +74,9 @@ func TsnetSetupLogs(dir *C.char) C.int {
 		return C.EIO
 	}
 	lc := logtail.Config{
-		Collection:          cfg.Collection,
-		PrivateID:           cfg.PrivateID,
-		BaseURL:             logpolicy.LogURL(),
+		Collection: cfg.Collection,
+		PrivateID:  cfg.PrivateID,
+		BaseURL:    logpolicy.LogURL(),
 		// Do NOT echo old filch logs (from prior runs) to stderr. They are
 		// still uploaded to logtail via the buffer drain, but echoing them to
 		// the original stderr floods the Xcode/console with stale warnings
@@ -242,6 +242,13 @@ func TsnetNewServer() C.int {
 	processLogs.mu.Lock()
 	ts.Logtail = processLogs.logger
 	processLogs.mu.Unlock()
+	if ts.Logtail != nil {
+		// Latchkey (R29): tsnet's user-facing lines (the login link, every
+		// 5 s while it waits) already go to Logtail. With UserLogf nil it
+		// ALSO log.Printf's them, and log's output is that same logger
+		// (TsnetSetupLogs), so each landed twice in tsnet.log.
+		ts.UserLogf = logger.Discard
+	}
 	s := &server{s: ts}
 	servers.m[sd] = s
 	return (C.int)(sd)
