@@ -12,10 +12,11 @@ import (
 func TestLocalLogStampsAndRotates(t *testing.T) {
 	dir := t.TempDir()
 	w := latchkeyLocalLog(dir)
-	l, ok := w.(*localLog)
+	s, ok := w.(*splitLog)
 	if !ok {
 		t.Fatalf("expected a file-backed writer, got %T", w)
 	}
+	l := s.tsnet
 	l.max = 200 // small, to force rotation
 
 	if _, err := w.Write([]byte("magicsock: first line\n")); err != nil {
@@ -57,7 +58,39 @@ func TestLocalLogStampsAndRotates(t *testing.T) {
 
 func TestLocalLogUnopenableIsDiscard(t *testing.T) {
 	w := latchkeyLocalLog("/nonexistent-dir-for-latchkey-test")
-	if _, ok := w.(*localLog); ok {
+	if _, ok := w.(*splitLog); ok {
 		t.Fatal("an unopenable log must fall back to io.Discard")
+	}
+}
+
+// Raw stderr lines (logtail's RAW-STDERR re-emission) go to stderr.log,
+// unprefixed, and never into tsnet.log -- under XCTest they outnumbered
+// tsnet's own lines a hundred to one and pushed them out.
+func TestLocalLogSplitsRawStderr(t *testing.T) {
+	dir := t.TempDir()
+	w := latchkeyLocalLog(dir)
+	w.Write([]byte("magicsock: a tsnet line\n"))
+	w.Write([]byte("RAW-STDERR: ***\n"))
+	w.Write([]byte("RAW-STDERR: panic: from the last run\n"))
+	w.Write([]byte("RAW-STDERR:\n"))
+	w.Write([]byte("derp: another tsnet line\n"))
+
+	ts, _ := os.ReadFile(dir + "/tsnet.log")
+	raw, err := os.ReadFile(dir + "/stderr.log")
+	if err != nil {
+		t.Fatal("no stderr.log:", err)
+	}
+	if strings.Contains(string(ts), "RAW-STDERR") || strings.Contains(string(ts), "panic") {
+		t.Fatalf("a raw line reached tsnet.log:\n%s", ts)
+	}
+	if strings.Count(string(ts), "\n") != 2 || !strings.Contains(string(ts), " magicsock: a tsnet line\n") {
+		t.Fatalf("tsnet.log should hold exactly the two tsnet lines:\n%s", ts)
+	}
+	if strings.Contains(string(raw), "RAW-STDERR") || !strings.Contains(string(raw), "Z panic: from the last run\n") ||
+		strings.Contains(string(raw), "magicsock") || strings.Count(string(raw), "\n") != 3 {
+		t.Fatalf("stderr.log should hold the three raw lines, unprefixed and stamped:\n%s", raw)
+	}
+	if st, _ := os.Stat(dir + "/stderr.log"); st.Mode().Perm() != 0o600 {
+		t.Fatalf("stderr.log is %v, want 0600", st.Mode().Perm())
 	}
 }

@@ -16,13 +16,20 @@
 // most twice that on disk. Only non-verbose lines are echoed (logtail's
 // StderrLevel, 0), which is what a person debugging wants.
 //
-// It never leaves the device: it is a local file, the directory is excluded
-// from backup (App/Workspace/BackupExclusion.swift), and the app redacts it
-// again before display.
+// logtail also re-emits, prefixed "RAW-STDERR: ", every line the process
+// wrote to its raw stderr (which filch captures): a Go panic from the
+// previous run, but also -- under Xcode or XCTest -- everything the process
+// prints, thousands of lines a minute. Those go to their own stderr.log,
+// capped the same way, so they can never push tsnet's lines out of tsnet.log.
+//
+// It never leaves the device: they are local files, the directory is
+// excluded from backup (App/Workspace/BackupExclusion.swift), and the app
+// redacts them again before display.
 
 package main
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"sync"
@@ -30,6 +37,10 @@ import (
 )
 
 const localLogMax = 1 << 20 // 1 MiB per file
+
+// rawStderrPrefix marks logtail's re-emission of a raw stderr line
+// (logtail.go, drainPending).
+const rawStderrPrefix = "RAW-STDERR:"
 
 type localLog struct {
 	mu   sync.Mutex
@@ -39,14 +50,42 @@ type localLog struct {
 	max  int64
 }
 
-// latchkeyLocalLog returns the writer for root/tsnet.log, or io.Discard if it
-// cannot be opened (logging must never stop the node).
+// latchkeyLocalLog returns logtail's echo writer: tsnet's lines to
+// root/tsnet.log, raw stderr lines to root/stderr.log. io.Discard if tsnet.log
+// cannot be opened (logging must never stop the node); raw lines are dropped
+// if stderr.log cannot be.
 func latchkeyLocalLog(root string) io.Writer {
-	l := &localLog{path: root + "/tsnet.log", max: localLogMax}
-	if err := l.open(); err != nil {
+	tsnet := openLocalLog(root + "/tsnet.log")
+	if tsnet == nil {
 		return io.Discard
 	}
+	return &splitLog{tsnet: tsnet, raw: openLocalLog(root + "/stderr.log")}
+}
+
+func openLocalLog(path string) *localLog {
+	l := &localLog{path: path, max: localLogMax}
+	if err := l.open(); err != nil {
+		return nil
+	}
 	return l
+}
+
+// splitLog routes each echoed line (logtail writes one per call) by its
+// prefix. The raw file drops the prefix: every line in it is raw.
+type splitLog struct {
+	tsnet *localLog
+	raw   *localLog // nil: raw lines are dropped
+}
+
+func (s *splitLog) Write(p []byte) (int, error) {
+	rest, isRaw := bytes.CutPrefix(p, []byte(rawStderrPrefix))
+	if !isRaw {
+		return s.tsnet.Write(p)
+	}
+	if s.raw != nil {
+		s.raw.Write(bytes.TrimPrefix(rest, []byte(" ")))
+	}
+	return len(p), nil
 }
 
 func (l *localLog) open() error {
@@ -86,7 +125,7 @@ func (l *localLog) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// rotate keeps exactly one predecessor, tsnet.log.1.
+// rotate keeps exactly one predecessor, <name>.1.
 func (l *localLog) rotate() {
 	l.f.Close()
 	l.f = nil
