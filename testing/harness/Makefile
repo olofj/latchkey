@@ -220,6 +220,11 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	    echo "FAIL: a wrong password got through" >&2; exit 1; fi; echo "    ok"; \
 	echo "==> the journal (file and control port) recorded the CONNECT"; \
 	grep -q '"event": *"connect"' $(JOURNAL); curl -s $$CTL/journal | grep -q '"connect"'; echo "    ok"; \
+	echo "==> a client that connects and never speaks stalls nobody (tls_accept)"; \
+	$(PY) -c "import subprocess, sys; from tls_accept import with_silent_client; \
+	    r = with_silent_client($(DASH_PORT), lambda: subprocess.run(['curl', '-sS', '--fail', '--max-time', '5', \
+	        '--cacert', 'ca.pem', 'https://dash.localtest.me:$(DASH_PORT)/'], capture_output=True)); sys.exit(r.returncode)" \
+	    || { echo "FAIL: a silent client stalled the fake dashboard" >&2; exit 1; }; echo "    ok"; \
 	echo "==> R10 positive control: a DIRECT load of dash.localtest.me succeeds"; \
 	curl -s -X POST $$DCTL/__reset >/dev/null; \
 	curl -sS --fail --cacert ca.pem https://dash.localtest.me:$(DASH_PORT)/ | grep -q "FAKE DASHBOARD"; \

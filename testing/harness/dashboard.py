@@ -43,6 +43,8 @@ import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from tls_accept import HandshakeInThread, wrap_listener
+
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 STATE_LOCK = threading.Lock()
@@ -102,7 +104,7 @@ setInterval(report, 1000);
 </script>"""
 
 
-class Page(BaseHTTPRequestHandler):
+class Page(HandshakeInThread, BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     away_url = "https://dash.localtest.me:8443/away-target"
 
@@ -285,11 +287,11 @@ def main():
     ctx.load_cert_chain(a.cert, a.key)
 
     v4 = ThreadingHTTPServer(("127.0.0.1", a.port), Page)
-    v4.socket = ctx.wrap_socket(v4.socket, server_side=True)
+    v4.socket = wrap_listener(ctx, v4.socket)   # handshake per connection (tls_accept)
     servers = [v4]
     try:
         v6 = V6Server(("::1", a.port), Page)
-        v6.socket = ctx.wrap_socket(v6.socket, server_side=True)
+        v6.socket = wrap_listener(ctx, v6.socket)
         servers.append(v6)
     except OSError as e:
         print("dashboard: no IPv6 loopback (%s); IPv4 only" % e, flush=True)

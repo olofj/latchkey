@@ -12,7 +12,9 @@
 #                  start it with the fake dashboard
 #   3. simulator   boot it, trust the test CA
 #   4. tests       TailnetHarnessTests (Testing configuration, R15)
-#   5. teardown    stop both harnesses, whatever happened
+#   5. R1/D1       no login link anywhere in the app container: the node log
+#                  keeps tsnet's lines, and tsnet logs its login link
+#   6. teardown    stop both harnesses, whatever happened
 #
 # --build runs build-for-testing first. Without it, the last test build is
 # reused (scripts/test-offline.sh --build makes the same one).
@@ -58,10 +60,24 @@ teardown() {
     make -C "$TSNET" --no-print-directory down >/dev/null 2>&1 || true
 }
 trap teardown EXIT
-say "tsnet harness self-test"
-make -C "$TSNET" --no-print-directory check > "$LOG_DIR/selftest.log" 2>&1 \
-    || { cat "$LOG_DIR/selftest.log" >&2; echo "error: the harness self-test failed" >&2; exit 1; }
-grep -E "^(==>|selftest)" "$LOG_DIR/selftest.log" | sed 's/^/    /'
+# The self-test proves the harness, not the app: it reruns only when the
+# harness changed since it last passed -- its own sources, or the vendored
+# tailscale tree it builds against (committed tree hash; any uncommitted
+# change there always reruns it). SELFTEST=always forces it.
+VENDORED="$APP/ThirdParty/libtailscale/tailscale-patched"
+SELFTEST_STAMP="$TSNET/.run/selftest.sha"
+SELFTEST_HASH=$( { cat "$TSNET"/*.go "$TSNET"/go.mod "$TSNET"/go.sum "$TSNET"/Makefile
+                   git -C "$APP" rev-parse HEAD:ThirdParty/libtailscale/tailscale-patched; } | shasum -a 256 | cut -d' ' -f1)
+if [[ "${SELFTEST:-auto}" != always && -z "$(git -C "$APP" status --porcelain -- "$VENDORED")" \
+      && -f "$SELFTEST_STAMP" && "$(cat "$SELFTEST_STAMP")" == "$SELFTEST_HASH" ]]; then
+    say "tsnet harness self-test: skipped (unchanged since it last passed; SELFTEST=always forces it)"
+else
+    say "tsnet harness self-test"
+    make -C "$TSNET" --no-print-directory check > "$LOG_DIR/selftest.log" 2>&1 \
+        || { cat "$LOG_DIR/selftest.log" >&2; echo "error: the harness self-test failed" >&2; exit 1; }
+    grep -E "^(==>|selftest)" "$LOG_DIR/selftest.log" | sed 's/^/    /'
+    mkdir -p "$TSNET/.run" && echo "$SELFTEST_HASH" > "$SELFTEST_STAMP"
+fi
 say "harness up"
 make -C "$TSNET" --no-print-directory up
 
@@ -76,6 +92,8 @@ for devs in json.load(sys.stdin)['devices'].values():
 sys.exit(1)") || { echo "error: no simulator named $SIM_NAME" >&2; exit 1; }
 xcrun simctl bootstatus "$UDID" -b >/dev/null
 xcrun simctl keychain "$UDID" add-root-cert "$HARNESS/ca.der"
+# A fresh app container, so the login-link scan below reads only this run's.
+xcrun simctl uninstall "$UDID" net.lixom.latchkey >/dev/null 2>&1 || true
 
 # -------------------------------------------------------------------- build --
 SANDBOX_FLAGS=()
@@ -85,6 +103,7 @@ fi
 if [[ $BUILD -eq 1 ]]; then
     # A vendored Go change is only in the app once the framework is rebuilt
     # (R29 shipped a stale one); a no-op when it is current.
+    say "TailscaleKit framework (rebuilds only if libtailscale changed; minutes if so)"
     make -C "$APP" --no-print-directory framework > "$LOG_DIR/framework.log" 2>&1 \
         || { echo "error: TailscaleKit framework build failed; see $LOG_DIR/framework.log" >&2; exit 1; }
     say "build-for-testing (Testing configuration)"
@@ -112,6 +131,29 @@ PASSED=$(grep -cE "Test Case .*TailnetHarnessTests.* passed" "$LOG_DIR/test.log"
 if [[ $TEST_RC -eq 0 && "$PASSED" -ne "$EXPECTED" ]]; then
     echo "error: $PASSED of $EXPECTED TailnetHarnessTests passed (a stale build? try --build)" >&2
     TEST_RC=1
+fi
+
+# ------------------------------------------------------- login-link scan --
+# The login tests make tsnet log its login link ("AuthURL is ...", "go to:
+# ..."), and the node log keeps tsnet's lines on disk (M8.3). A link is a
+# login for whoever holds it: nothing on disk may hold one (R29 review).
+# Validated: tsnet.log must hold the REDACTED form, or the scan proved nothing.
+say "no login link in the app container"
+CONTAINER=$(xcrun simctl get_app_container "$UDID" net.lixom.latchkey data 2>/dev/null || true)
+if [[ -z "$CONTAINER" ]]; then
+    echo "error: app container not found" >&2; TEST_RC=1
+else
+    LINK_RE='/auth/[0-9a-f]{16,}|login\.tailscale\.com/a/[A-Za-z0-9]{8,}'
+    if grep -rlaE "$LINK_RE" "$CONTAINER/Library" "$CONTAINER/tmp" 2>/dev/null > "$LOG_DIR/login-link-leaks.txt"; then
+        echo "error: a login link was written to disk:" >&2
+        sed "s|$CONTAINER/|    |" "$LOG_DIR/login-link-leaks.txt" >&2
+        TEST_RC=1
+    elif ! grep -rqa "/auth/…" "$CONTAINER/Library/Application Support/"*/Logs/tsnet.log* 2>/dev/null; then
+        echo "error: no redacted login link in tsnet.log, so the scan proved nothing" >&2
+        TEST_RC=1
+    else
+        echo "    ok (all of Library + tmp; tsnet.log holds the links redacted)"
+    fi
 fi
 
 # ------------------------------------------------------------------ summary --

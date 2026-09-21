@@ -1709,3 +1709,174 @@ the same screen: the node key's expiry and the provisioning profile's.
 
 **Actual:** about 2 h agent wall-clock, excluding a pause while a tool call
 waited on the owner.
+
+## 2026-09-21 — R29 review
+
+Two adversarial reviews: code, privacy and logging; and tests and build.
+**All findings are fixed**, except two low items noted at the end. Following
+up the first finding turned up **one more leak, which predated R29.**
+
+**Privacy:**
+1. **(high) `tsnet.log` stored Tailscale login links in plain text.**
+   - Control logs `AuthURL is <url>` once. tsnet logs `… or go to: <url>`
+     every 5 s while it waits for a login.
+   - The R29 entry's "redacted again on display" was true only of the
+     display: the file itself was not redacted. Anyone who copied it (Xcode's
+     Download Container, a future share feature) could finish the login with
+     their own account.
+   - The vendored writer now redacts every line before writing, by the app's
+     `LogRedaction` rules. Go tests cover both real line formats.
+   - `test-tailnet.sh` now starts from a fresh container and fails if a
+     login link is anywhere in it. It is validated: `tsnet.log` must hold the
+     redacted form.
+2. **(found by that scan, predates R29) LocalAPI responses were cached on
+   disk.**
+   - TailscaleKit built every LocalAPI session on
+     `URLSessionConfiguration.default`, whose cache is on disk.
+   - `Cache.db` held three status responses with the pending login link.
+   - The sessions are now `.ephemeral` (vendored, its own commit). The app
+     also makes `URLCache.shared` memory-only as a backstop.
+3. **(medium) Punctuation defeated login-code redaction.**
+   - A code followed by `.`, `)`, `,`, `}`, `]`, a backtick, `;` or an
+     escaped `\n` stayed visible, and so did one with no scheme
+     (`login.tailscale.com/a/<code>`).
+   - The fixes:
+     - URL candidates stop at backslashes and backticks, and shed unbalanced
+       trailing punctuation;
+     - the path rule redacts the leading 8+ character alphanumeric run;
+     - a second pass catches `/a/<code>` and `/auth/<id>` anywhere.
+   - Deliberately over-inclusive: a dashboard path `/chat/a/<8+ chars>` is
+     redacted too. Redaction checks: 43, up from 30.
+4. **(low) Copy used the general pasteboard.** Status, Node log and the app
+   log now copy local-only (no Universal Clipboard): the text names the
+   tailnet, its addresses and its peers.
+
+**Behaviour:**
+5. **(low-medium) The now-working gear covered the Login banner's button**,
+   so a tap on Login could open Settings. The banner leaves room for it, as
+   the gateway banner already did.
+   - The expiry warnings moved to the bottom, clear of every top-edge
+     overlay.
+   - The dashboard shows only what is still ahead; an expired key has the
+     Login banner.
+   - The key message no longer points at a Settings action that does not
+     exist.
+6. **(low) Each tsnet user-facing line was logged twice.** `UserLogf` was
+   nil, so `logf` also `log.Printf`'d into the same logger (vendored fix). A
+   line repeated back to back is now written once, with a count: the 5-s
+   login loop filled the file at about 190 KB/h at the gate.
+7. **(low) Go's zero time counted as an expired key.** Anything before 1970
+   now means no expiry. The warnings are really sorted by urgency: the
+   comment said so, and the code always put the profile first.
+8. **(low) Cookies from different ports were merged.** Status now shows each
+   port's session separately. The port cannot be picked from the URL behind
+   `tailscale serve` (R37).
+9. **(low) Stale and misleading values on Status.**
+   - Status rereads on a 2-s clock.
+   - "Key expires" no longer says "never" before the node is connected.
+   - The profile row tells "none" from "unreadable".
+   - "Copied" resets.
+10. **(low) Node log cost.**
+    - It rereads only when a file's size or modification time changed, and
+      reads at most the last 512 KB of each file.
+    - The filter runs once per render.
+    - A `.task` loop replaces the `Timer` held in the view struct.
+    - Switching source can no longer keep showing the other source's lines.
+
+**Tests and build:**
+11. **(medium) `check-framework` checked file names, not freshness.** It
+    would not have caught R29's own later vendored commits.
+    - The framework rule now writes a hash of the sources' contents next to
+      the xcframework, and `check-framework` compares it.
+    - It runs on every `make framework`, so a failed build stays an error.
+    - Sources include files not yet `git add`ed. The generated headers are
+      gitignored, so they are left out.
+12. **(medium) Nothing tested a normal launch's stderr mode.** Inverting the
+    choice passed every test. A Go test now drives `latchkeyLocalLog` itself
+    with the environment set both ways.
+13. **(low) Weak or flaky UI assertions.** Now:
+    - the SOCKS endpoint must be exactly `127.0.0.1:<port>`;
+    - "no RAW-STDERR" is a count of zero, not a line check that could not
+      fail;
+    - the 2-s refresh is exercised: the harness deauthorizes and re-approves
+      the node while the view is open, and both state changes must appear;
+    - `reveal` swipes slowly and back down if it overshoots;
+    - `statusRow` waits for "reading…" and "checking" to settle.
+14. **(low) Host tests.** `test-diagnostics.sh` checks the compiler's exit
+    status; before, it failed only because the binary was missing. New cases:
+    - zero and pre-1970 times, a UTC offset, the exact 14-day and 48-h
+      boundaries, an expired profile, and the urgency order;
+    - two cookie ports;
+    - the byte-limited tail and the change signature.
+    Diagnostics checks: 34.
+15. **(low) Scripts.** The framework step prints a progress line.
+
+**New in the harness, used by 13 and by R31:** `POST /expire?hostname=&in=`
+and `POST /deauthorize?hostname=`. Its self-test covers both:
+- a future expiry is visible;
+- a past one drops the node to NeedsLogin;
+- a new login restores it. testcontrol clones the old node, past expiry and
+  all, onto the new key, so the harness's login page renews expired keys, as
+  a real control plane does;
+- a deauthorized node waits at NeedsMachineAuth until `/approve`.
+
+**Not fixed, on purpose:**
+- Status's Copy is not checked through the clipboard in a UI test. Reading
+  another app's pasteboard from the test runner raises a paste-permission
+  prompt. The copied text is built from the same rows the tests read.
+- The node log's rows are positional, so text can shift under the reader
+  when the window moves. It refreshes at most every 2 s.
+- The filch buffer files briefly hold unredacted lines before logtail drains
+  them. That predates R29. It is recorded for R30/M6, not fixed here.
+
+**Found by the regression pass, and fixed: the fake servers could stall.**
+- Discovery's relaunch test timed out: the relaunched app connected to the
+  gateway, but the fake gateway never read the request.
+- Cause: both fakes (`fake_gateway.py` and `dashboard.py`) TLS-wrapped the
+  *listening* socket. So `accept()` ran the handshake in the one accept
+  loop, with no timeout.
+- When a test kills the app mid-connection, the harness peer's forward to
+  the fake can stay open without ever sending a ClientHello. That one silent
+  client blocked every connection after it. A timing flake of the harness,
+  not the app.
+- The fix, `testing/harness/tls_accept.py`: the listener no longer
+  handshakes. Each connection handshakes in its own thread, within 10 s.
+  Only the handshake is timed, so the tests' WebSocket and SSE streams are
+  unaffected.
+- Shown on the same server: with one silent client connected, the old
+  version stalled (timed out at 4 s) and the new one served in 0.02 s.
+- Both harness self-tests now hold a silent connection and require a normal
+  request to succeed.
+
+**Test tiers (asked for by the owner: the cycle was slow).** Measured:
+- session 341 s, L2 167 s, L1 103 s, discovery 77 s, inherited about 64 s,
+  so about 13 min in all;
+- the session suite exercises only the session code, the page bridge, the
+  web data store and the fake gateway.
+
+`scripts/test-all.sh`:
+- The quick default is the host tests, the vendored Go tests, L1 and L2,
+  about 4–5 min.
+- Session and discovery join only when code they exercise changed since the
+  last recorded full pass.
+- `--full` runs everything and records what it passed.
+- The inherited tests (`scripts/test-inherited.sh`) are full-tier only: the
+  L2 diagnostics test and discovery's persistence test cover the same
+  ground.
+
+Nothing is deleted; every milestone and review commit still gets `--full`.
+
+## 2026-09-21 — R33 and R34 applied
+
+- **R33:**
+  - The 48-h profile warning shipped with R29.
+  - PLAN §7.7 now also says what moving to a paid team does. A new Team ID
+    is a new app to iOS: the old one is deleted and the new one installed.
+    That means a new node (remove the old one in the admin console, and move
+    the new one out of purgatory, O3b) and a new dashboard token. Plan it
+    for a convenient moment.
+- **R34:**
+  - Notifications stay out of v1.
+  - There was no deep-link interim left in PLAN to drop.
+  - §9's note on claude-agent-acp PR #735 now carries R34's trigger: if it
+    merges, re-evaluate what is left of M5–M8 before building it.

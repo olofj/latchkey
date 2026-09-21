@@ -42,6 +42,11 @@
 //     an earlier test never appear as peers.
 //     POST /approve   ?hostname=NAME: approve that node's device (the admin
 //     action RequireMachineAuth waits for)
+//     POST /expire    ?hostname=NAME&in=SECONDS: set that node's key expiry
+//     to now+SECONDS -- a date to warn about, or (<= 0) an
+//     expired key, the admin console's "Expire key" (R31)
+//     POST /deauthorize ?hostname=NAME: revoke that node's device
+//     approval; it waits at NeedsMachineAuth until /approve (R31)
 //     GET  /healthz   200 once the first reset has completed
 //
 // The harness sets the same no-log-upload knob as the app (decision D1):
@@ -78,6 +83,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -289,6 +295,15 @@ func (h *harness) serveLogin(w http.ResponseWriter, r *http.Request) {
 	ctl, gen := h.ctl, h.gen
 	h.mu.Unlock()
 	ok := ctl != nil && ctl.CompleteAuth(r.URL.Path)
+	if ok {
+		// A login renews the key, as on a real control plane. testcontrol
+		// does not: a re-login after /expire clones the old node, past
+		// expiry and all, onto the new key, which stays expired. It also
+		// does not say which node an auth path belongs to, so every expired
+		// key is renewed (the tests have one app node). Renewed means no
+		// expiry, the harness default.
+		h.updateExpired(func(n *tailcfg.Node) { n.KeyExpiry = time.Time{} })
+	}
 	h.mu.Lock()
 	if h.gen != gen {
 		// A reset raced this visit: the login belonged to a control plane
@@ -558,6 +573,47 @@ func (h *harness) approve(hostname string) int {
 	return n
 }
 
+// expire sets the key expiry of hostname's node to now+in and pushes the
+// netmap: the node sees the date (R31's warning), or, when it is past, that
+// its key has expired and it must log in again.
+func (h *harness) expire(hostname string, in time.Duration) int {
+	return h.updateNodes(hostname, func(n *tailcfg.Node) { n.KeyExpiry = time.Now().Add(in).UTC() })
+}
+
+// deauthorize revokes hostname's device approval, as an admin can after the
+// fact: the node drops to NeedsMachineAuth until /approve.
+func (h *harness) deauthorize(hostname string) int {
+	return h.updateNodes(hostname, func(n *tailcfg.Node) { n.MachineAuthorized = false })
+}
+
+func (h *harness) updateNodes(hostname string, change func(*tailcfg.Node)) int {
+	return h.updateWhere(func(n *tailcfg.Node) bool { return n.Hostinfo.Hostname() == hostname }, change)
+}
+
+func (h *harness) updateExpired(change func(*tailcfg.Node)) int {
+	now := time.Now()
+	return h.updateWhere(func(n *tailcfg.Node) bool { return !n.KeyExpiry.IsZero() && n.KeyExpiry.Before(now) }, change)
+}
+
+func (h *harness) updateWhere(match func(*tailcfg.Node) bool, change func(*tailcfg.Node)) int {
+	h.mu.Lock()
+	ctl := h.ctl
+	h.mu.Unlock()
+	if ctl == nil {
+		return 0
+	}
+	n := 0
+	for _, node := range ctl.AllNodes() { // clones
+		if !match(node) {
+			continue
+		}
+		change(node)
+		ctl.UpdateNode(node)
+		n++
+	}
+	return n
+}
+
 func (h *harness) apiMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	reply := func(w http.ResponseWriter, status int, v any) {
@@ -596,6 +652,23 @@ func (h *harness) apiMux() *http.ServeMux {
 			return
 		}
 		reply(w, http.StatusOK, map[string]any{"approved": h.approve(name)})
+	})
+	mux.HandleFunc("POST /expire", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("hostname")
+		secs, err := strconv.Atoi(r.URL.Query().Get("in"))
+		if name == "" || err != nil {
+			reply(w, http.StatusBadRequest, map[string]any{"error": "hostname and in=SECONDS are required"})
+			return
+		}
+		reply(w, http.StatusOK, map[string]any{"expired": h.expire(name, time.Duration(secs)*time.Second)})
+	})
+	mux.HandleFunc("POST /deauthorize", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("hostname")
+		if name == "" {
+			reply(w, http.StatusBadRequest, map[string]any{"error": "hostname is required"})
+			return
+		}
+		reply(w, http.StatusOK, map[string]any{"deauthorized": h.deauthorize(name)})
 	})
 	return mux
 }

@@ -22,6 +22,8 @@ import sys
 import time
 import urllib.request
 
+from tls_accept import with_silent_client
+
 HOST = "gw.tail-scale.ts.net"
 ORIGIN = "https://" + HOST
 P = "5476"
@@ -88,6 +90,11 @@ def run(port, cport, ca):
     s, h, body, _ = c.req("GET", "/api/auth/me")
     check(s == 403 and h.get("X-Auth-Required") == "true", "stale /api/auth/me: want 403 + header, got %d %s" % (s, h))
     check(json.loads(body).get("code") == "forbidden", "denial body: %r" % body)
+
+    step("a client that connects and never speaks stalls nobody (tls_accept)")
+    t0 = time.time()
+    s, _, _, _ = with_silent_client(port, lambda: c.req("GET", "/"))
+    check(s == 200 and time.time() - t0 < 5, "a request behind a silent client: %d after %.1f s" % (s, time.time() - t0))
 
     step("a foreign Host is refused before auth (text/plain 403, no X-Auth-Required)")
     s, h, body, _ = c.req("GET", "/api/auth/me", host="evil.example")

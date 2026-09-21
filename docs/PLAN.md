@@ -714,6 +714,16 @@ check is the gate**; do not build further until it passes.
 Seven-day profile expiry, three apps per device. If weekly rebuilds grate, $99
 fixes it. No architectural impact.
 
+- **The app warns 48 h before the profile expires** (R33), on the dashboard
+  and in Settings → Status. It reads `embedded.mobileprovision`. Otherwise
+  the app simply stops launching.
+- **Moving to a paid team changes the Team ID** (R33). A different Team ID
+  is a different app to iOS: the old one must be deleted and the new one
+  installed. That takes the app's data with it: the node key (a new
+  Tailscale node appears; remove the old one in the admin console, and move
+  the new one out of purgatory, O3b) and the dashboard session (mint a new
+  token). Plan the switch for a moment when both are convenient.
+
 ---
 
 ## 8. Open questions
@@ -737,7 +747,7 @@ the architecture.
 ## 9. Possible follow-ups (explicitly out of v1 scope)
 
 - **Push notifications.** The reason the phone still feels passive, and now confirmed as genuinely absent: 0.6.0 has no Web Push at all, and its in-page `Notification` call only fires with the tab open. Two routes — land KiroCrew [PR #7821](https://github.com/kirodotdev/KiroCrew/pull/7821), or have the app hold a background connection and raise local notifications itself. The second is the one a native app can do and a PWA cannot, but iOS will not keep a socket alive indefinitely, so it needs a real design rather than optimism.
-- **Claude app Remote Control.** A different route to the original goal: [claude-agent-acp PR #735](https://github.com/agentclientprotocol/claude-agent-acp/pull/735) adds `/remote-control` over ACP, which would surface KiroCrew sessions in the Claude iPhone app. Open since 2026-06-01 with merge conflicts. Complementary, not competing.
+- **Claude app Remote Control.** A different route to the original goal: [claude-agent-acp PR #735](https://github.com/agentclientprotocol/claude-agent-acp/pull/735) adds `/remote-control` over ACP, which would surface KiroCrew sessions in the Claude iPhone app. Open since 2026-06-01 with merge conflicts. Complementary, not competing. **If it merges, re-evaluate what is left of M5–M8 before building it (R34)**; notifications stay out of v1 either way, with no deep-link interim.
 - **Share sheet / Shortcuts.** "Send this URL to Kiro" as a native share target.
 - **Multiple gateways side by side.** Upstream's workspace model already supports several identities; we collapse it to one. It could come back.
 - **Upstreaming.** The split-tunnel and lifecycle fixes stay compatible; if we fix something real in the shared layer, send it to aperture-plus.

@@ -174,6 +174,51 @@ func runSelftest(h *harness, caFile string) error {
 		return fmt.Errorf("unknown login link: %d, want 404", resp.StatusCode)
 	}
 	ok("404")
+
+	// --- R31: key expiry, as the admin console's "Expire key" or a real
+	// expiry date does it.
+	step("/expire in the future: the node sees its key expiry (the app warns 14 days ahead)")
+	if out, err := apiPost(api + "/expire?hostname=probe-auth&in=864000"); err != nil || !strings.Contains(string(out), `"expired": 1`) {
+		return fmt.Errorf("expire: %v %s", err, out)
+	}
+	lc2, _ := p2.LocalClient()
+	var exp time.Time
+	for end := time.Now().Add(20 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if st, err := lc2.StatusWithoutPeers(ctx); err == nil && st.Self != nil && st.Self.KeyExpiry != nil {
+			exp = *st.Self.KeyExpiry
+			if d := time.Until(exp); d > 9*24*time.Hour && d < 11*24*time.Hour {
+				break
+			}
+		}
+	}
+	if d := time.Until(exp); d < 9*24*time.Hour || d > 11*24*time.Hour {
+		return fmt.Errorf("the node's KeyExpiry is %v, want about 10 days from now", exp)
+	}
+	ok("KeyExpiry %s", exp.Format(time.RFC3339))
+
+	step("/expire in the past: the node drops to NeedsLogin; a new login brings it back")
+	if _, err := apiPost(api + "/expire?hostname=probe-auth&in=-60"); err != nil {
+		return err
+	}
+	if err := waitBackend(ctx, p2, "NeedsLogin"); err != nil {
+		return fmt.Errorf("after an expired key: %w", err)
+	}
+	if err := lc2.StartLoginInteractive(ctx); err != nil {
+		return err
+	}
+	st2b, err := waitState(ctx, p2, "NeedsLogin") // with its new login URL
+	if err != nil {
+		return err
+	}
+	if resp, err := http.Get(st2b.AuthURL); err != nil {
+		return err
+	} else {
+		resp.Body.Close()
+	}
+	if _, err := waitState(ctx, p2, "Running"); err != nil {
+		return fmt.Errorf("after the new login: %w", err)
+	}
+	ok("NeedsLogin, then Running after a new login")
 	p2.Close()
 
 	// --- RequireMachineAuth: the node waits until an admin approves it.
@@ -202,6 +247,21 @@ func runSelftest(h *harness, caFile string) error {
 		return err
 	}
 	ok("Running after /approve")
+
+	step("/deauthorize: a Running node drops back to NeedsMachineAuth; /approve restores it")
+	if out, err := apiPost(api + "/deauthorize?hostname=probe-machine"); err != nil || !strings.Contains(string(out), `"deauthorized": 1`) {
+		return fmt.Errorf("deauthorize: %v %s", err, out)
+	}
+	if err := waitBackend(ctx, p3, "NeedsMachineAuth"); err != nil {
+		return fmt.Errorf("after /deauthorize: %w", err)
+	}
+	if out, err := apiPost(api + "/approve?hostname=probe-machine"); err != nil || !strings.Contains(string(out), `"approved": 1`) {
+		return fmt.Errorf("re-approve: %v %s", err, out)
+	}
+	if _, err := waitState(ctx, p3, "Running"); err != nil {
+		return err
+	}
+	ok("NeedsMachineAuth, then Running after /approve")
 
 	if h.opts.gatewayAddr != "" || h.opts.slowPeer {
 		if err := selftestExtraPeers(ctx, h, api, caFile); err != nil {
@@ -287,6 +347,25 @@ func waitState(ctx context.Context, s *tsnet.Server, want string) (*ipnstate.Sta
 		time.Sleep(100 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("never reached %s (last %s)", want, last)
+}
+
+// waitBackend waits for a backend state alone (waitState's NeedsLogin also
+// waits for a login URL, which an expired key does not get until a login
+// starts).
+func waitBackend(ctx context.Context, s *tsnet.Server, want string) error {
+	lc, err := s.LocalClient()
+	if err != nil {
+		return err
+	}
+	last := "unknown"
+	for end := time.Now().Add(45 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+		if st, err := lc.StatusWithoutPeers(ctx); err == nil {
+			if last = st.BackendState; last == want {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("never reached %s (last %s)", want, last)
 }
 
 // stays fails if the node leaves state within d: a node that logs itself in
