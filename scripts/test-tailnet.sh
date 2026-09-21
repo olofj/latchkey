@@ -83,6 +83,10 @@ if ! sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1;
     SANDBOX_FLAGS=("OTHER_SWIFT_FLAGS=\$(inherited) -disable-sandbox")
 fi
 if [[ $BUILD -eq 1 ]]; then
+    # A vendored Go change is only in the app once the framework is rebuilt
+    # (R29 shipped a stale one); a no-op when it is current.
+    make -C "$APP" --no-print-directory framework > "$LOG_DIR/framework.log" 2>&1 \
+        || { echo "error: TailscaleKit framework build failed; see $LOG_DIR/framework.log" >&2; exit 1; }
     say "build-for-testing (Testing configuration)"
     (cd "$APP" && xcodebuild build-for-testing -project Latchkey.xcodeproj -scheme Latchkey \
         -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \

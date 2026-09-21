@@ -1600,3 +1600,112 @@ Two adversarial reviews: discovery logic and routing, and tests and harness.
 - L1 9/9, L2 4/4, M4 13/13 (R1 clean), and the three connection-independent
   inherited tests.
 
+
+## 2026-09-21 — R29: diagnostics and the node log, before M6
+
+R29 moves M8.2 and M8.3 ahead of M6's device tests, which will read them
+afterwards. Both are built. So are the parts of R31 and R33 that belong on
+the same screen: the node key's expiry and the provisioning profile's.
+
+**Built (`app/`):**
+- **Settings → Status** (`App/Diagnostics/DiagnosticsView.swift`):
+  - Node: state, name, tailnet, addresses, peers, key expiry.
+  - Gateway: the gateway, whether it is in the tailnet, and the last
+    discovery.
+  - Dashboard session: state, when the session and the access expire, and
+    the last message.
+  - Proxy: the SOCKS endpoint (`host:port` only), the rules, and "no direct
+    fallback".
+  - Page: the last navigation error and web-content restarts.
+  - App: version, build configuration, profile expiry, and warnings.
+  - Copy copies exactly what is shown. Nothing secret is read into the
+    screen: session cookies are reduced to their expiry dates
+    (`SessionCookies`, host-tested), and the proxy credential is never
+    touched.
+- **Settings → Node log** (`NodeLogView`, `NodeLog`) shows tsnet's own
+  lines, with a filter, Copy and a 2-s refresh. They are redacted again on
+  display. `LogRedaction` now also redacts a login code in a URL *path*
+  (`/a/<code>`, `/auth/<id>`), which the query rule missed.
+- **Expiry warnings** (`Expiry`, host-tested):
+  - The node key warns 14 days ahead (R31). The vendored TailscaleKit
+    decodes `PeerStatus.KeyExpiry` in its own commit.
+  - The profile warns 48 h ahead (R33). It reads `ExpirationDate` out of the
+    CMS-wrapped `embedded.mobileprovision`.
+  - Both appear on Status and above the dashboard.
+- **The vendored library keeps tsnet's log locally** (own commits, R16).
+  Upstream set logtail's echo to `io.Discard`, and the drain goes to the
+  no-op transport (D1), so every tsnet line was gone within seconds. The echo
+  now goes to `Logs/tsnet.log`: 0600, capped at 1 MiB, one predecessor kept,
+  excluded from backup, and never uploaded.
+
+**Found on the way, and fixed:**
+1. **The dashboard's Settings gear had never worked.** Nothing opened
+   Settings from the dashboard: the tap landed, the action never ran.
+   - The gear had `.opacity(0.45)` on the `Button`, and over the web view a
+     button with opacity below 1 gets no taps. Neither a `contentShape` nor
+     moving it helped; fading the label instead works. Isolated with twin
+     buttons, faded and plain, at several positions.
+   - It went unnoticed because no test had opened Settings from the
+     dashboard: the inherited tests open it from the gate, whose gear is not
+     faded. R29's diagnostics test is now that test.
+   - Not fixed: ⌘, did not open Settings either under XCUITest's `typeKey`.
+     The cause is not established, and on an iPhone without a keyboard it
+     does not matter. It is left for the device pass (M6).
+2. **No vendored Go change reached the app.** `make framework` rebuilt when a
+   source changed, but libtailscale's own c-archive targets have no
+   prerequisites, so `ios-fat` re-linked the old archives. The Makefile
+   comment claimed this staleness was already fixed.
+   - The rule now deletes the archives first.
+   - `make check-framework` fails if any `latchkey_*.go` is missing from
+     either slice (Go records source paths in the binary). It caught the
+     stale framework before the fix.
+   - The four test scripts run `make framework` in `--build` mode.
+   - R1's earlier Go change had landed only because its archive happened
+     to be built after it.
+3. **An upstream logtail bug flooded the file.** The RAW-STDERR echo printed
+   `b`, the whole pending upload batch, instead of the line, so one run
+   filled 1 MiB in minutes. Upstream never saw it, because its echo went
+   nowhere. Fixed in its own commit, with a Go test that fails before the fix.
+4. **Raw stderr buried tsnet's lines.** logtail also replays whatever the
+   process wrote to stderr. Under XCTest that was 4,059 of 4,456 lines, and
+   the view's 2,000-line window held no tsnet line 20 s after launch.
+   - Raw lines now go to their own `stderr.log`, with the same cap. The view
+     has a tsnet/stderr switch; a Go panic from the previous run lands in
+     stderr.
+   - Under Xcode or XCTest (`OS_ACTIVITY_DT_MODE`), raw stderr is a mirror of
+     the unified log, including other components' messages and URLs. It is
+     not kept at all, and `tsnet.log`'s first line says which mode applied.
+     Go tests cover both modes.
+5. **A test of my own that could not fail.** The first node-log test counted
+   "magicsock" matches. Under XCTest, the process's stderr echoes whatever
+   the test types, so the typed filter text alone satisfied it. The test now:
+   - resets the logs (`-UITestResetNodeLog`);
+   - requires a real tsnet `magicsock:` line;
+   - requires the "raw stderr not kept" decision;
+   - requires an empty stderr view.
+   The tsnet.log/stderr.log split itself is covered by the Go tests.
+
+**Tests:**
+- L2 passes 5/5. The new `testDiagnosticsShowTheNodeAndItsLog` covers:
+  - through the dashboard gear: state Running, the tailnet, the gateway, "in
+    the tailnet: yes", the SOCKS endpoint;
+  - the node log's tsnet lines and the stderr rule.
+- `testPastingCLIOutputSignsIn` checks that Status shows the 30-day session
+  and the access expiry.
+- Host: 25 diagnostics checks (node log, expiry, profile, cookies), and 30
+  redaction checks.
+- Go: the local-log tests and the logtail echo test.
+- Regression: `make test-policy`; L1 passes in 103 s; session 13/13 with R1
+  clean (disk: all of Library + tmp); discovery passes, every sweep on its
+  signature; the three inherited tests pass.
+
+**R31 and R33, what is left:**
+- R31 still needs:
+  - an L2 test of the key-expiry warning (a harness endpoint to set it);
+  - mid-session `NeedsLogin` re-login;
+  - mid-session `NeedsMachineAuth`.
+- R33 still needs the Team-ID note in PLAN 7.7.
+- PLAN M8 marks 8.2 and 8.3 done (R29), and 8.5 and 8.6 done (R28).
+
+**Actual:** about 2 h agent wall-clock, excluding a pause while a tool call
+waited on the owner.
