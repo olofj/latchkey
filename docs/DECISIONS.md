@@ -960,3 +960,37 @@ self-test prints this each run.
   - Mid-session `NeedsLogin`/`NeedsMachineAuth` is R31.
 - **Actual:** ~40 min agent wall-clock, including R18 (not engineer-hours;
   see "M2 done").
+
+## 2026-09-20 — Before M4: R20–R25 and R38 adopted into the plan
+
+These revisions are all adopted as written. PLAN.md's M4 table, §1.1, §1.2,
+§3.1, §3.3, M6.3/M6.4 and M7.5 now carry them:
+
+- **R20:** no foreground nudge and no `refreshIfNeeded()`. M4.7 and M6.3 are
+  struck through, and the "refresh loop" text is gone from §3.1 and §3.3. The
+  page-world `/api/auth/me` + `reload()` fallback is kept, but only for a gap
+  M6 actually measures.
+- **R21:** `mc-auth-cleared` is not "healthy". The app returns to `active` only
+  after a completed `?token=` navigation or a page-world `/api/auth/me` 200.
+- **R22:** the banner is hidden with CSS only. A ready-handshake falls back to
+  the visible banner.
+- **R23:** paste uses a regex over CLI output. The target is always the
+  selected gateway, and a pasted host is accepted only if known. Paste goes
+  through `PasteButton`, with a conditional clipboard clear. QR input goes
+  through the same parser.
+- **R24:** CLI links survive restarts; only QR sessions are boot-bound. M4.9
+  gets both cases, and M7.5 is optional with its full preconditions.
+- **R25:** ACs are driven by test traffic and require a minimum number of
+  rotations. The lineage check catches sequential reuse, not only overlap.
+- **R38:** KiroCrew's own test patterns are adopted. Upstream tests at the
+  0.6.0 tag are the spec, and the installed bundle wins on disagreement.
+
+**R19 is being implemented, not only written down.** Its spec comes from
+reading the installed 0.6.0 server source and bundle; nothing of KiroCrew's
+is run (D10). Appendix B and open questions 1, 3 and 4 (R37) are corrected
+once that reading is done, so they are not corrected twice.
+
+**O4 was requested from Olof** (byskebox's `dashboard.tailscale` settings)
+when M3 finished. The offline M4 work does not depend on the answer: it runs
+against the fake backend. Anything that does depend on it waits: M7.5, and
+any assumption about `trust_identity` on the real gateway.

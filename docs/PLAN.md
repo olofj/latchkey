@@ -44,11 +44,18 @@ open Safari, make sure the system Tailscale VPN is connected, load the dashboard
 and re-authenticate by pasting a token URL produced by `kirocrew token` on a
 computer. That last step is the real friction — it needs a second device.
 
+**Corrected (R24):** re-authentication is rarer than this suggests. CLI links
+(`kirocrew token` → `GET /api/token/local`) carry no `boot` claim, so their
+sessions and 30-day refresh chains **already survive gateway restarts**; only
+QR-minted sessions are boot-bound by default. The remaining friction is getting
+the *first* token onto the phone — which the app addresses with paste and QR
+entry (M4.4) — not restarts.
+
 ### 1.2 Goals
 
 1. **One tap from the home screen to a live session.** An app icon that opens directly to the dashboard, with no browser chrome, no VPN toggle, and no tab to lose.
 2. **No system VPN.** The app carries its own userspace Tailscale node, so it does not compete with any other VPN profile and works even when Tailscale's own app is off.
-3. **Durable sign-in.** The token lives in the Keychain; the app renews the session silently and only asks for a new token when renewal genuinely fails.
+3. **Durable sign-in.** The session lives in the web view's cookies; the *page* renews it silently (R20), and the app asks for a new token only when renewal genuinely fails. (Originally "the token lives in the Keychain" — dropped by R5: a token is single-use within 300 s, and the Keychain outlives the cookies it would describe.)
 4. **Gateway discovery.** The app finds KiroCrew gateways on the tailnet instead of requiring a hand-typed hostname.
 5. **Testable without the owner's tailnet.** Contributors and CI must be able to run meaningful tests with no Tailscale account at all.
 
@@ -139,7 +146,7 @@ KiroCrew, not in this app.
 │   ├── GatewayPicker       — discovered KiroCrew gateways (new)                 │
 │   └── Settings            — diagnostics, logs, gateway, sign-out               │
 │                                                                                │
-│  SessionManager (new)     — token lifecycle, Keychain, refresh loop            │
+│  SessionManager (new)     — session state from page events; token entry (R20)  │
 │  GatewayDiscovery (new)   — enumerate tailnet peers, probe /manifest.json      │
 │                                                                                │
 │  TSNetManager             — tsnet node, IPN bus, loopback SOCKS5, recovery     │
@@ -183,11 +190,12 @@ first run ──► no token in Keychain
         The token is stripped from the address at document start (R2).
               │
               ▼
-        steady state: poll GET /api/auth/me for session_exp
-                      call POST /api/auth/refresh before it expires
+        steady state: the PAGE refreshes (R20) — proactively ~1 h
+                      before session_exp, and on any 403 + X-Auth-Required.
+                      The app never calls /api/auth/refresh.
               │
-              ├─ refresh 200 ──► keep going
-              └─ refresh 401 ──► surface "needs new token" UI
+              ├─ page refresh 200 ──► keep going (no event, no app action)
+              └─ mc-auth-required ──► native token sheet (R21)
 ```
 
 **Do not build a refresh loop. The page already has one.** This was the single
@@ -210,17 +218,25 @@ content script that forwards both to native via `WKScriptMessageHandler`. That i
 the app's authoritative session signal — far better than polling `/api/auth/me`
 or reading the DOM.
 
-**Nudge on foreground.** The server has **no WebSocket expiry watchdog**: it never
-closes `/api/ws` when a session expires, and auth is resolved once at upgrade and
-never re-checked per frame. An expired session can therefore sit unnoticed behind
-a socket that looks healthy. On foreground, issue one cheap authenticated HTTP
-request (`GET /api/auth/me`) to force the 403 → refresh path promptly rather than
-waiting for the user's next action to discover it.
+**~~Nudge on foreground.~~ Dropped (R20).** The server has no WebSocket expiry
+watchdog, so an expired session can sit behind a healthy-looking socket — but
+the page already covers it: it refreshes proactively ~1 h before `session_exp`,
+defers while hidden and fires on `visibilitychange`, retries at 60 s / 4 min /
+16 min / 1 h, and a 30 s approvals poll goes through its 403 interceptor. A
+native nudge could not have worked anyway: the interceptor wraps only the page's
+own API calls, not `window.fetch`, and a native `URLSession` has neither the web
+view's cookies nor its proxy. **Only if M6 measurements show a real gap:** run
+page-world JS that fetches `/api/auth/me` and calls `location.reload()` on 401
+or 403 + `X-Auth-Required`, letting the page's own refresh run. **Never call
+`/api/auth/refresh` from the app** — behind `tailscale serve` every client
+shares one 60/min rate-limit bucket.
 
 **Token supply, when it does come to that.** The banner accepts either a full URL
 or a bare token, extracts `?token=`, and hard-navigates to
 `{origin}?token={token}`. The app should present a native sheet at that moment
-and perform the same navigation. A token cannot be cached for later reuse: the
+and perform the same navigation — with R23's safer parsing: a regex over the
+paste (CLI output can hold three URLs), always the **selected gateway's**
+origin, a pasted host accepted only if it is a known gateway. A token cannot be cached for later reuse: the
 link window is 300 s (`LINK_WINDOW_SECS`), so there is no such thing as a stored
 spare key. **The 30-day refresh chain is the only durable credential** — which is
 exactly why §3.3's "don't race the page's refresh" rule matters.
@@ -234,6 +250,10 @@ by an interactive login as `owner@example.com`, so it reports the real
 login and passes the allowlist. Enabling this on the gateway is a one-line config
 change and removes the "signed out after every gateway restart" annoyance
 entirely. Do it in M7 and measure the difference.
+
+**Narrowed (R24):** that annoyance applies to **QR-minted sessions only** — CLI
+links already survive restarts (§1.1). So M7.5 is optional, for QR users only,
+and has more preconditions than the paragraph above lists (see M7.5).
 
 ### 3.4 Discovery design
 
@@ -456,25 +476,35 @@ covered by M2.
 
 ### M4 — KiroCrew session management (8–12 h; re-estimated 14–20 h by R36)
 
-**Goal:** the app holds a durable session, renews it silently, and asks for a new
-token only when renewal truly fails.
+**Goal:** the app holds a durable session, lets the page renew it silently, and asks
+for a new token only when renewal truly fails.
+
+**Revised before starting (R19–R25, R38):** tested against KiroCrew's **real**
+frontend bundle, never the fake dashboard's own page (testing a page we wrote
+would be circular — the refresh logic and `mc-auth-*` events exist only in the
+real bundles); no foreground nudge; corrected event semantics; CSS-only banner
+hiding; safer token entry; a restart story that matches the real `boot` claim;
+acceptance criteria that cannot pass vacuously. The rows below are the revised
+tasks.
 
 | # | Task | Detail |
 |---|---|---|
-| 4.1 | Extend the fake dashboard | Teach `testing/harness/dashboard.py` KiroCrew's real auth semantics: accept `?token=`; set `mc_token_<port>` / `mc_refresh_<port>` cookies; deny with **`403` + `X-Auth-Required: true`** (not 401) when the session is stale; implement `GET /api/auth/me` and `POST /api/auth/refresh` → 200 with rotated cookies, or `401 {"error":"refresh_chain_revoked"}` for the terminal case; `--expire-in N` to force expiry. **Fail the test if two refreshes overlap** — that is the bug we most need to not write. |
-| 4.2 | JS event bridge | Inject a content script that forwards the page's `mc-auth-required` and `mc-auth-cleared` window events to native through a `WKScriptMessageHandler`. This is the session signal; no DOM scraping, no polling. **R3:** register it `forMainFrameOnly: true`, add it through `PageScripts.install`, and act on a message only when `frameInfo.securityOrigin` matches the gateway origin. **R21** corrects the event semantics. |
-| 4.3 | `SessionManager` | New type. Owns gateway URL, session state (`unauthenticated` / `active` / `needsToken`), and Keychain persistence. **It does not refresh** — the page does (§3.3). It reacts to the bridge events and drives the token sheet. |
-| 4.4 | Token entry UI | A native sheet accepting a full URL or a bare token, mirroring the page banner's own parsing: `new URL(input).searchParams.get("token")`, falling back to the raw string when the input is not a URL. Then navigate to `{origin}?token={token}`. Add QR scan via `AVCaptureSession` — the dashboard's Phone access card encodes exactly that URL. |
+| 4.1 | Fake KiroCrew backend (R19) | A fake backend serving the **real** `kiro_crew/static/dist` from the installed venv, with the KiroCrew version and bundle hash **pinned — fail on mismatch**. It emulates real auth: `?token=` redemption; cookies `mc_token_5476` / `mc_refresh_5476` (the listen port, since a serve Host header carries none); a stale session → **403 + `X-Auth-Required: true`**; `GET /api/auth/me`; `POST /api/auth/refresh` with rotation and a grace window; `401 refresh_chain_revoked` clearing the refresh cookie; `--expire-in N`. It tracks refresh-token **lineage** and fails on any superseded token used outside the grace window — sequential reuse, not only overlap (R25). Plus whatever minimal API surface the SPA needs to render and run its scheduler. A **bundle smoke test** fails if `mc-auth-required` / `mc-auth-cleared` or `#mc-session-expired` disappear from the bundle. |
+| 4.1b | Contract test, owner-run (R19, §C O7) | `testing/harness/contract_test.py`: replays redeem → expire → 403 + header → rotate → reuse the superseded refresh token (→ 401) against a **real** gateway on byskebox's KiroCrew version, and diffs statuses, headers and cookie attributes against the fake. Token from a file or env var, never an argument; its own fresh session, never the phone's; far below the 60/min refresh limit. The agent cannot run it (it cannot mint tokens, D10). Never use KiroCrew's own test harness (`--test-mode`, `spawn_feature_gateway`, in-process `generate_token`). |
+| 4.2 | JS event bridge | Inject a content script that forwards the page's `mc-auth-required` and `mc-auth-cleared` window events to native through a `WKScriptMessageHandler`. This is the session signal; no DOM scraping, no polling. **R3:** register it `forMainFrameOnly: true`, add it through `PageScripts.install`, and act on a message only when `frameInfo.securityOrigin` matches the gateway origin. **R21:** inject at document start so it is re-injected on every navigation — including the `location.assign('/')` the page does on a revoked chain, after which `mc-auth-required` fires. |
+| 4.3 | `SessionManager` | New type. Owns the gateway origin and session state (`unauthenticated` / `active` / `needsToken`). **It does not refresh** — the page does (§3.3, R20) — and it persists nothing (R5). **R21 semantics:** `mc-auth-required` → `needsToken`; the stale-owner banner → `needsToken`. `mc-auth-cleared` does **not** mean healthy (it fires when the banner is dismissed, and a silent refresh fires nothing): return to `active` only after a `?token=` navigation completes or a page-world `GET /api/auth/me` returns 200 (R38: assert sign-in by API, never by rendering — the shell returns 200 signed out too). |
+| 4.4 | Token entry UI (R23) | A native sheet. **Paste:** extract the first `token=([^&\s]+)` with a regex — CLI output holds up to three URLs, so `new URL(paste)` fails on a multi-line paste; otherwise treat the input as a bare token. Use `PasteButton` / `UIPasteControl`, never a silent clipboard read; after a successful redemption clear the clipboard only if it still holds that exact string (Universal Clipboard syncs it everywhere). **Target:** always the **selected gateway's** origin; accept a pasted host only if it is a known gateway (anti-QR-phishing), and show the target host before navigating. Tokens are signed per gateway. **QR** (D3): `AVCaptureSession` + `NSCameraUsageDescription`; the Phone-access payload `https://<gateway>/?token=…` goes through the same parser and host check. |
 | 4.5 | Redemption | Load `https://<gateway>/?token=<token>` once; the server mints cookies. The link is valid **300 s** and is re-redeemable inside that window, so one retry is safe. |
 | 4.6 | ~~Keychain~~ | **Dropped (R5).** No redemption marker: the Keychain survives uninstall but cookies do not, so the two desync. Derive session state from the page and `/api/auth/me`. The gateway origin is already persisted in `workspaces.json` (R2). If a Keychain item is ever added, it uses `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Node keys and WebKit data are excluded from backup at every launch (`BackupExclusion`, R5). |
-| 4.7 | Foreground nudge | On `scenePhase == .active`, issue one `GET /api/auth/me` to force prompt discovery of a dead session, because the server never closes an expired WebSocket. Rate-limit this to once per N seconds; the refresh endpoint allows 60 calls/60 s per IP and answers `429` + `Retry-After` beyond that. |
-| 4.8 | Suppress the web banner | With a native sheet in place, hide the page's own red banner (it has a dismiss button and a stable element id) so the user sees one prompt, not two. Keep it as the fallback if the bridge ever fails to install. |
-| 4.9 | Tests | Against the fake dashboard: cold redemption; the page self-refreshing across an expiry with no native involvement; terminal `401` → native sheet; re-entering a token recovers; gateway restart (boot-id change) → sheet; airplane mode → no spurious sheet, recovers on return; **assert no overlapping refreshes throughout**. |
+| 4.7 | ~~Foreground nudge~~ | **Dropped (R20).** It cannot work — the page's 403→refresh interceptor runs only inside its own API wrappers, and a native `URLSession` has neither the cookies nor the proxy — and it is unnecessary (§3.3). |
+| 4.8 | Suppress the web banner (R22) | Inject `#mc-session-expired{display:none!important}` at document start — CSS only, which also stops its input autofocusing and popping the keyboard. **Never remove the element and never click its ✕**: a startup gate reads it, and ✕ clears latches. Add a bridge **ready-handshake**; if it does not arrive within N seconds, leave the banner visible as the fallback. |
+| 4.9 | Tests | Against the fake backend serving the real bundle: cold redemption; the page self-refreshing across expiries with no native involvement; terminal `401` → native sheet; re-entering a token recovers; **gateway restart, two cases (R24):** a CLI-shaped session survives a boot-id change with no sheet, a boot-claimed (QR) session shows the sheet; network loss → no spurious sheet, recovers on return; **no superseded refresh token used outside the grace window, throughout** (R25). **R38 patterns:** redeem once and reuse the data store's cookies; preset `localStorage` `mc-onboarded=1` to skip the first-run overlay; one cookie store per gateway port; assert sign-in by page-world `/api/auth/me`, never by rendering. Upstream's frontend auth tests (`useRefreshScheduler.ts`, `refreshOnce.ts`, `clientAuthRecovery.test.ts`, `staleOwnerSession.test.ts`) are the spec for the fake, **at the tag matching the installed 0.6.0, not `main`** — where they disagree with the installed bundle, the bundle wins. A WebKit-only failure may be KiroCrew's bug (#9399-style): upstream has no WebKit coverage. |
 
-**AC:**
-- With `--expire-in 60`, the app runs 10 minutes across several expiries without ever showing the token sheet.
+**AC (R25 — none may pass vacuously):**
+- Across several expiries, with **periodic SPA API traffic driven by the test**, the token sheet never shows **and** the fake counts at least a stated minimum of successful rotations. (With the real bundle, `--expire-in 60` refreshes about every 5 s — the scheduler aims for `exp − 1 h`, floored at 5 s — so pick an expiry that yields a countable number.)
 - Forcing `refresh_chain_revoked` shows the native token sheet, and re-entering a token recovers without reinstalling the app.
-- No concurrent refreshes under any test (assert in the fake dashboard by failing on overlapping requests).
+- The fake's lineage check never fires: no superseded refresh token is used outside the grace window, sequentially or concurrently.
+- The bundle smoke test passes against the pinned version.
 
 ---
 
@@ -507,8 +537,8 @@ likely to make the app feel unreliable in daily use.
 |---|---|---|
 | 6.1 | Inherit, don't rewrite | Upstream's failure-driven recovery (`TSNetManager.swift:355-415`) is the right design and replaced an earlier lifecycle-driven one that had real bugs. Do not reintroduce foreground rebuild logic. |
 | 6.2 | ~~Use `statusJSON()` for liveness~~ **Liveness stays on the loopback status poll (R18)** | As written this was inverted: the loopback listener serves both SOCKS5 and LocalAPI, so the loopback poll failing is exactly the signal that the proxy is dead — which is what upstream's `recoverLoopbackAfterFailure` keys on. `statusJSON()` does not exist in the vendored revision anyway. Nothing to build; keep the upstream design (6.1). |
-| 6.3 | Session re-check on foreground | Hook `scenePhase == .active` (`App/ApertureApp.swift:69`) to `SessionManager.refreshIfNeeded()`. Note `:67` deliberately ignores `.inactive` — respect that; there is a stale-auth-URL bug behind it. |
-| 6.4 | WebSocket reconnect | **Write no app-side reconnect logic.** (One exception now exists, R7: if the *web content process* dies — routine under memory pressure — the app reloads the page, at most 2× per 60 s, deferred to foreground if it died in the background. The page's own reconnect cannot help when its JavaScript is gone.) The page already reconnects with exponential backoff (1 s, doubling, capped at 10 s; reset to 1 s on open) and on reconnect does a full refetch plus re-subscribe, because the protocol has no sequence numbers or cursor-based replay — anything missed while disconnected is recovered by HTTP, not by the socket. The app's only job is the foreground nudge (M4.7). Measure reconnect time after resume; intervene only if it is bad. |
+| 6.3 | ~~Session re-check on foreground~~ | **Dropped (R20):** no `SessionManager.refreshIfNeeded()` — the page refreshes itself on `visibilitychange`. Only if M6 measurements show a gap, use the page-world `/api/auth/me` + `location.reload()` fallback in §3.3. |
+| 6.4 | WebSocket reconnect | **Write no app-side reconnect logic.** (One exception now exists, R7: if the *web content process* dies — routine under memory pressure — the app reloads the page, at most 2× per 60 s, deferred to foreground if it died in the background. The page's own reconnect cannot help when its JavaScript is gone.) The page already reconnects with exponential backoff (1 s, doubling, capped at 10 s; reset to 1 s on open) and on reconnect does a full refetch plus re-subscribe, because the protocol has no sequence numbers or cursor-based replay — anything missed while disconnected is recovered by HTTP, not by the socket. The foreground nudge (M4.7) was dropped by R20; the app has no job here. Measure reconnect time after resume; intervene only if it is bad. |
 | 6.5 | Simulated suspend test | `XCUIDevice.shared.press(.home)` then `app.activate()`, then assert a page load still works. **`xcrun simctl` has no `suspend` subcommand** (verified) — there is no CLI path. **Corrected (R14):** there is a CLI path — upstream's `app/scripts/test-lock-resume.sh` freezes the app with SIGSTOP. Use it. |
 | 6.6 | Real-device suspend test | The simulator keeps processes far more alive than a real device; genuine listener reclamation and jetsam kills are **device-only**. Write a manual test script: background for 1 min / 10 min / 1 h / overnight, foreground, and record time-to-interactive each time. A debugger prevents suspension entirely, so run it untethered and read logs afterwards. |
 | 6.7 | Network churn | Kill the stub proxy or run it `--blackhole` mid-session. `simctl status_bar` is **cosmetic only** and cannot simulate network loss (verified). Assert the app shows a real error and recovers when the proxy returns. **Revised (R14):** a dead stub never triggers `recoverLoopbackAfterFailure`, which is driven by LocalAPI poll failures — test recovery at L2 with `-UITestDefunctLoopback` / `-UITestShutdownTCPConnections`. The stub's control port (`/mode?blackhole=1`, `/close`, `/open`) serves the page-level error/recovery half. |
@@ -531,13 +561,13 @@ likely to make the app feel unreliable in daily use.
 | 7.2 | Install | Xcode Run with the free personal team. Trust the profile under General → VPN & Device Management. |
 | 7.3 | Node login | Interactive login through `ASWebAuthenticationSession` (`TSNet/AuthManager.swift:16-44`). The new node appears in the tailnet under `owner@example.com`, **not** tagged. Confirm in the Tailscale admin console. **R6:** it is already named `latchkey-iphone` by `WorkspaceDefinition.makeDefault()` — renaming it after the first dashboard sign-in would sign the app out, since KiroCrew pins sessions to `login|node name`. **R8:** this login now happens during the M1 device check, not here. |
 | 7.4 | System VPN off | Turn the Tailscale app's VPN off and confirm the dashboard still loads. This is the headline feature — verify it explicitly. |
-| 7.5 | Durable sessions | On the gateway, consider `dashboard.qr_session_persist_across_restart` with `trust_identity` + `allowed_logins: ["owner@example.com"]`. The embedded node passes the allowlist where the tagged iPhone cannot (§3.3). Restart the gateway and confirm the app stays signed in. |
+| 7.5 | Durable QR sessions — **optional, QR users only (R24)** | CLI-link sessions already survive restarts, so this matters only if QR sign-in is used. `dashboard.qr_session_persist_across_restart` needs **all of:** `trust_identity` on with a non-empty `allowed_logins` (including `owner@example.com`), `qr_session_until_restart` still true, **and** the QR generated from an unbounded desktop session. Keep `pin_scope: node`, and name the node first (R6). Depends on §C O4; needs Olof's consent (§C O6) and a rollback note. |
 | 7.6 | Both gateways | Test against `byskebox` (443 via serve) and `chonk`. Confirm discovery finds both and switching works. |
 | 7.7 | Weekly re-sign | Document the 7-day rebuild ritual in `README.md`. If it grates, the $99 program makes profiles last a year. |
 
 **AC:**
 - App reaches a live session with the system VPN off, on cellular as well as Wi-Fi.
-- Survives a gateway restart without a token re-entry (if 7.5 is enabled).
+- Survives a gateway restart without a token re-entry — for CLI-link sessions always; for QR sessions only if 7.5 is enabled.
 - Both gateways are discoverable and switchable.
 
 ---
