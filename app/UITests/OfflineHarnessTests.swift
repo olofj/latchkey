@@ -165,6 +165,17 @@ final class OfflineHarnessTests: XCTestCase {
                          peers: ["dash", "wrong"])
         defer { app.terminate() }
         try assertErrorPage(app, "a certificate for the wrong name must not load")
+        // Pin the cause, so an unrelated failure (a dropped --map, a proxy
+        // left blackholed) cannot pass for this one (M2 review): the request
+        // went through the proxy to the mapped server, and the error is about
+        // the certificate.
+        let connects = try await journalConnects()
+        XCTAssertTrue(connects.contains { $0.host == "wrong.tail-scale.ts.net" && $0.port == 443 },
+                      "the load must have reached the server through the proxy; got \(connects)")
+        let certificateText = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] %@", "certificate")).firstMatch
+        XCTAssertTrue(certificateText.waitForExistence(timeout: 5),
+                      "the error page should say the certificate is the problem")
     }
 
     /// A gateway that refuses connections shows the error page.
@@ -173,6 +184,11 @@ final class OfflineHarnessTests: XCTestCase {
                          peers: ["dash", "down"])
         defer { app.terminate() }
         try assertErrorPage(app, "a refused connection must show the error page")
+        // Pin the cause (M2 review): the proxy tried the mapped, closed port.
+        let data = try await Self.get("\(Self.proxyControl)/journal")
+        let events = (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+        XCTAssertTrue(events.contains { $0["event"] as? String == "upstream_fail" },
+                      "the proxy should have failed to reach the gateway's closed port; got \(events)")
     }
 
     // MARK: - R3 review: a blocked redirect keeps the dashboard
@@ -195,6 +211,9 @@ final class OfflineHarnessTests: XCTestCase {
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
         XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 15),
                       "the other origin should open outside the app")
+        // Close it again: a Safari tab left on a harness origin could keep
+        // talking to the fake dashboard during later tests (M2 review).
+        safari.terminate()
         app.activate()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
 
@@ -228,12 +247,20 @@ final class OfflineHarnessTests: XCTestCase {
             $0["ws"] as? String == "ws:open"
         }
 
+        // The document id of the page BEFORE sign-in. The assertion below
+        // must come from a different document: without this, the old page's
+        // last report (ws open, empty search) satisfies it and a broken
+        // token strip passes (M2 review).
+        let before = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 10) {
+            $0["doc"] as? String != nil
+        }
+        let oldDoc = try XCTUnwrap(before["doc"] as? String, "the page reports a document id")
+
         let signIn = app.webViews.buttons["Sign in with token"]
         XCTAssertTrue(signIn.waitForExistence(timeout: 10), "the sign-in button should render")
         signIn.tap()
 
-        // Wait for a report from the NEW document: it carries a fresh ts and
-        // the server has seen the token request.
+        // The server must see the token request: that is the sign-in.
         var sawTokenRequest = false
         for _ in 0..<40 {
             let paths = try await dashboardState()["paths"] as? [String] ?? []
@@ -246,8 +273,9 @@ final class OfflineHarnessTests: XCTestCase {
         XCTAssertTrue(sawTokenRequest, "the server must receive the token (that is the sign-in)")
 
         let report = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 15) {
-            $0["ws"] as? String == "ws:open"
+            ($0["doc"] as? String).map { $0 != oldDoc } ?? false
         }
+        XCTAssertNotEqual(report["doc"] as? String, oldDoc, "this report is from the new document")
         XCTAssertEqual(report["search"] as? String, "",
                        "the token must be gone from the address before the page's scripts run")
     }

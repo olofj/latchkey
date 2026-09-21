@@ -15,10 +15,10 @@
 PROJECT      := Latchkey.xcodeproj
 SCHEME       := Latchkey
 CONFIG       := Debug
-# UI tests build with Testing, the only configuration that compiles in
-# LATCHKEY_TEST_HOOKS (revision R15). Debug -- what Xcode's Run installs on the
-# phone -- carries no test hooks at all.
-TEST_CONFIG  := Testing
+# UI tests build with the Testing configuration, the only one that compiles
+# in LATCHKEY_TEST_HOOKS (revision R15): scripts/run-uitests.sh and
+# ../scripts/test-offline.sh pass -configuration Testing. Debug -- what
+# Xcode's Run installs on the phone -- carries no test hooks at all.
 SIM_NAME     ?= iPhone 17
 DERIVED      := build/DerivedData
 
