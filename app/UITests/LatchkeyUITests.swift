@@ -5,28 +5,30 @@
 //  LatchkeyUITests.swift
 //  LatchkeyUITests
 //
-//  UI tests for Aperture.
+//  UI tests for Latchkey.
 //
-//  The app's root is now a Safari-style multi-tab browser. Until the tailnet
-//  first reaches `Running` it shows a ConnectionGateView (brand header +
-//  "Tailscale Status" + Login); once connected it switches to the tabbed
-//  browser. So:
+//  Until the tailnet first reaches `Running` the app shows a
+//  ConnectionGateView (brand header + "Tailscale Status" + Login); once
+//  connected it shows the dashboard: one full-screen web view. So:
 //
-//  - Connection-independent tests (brand header, status, Settings, home-page
+//  - Connection-independent tests (brand header, status, Settings, gateway
 //    persistence) run against the gate and stay green on any sim.
-//  - Connected tests (the browser: add-bookmark, home-page load) need a
-//    working tailnet connection. They authenticate non-interactively via an
-//    auth key when one is staged (see `resolvedTestAuthKey`), and otherwise
-//    they FAIL (never skip) — a broken connection must be a loud failure, not
-//    a silent green. Stage a key at ~/.aperture-ios-authkey (or pass
-//    AUTHKEY=... / set APERTURE_TEST_AUTHKEY).
+//  - Harness tests (-UITestProxyBounceHarness) drive a real WKWebView against
+//    an in-app URL scheme handler: connection bounce, web content process
+//    recovery (R7), window.open handling (R3). Also hermetic.
+//  - Connected tests (gateway load, lifecycle, login) need a working tailnet.
+//    They authenticate non-interactively via an auth key when one is staged
+//    (see `resolvedTestAuthKey`), and otherwise they FAIL (never skip) — a
+//    broken connection must be a loud failure, not a silent green. Stage a
+//    key at ~/.aperture-ios-authkey (or pass AUTHKEY=... / set
+//    APERTURE_TEST_AUTHKEY). Milestones M2 and M3 replace this dependency.
 //
 //  Run from the command line:
 //
 //    make test                                # stages ~/.aperture-ios-authkey if present
 //    make test AUTHKEY=tskey-auth-...         # explicit key
 //    scripts/run-uitests.sh
-//    xcodebuild test -project Latchkey.xcodeproj -scheme Aperture \
+//    xcodebuild test -project Latchkey.xcodeproj -scheme Latchkey \
 //      -configuration Debug \
 //      -destination 'platform=iOS Simulator,name=iPhone 17' \
 //      -derivedDataPath build/DerivedData
