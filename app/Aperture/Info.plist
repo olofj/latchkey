@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Aperture+</string>
+	<string>Latchkey</string>
 	<key>CFBundleName</key>
-	<string>AperturePlus</string>
+	<string>Latchkey</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>

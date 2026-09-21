@@ -1,4 +1,4 @@
 [submodule "libtailscale"]
 	path = ThirdParty/libtailscale
-	url = .
+	url = https://github.com/tailscale/aperture-plus
 	branch = main

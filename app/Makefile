@@ -46,6 +46,34 @@ ifeq (, $(shell which $(XCPRETTIFIER)))
 endif
 XCB := set -o pipefail; xcodebuild
 
+# Latchkey divergence: nested-sandbox detection.
+#
+# Swift macro plugins (@State, @Model, …) are expanded by swift-plugin-server,
+# which swift-frontend runs under its own seatbelt profile via sandbox-exec.
+# If THIS build is already running inside a sandbox that forbids nested
+# sandbox_apply — an AI coding agent's shell, some CI runners — every macro
+# expansion fails with:
+#
+#   error: external macro implementation type 'SwiftUIMacros.StateMacro' could
+#   not be found for macro 'State()'; '…/swift-plugin-server' produced
+#   malformed response
+#
+# and the build then drowns in hundreds of misleading downstream errors
+# ("cannot find '$binding' in scope", "cannot assign to property: 'self' is
+# immutable"). Passing -disable-sandbox to the Swift driver skips the nested
+# sandbox and the build succeeds.
+#
+# This is detected, not configured: on an ordinary Mac the probe below
+# succeeds, SANDBOX_FLAGS stays empty, and macro sandboxing is untouched.
+# Override with NESTED_SANDBOX=1 (force the flag) or NESTED_SANDBOX=0
+# (never add it).
+NESTED_SANDBOX ?= $(shell sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1 && echo 0 || echo 1)
+ifeq ($(NESTED_SANDBOX),1)
+  SWIFT_SANDBOX_FLAGS := OTHER_SWIFT_FLAGS='$$(inherited) -disable-sandbox'
+else
+  SWIFT_SANDBOX_FLAGS :=
+endif
+
 # ----- default -----
 .PHONY: all
 all: framework app  ## Build the libtailscale xcframework and the app for the simulator
@@ -81,7 +109,7 @@ app: framework  ## Build the Aperture app for the simulator
 		-project $(PROJECT) -scheme $(SCHEME) \
 		-configuration $(CONFIG) \
 		-destination 'platform=iOS Simulator,name=$(SIM_NAME)' \
-		-derivedDataPath $(DERIVED) | $(XCPRETTIFIER)
+		-derivedDataPath $(DERIVED) $(SWIFT_SANDBOX_FLAGS) | $(XCPRETTIFIER)
 
 # Thunderboot has two intentionally separate staging locations:
 # build/Thunderboot is for local development/runtime overrides; MacApp/Thunderboot
