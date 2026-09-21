@@ -235,6 +235,93 @@ final class TailnetHarnessTests: XCTestCase {
                       "nothing of the unified log's mirror is on disk: \(count.label)")
     }
 
+    // MARK: - R31: key expiry and approval, mid-session
+
+    /// The node key expires in 10 days: the dashboard warns (14 days ahead)
+    /// without anyone opening Settings.
+    func testAKeyAboutToExpireIsWarnedAbout() async throws {
+        try await resetHarness()
+        let app = launch()
+        defer { app.terminate() }
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        let warning = app.descendants(matching: .any).matching(identifier: "expiry-warning").firstMatch
+        XCTAssertFalse(warning.exists, "no key expiry yet: no warning")
+
+        let node = try await appNode()
+        _ = try await Self.post("\(Self.harnessAPI)/expire?hostname=\(node.hostname)&in=\(10 * 86400)")
+        XCTAssertTrue(warning.waitForExistence(timeout: 20), "a key expiring in 10 days is warned about")
+        XCTAssertTrue(warning.label.contains("expires in 9 days") || warning.label.contains("expires in 10 days"),
+                      "and says when: \(warning.label)")
+    }
+
+    /// The key expires mid-session (as the admin console's "Expire key" or a
+    /// real expiry date does it): the dashboard stays, the Login banner offers
+    /// a new login, and the login brings the node back.
+    func testAnExpiredKeyMidSessionAsksForLoginAgain() async throws {
+        try await resetHarness(auth: true)
+        let app = launch()
+        defer { app.terminate() }
+        let login = app.buttons["login-button"]
+        XCTAssertTrue(login.waitForExistence(timeout: Self.joinTimeout), "the gate offers Login at NeedsLogin")
+        login.tap()
+        acceptSignInPromptIfShown()
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        let loginsBefore = try await completedLogins()
+
+        let node = try await appNode()
+        _ = try await Self.post("\(Self.harnessAPI)/expire?hostname=\(node.hostname)&in=-60")
+        let again = app.buttons["login-banner-button"]
+        XCTAssertTrue(again.waitForExistence(timeout: 30), "an expired key: the dashboard offers Login")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "connected-browser").firstMatch.exists,
+                      "on the dashboard -- the app does not drop back to the gate")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "expiry-warning").firstMatch.exists,
+                       "the Login banner says it; no second, stale expiry warning")
+
+        again.tap()
+        acceptSignInPromptIfShown()
+        XCTAssertTrue(again.waitForNonExistence(timeout: Self.joinTimeout), "the new login ends the banner")
+        let loginsAfter = try await completedLogins()
+        XCTAssertGreaterThan(loginsAfter, loginsBefore, "a NEW login completed through the harness's login page")
+        let state = nodeState(app)
+        XCTAssertTrue(state.hasSuffix("Running"), "and the node is back on the tailnet: \(state)")
+    }
+
+    /// An admin revokes the device's approval mid-session: the dashboard says
+    /// it is waiting for approval (there is nothing to do in the app), and
+    /// comes back by itself when the device is approved again.
+    func testARevokedDeviceMidSessionWaitsForApproval() async throws {
+        try await resetHarness()
+        let app = launch()
+        defer { app.terminate() }
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        let node = try await appNode()
+
+        _ = try await Self.post("\(Self.harnessAPI)/deauthorize?hostname=\(node.hostname)")
+        let banner = app.descendants(matching: .any).matching(identifier: "needs-machine-auth-banner").firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 30), "the dashboard says the device awaits approval")
+        XCTAssertFalse(app.buttons["login-banner-button"].exists, "approval is not a login: no Login button")
+
+        let approved = try await Self.post("\(Self.harnessAPI)/approve?hostname=\(node.hostname)")
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: approved) as? [String: Any])?["approved"] as? Int, 1)
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 30), "approved again: the banner goes by itself")
+        let state = nodeState(app)
+        XCTAssertTrue(state.hasSuffix("Running"), "and the node is back: \(state)")
+    }
+
+    /// The node's state as the app itself reports it (Settings → Status):
+    /// the harness can see registrations and approvals, not a client's state.
+    private func nodeState(_ app: XCUIApplication) -> String {
+        let list = app.openStatus()
+        let state = app.statusRow("diag-state", in: list)
+        app.buttons["diagnostics-done-button"].tap()
+        app.buttons["settings-done-button"].firstMatch.tap()
+        return state
+    }
+
+    private func completedLogins() async throws -> Int {
+        (try await harnessState()["logins"] as? [[String: Any]] ?? []).filter { $0["completed"] as? Bool == true }.count
+    }
+
     // MARK: - Launch
 
     private func launch(extra: [String] = []) -> XCUIApplication {

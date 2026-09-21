@@ -350,10 +350,14 @@ private struct DashboardContent: View {
         }
         .overlay(alignment: .top) {
             if statusViewModel.needsAuth {
+                // Mid-session NeedsLogin -- the node key expired, or was
+                // expired by an admin (R31): Login re-authenticates in place.
                 LoginBanner(
                     authSessionEndedGeneration: statusViewModel.authSessionEndedGeneration,
                     onLogin: { statusViewModel.showAuth() }
                 )
+            } else if statusViewModel.needsMachineAuth {
+                MachineAuthBanner()
             }
         }
         .onChange(of: homePageAvailability) { _, availability in
@@ -471,6 +475,34 @@ private struct GatewayUnreachableBanner: View {
 
 /// Inline "login required" banner shown over the page if the node drops to
 /// `NeedsLogin` after having connected (e.g. the user logged out).
+/// An admin revoked this device's approval mid-session (R31): the node waits
+/// at NeedsMachineAuth and nothing loads. There is nothing to do in the app,
+/// so no button -- it says where the fix is, and goes away by itself when the
+/// device is approved again (the gate's text, R17, for a dashboard already up).
+private struct MachineAuthBanner: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "clock.badge.exclamationmark")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Waiting for approval")
+                    .font(.subheadline.weight(.medium))
+                Text("An admin must approve this device in the Tailscale admin console. The dashboard comes back by itself.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 52)   // clear of the settings gear
+        .padding(.vertical, 8)
+        .background(.thinMaterial)
+        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("needs-machine-auth-banner")
+    }
+}
+
 private struct LoginBanner: View {
     let authSessionEndedGeneration: UInt64
     let onLogin: () -> Void
