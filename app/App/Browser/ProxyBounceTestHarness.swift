@@ -117,6 +117,13 @@ private final class ProxyBounceHarnessModel: ObservableObject {
             })
     }
 
+    /// R7: kill the content process and let the browser recover by itself.
+    func killWebContent() {
+#if DEBUG
+        browser.simulateContentProcessTermination()
+#endif
+    }
+
     func bounce() {
         connectionLabel = "Reconnecting"
         tsnet.state = .Starting
@@ -153,6 +160,8 @@ struct ProxyBounceTestHarnessView: View {
                 Spacer()
                 Button("Simulate connection bounce") { model.bounce() }
                     .accessibilityIdentifier("simulate-connection-bounce")
+                Button("Kill web content") { model.killWebContent() }
+                    .accessibilityIdentifier("simulate-web-content-termination")
             }
             .padding()
             Divider()

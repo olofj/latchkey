@@ -56,6 +56,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// expanded to its FQDN before loading.
     private var allowedOrigin: String?
 
+    /// Budget for automatic reloads after the web content process dies (R7).
+    private var contentRecovery = ContentProcessRecovery()
+    /// Set when the content process died while the app was in the
+    /// background; the reload happens on return to the foreground.
+    private var reloadWhenActive = false
+
     private(set) var didLoadInitial = false
     private var pendingLoadURL: URL?
     /// The backend can publish Running a moment before its first SOCKS dial is
@@ -96,6 +102,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.loadInitial() }
             .store(in: &observers)
+
+#if canImport(UIKit)
+        // A content process that died in the background is reloaded when the
+        // app comes back (R7).
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.reloadIfContentProcessDiedInBackground() }
+            .store(in: &observers)
+#endif
     }
 
     var hasWebView: Bool { webView != nil }
@@ -165,6 +180,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         canGoBack = false
         canGoForward = false
         didLoadInitial = false
+        // The next makeWebView loads the page afresh anyway.
+        reloadWhenActive = false
     }
 
     /// Keeps delegates/observation attached if SwiftUI reuses the view.
@@ -679,7 +696,70 @@ extension BrowserViewModel: WKNavigationDelegate {
         navigationError(error, for: failedURL)
     }
 
+    /// WebKit's web content process died (R7, finding H10). Upstream showed a
+    /// "cannot load from network" error page and never reloaded, so a routine
+    /// memory kill looked exactly like a tailnet outage. Now: reload if the
+    /// app is active, within `ContentProcessRecovery`'s budget; defer the
+    /// reload to the foreground if it is not; show the error page only when
+    /// the budget is spent.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        navigationError(URLError(.cannotLoadFromNetwork), for: webView.url ?? initialURL)
+        AppDiagnostics.shared.webContentTerminations += 1
+#if canImport(UIKit)
+        if UIApplication.shared.applicationState != .active {
+            logger.log("Web content process terminated in the background; reloading on return")
+            reloadWhenActive = true
+            return
+        }
+#endif
+        recoverFromContentProcessTermination(webView)
+    }
+}
+
+extension BrowserViewModel {
+#if DEBUG
+    /// Test hook (R7): kills this web view's content process the way iOS
+    /// does under memory pressure, so the recovery path can be exercised end
+    /// to end. Uses WebKit's private `_killWebContentProcess`, which is why
+    /// it is compiled into DEBUG builds only; revision R15 moves every test
+    /// hook behind a dedicated flag.
+    func simulateContentProcessTermination() {
+        let selector = NSSelectorFromString("_killWebContentProcess")
+        guard let webView, webView.responds(to: selector) else {
+            logger.log("simulateContentProcessTermination: SPI unavailable")
+            return
+        }
+        logger.log("simulateContentProcessTermination: killing the web content process")
+        webView.perform(selector)
+    }
+#endif
+
+    fileprivate func reloadIfContentProcessDiedInBackground() {
+        guard reloadWhenActive, let webView else { return }
+        reloadWhenActive = false
+        recoverFromContentProcessTermination(webView)
+    }
+
+    fileprivate func recoverFromContentProcessTermination(_ webView: WKWebView) {
+        guard contentRecovery.shouldReload(now: Date()) else {
+            AppDiagnostics.shared.webContentGaveUp += 1
+            logger.log("Web content process terminated \(contentRecovery.maxReloads + 1) times in \(Int(contentRecovery.window))s; showing the error page")
+            navigationError(URLError(.cannotLoadFromNetwork), for: webView.url ?? url ?? initialURL)
+            navErrorMessage = "The dashboard page stopped repeatedly (\(contentRecovery.maxReloads + 1) times in a minute), so automatic reloading has paused. This is the page itself failing, not the tailnet. Reload to try again."
+            return
+        }
+        AppDiagnostics.shared.webContentAutoReloads += 1
+        logger.log("Web content process terminated; reloading (\(contentRecovery.recentReloads.count) of \(contentRecovery.maxReloads) in \(Int(contentRecovery.window))s)")
+        clearNavError()
+        // After a termination WKWebView still knows its URL, and reload()
+        // starts a fresh content process for it. Without one (it died before
+        // the first commit), start the page over from the app's own URL.
+        if webView.url != nil {
+            webView.reload()
+        } else if let target = url ?? pendingLoadURL {
+            loadResolved(target)
+        } else {
+            didLoadInitial = false
+            loadInitial()
+        }
     }
 }

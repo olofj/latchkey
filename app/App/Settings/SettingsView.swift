@@ -13,6 +13,7 @@ struct SettingsView: View {
     @State private var showLogoutAlert: Bool = false
     @State private var routeTestHost: String = ""
     @State private var showingLogs: Bool = false
+    @ObservedObject private var diagnostics = AppDiagnostics.shared
 
     var body: some View {
         settingsContainer
@@ -135,6 +136,20 @@ struct SettingsView: View {
                         }
                     }
                     .accessibilityIdentifier("logs-button")
+
+                    // R7: counted apart from network errors, which upstream
+                    // showed as the same error page.
+                    HStack {
+                        Text("Web page restarts")
+                        Spacer()
+                        Text(diagnostics.webContentTerminations == 0
+                             ? "none"
+                             : "\(diagnostics.webContentTerminations) (\(diagnostics.webContentAutoReloads) reloaded automatically)")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("diagnostics-web-content-restarts")
                 }
 
                 Section {

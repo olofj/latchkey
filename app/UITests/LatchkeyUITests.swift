@@ -1144,6 +1144,42 @@ final class LatchkeyUITests: XCTestCase {
         return result == .completed
     }
 
+    // MARK: - Latchkey: web content process recovery (R7)
+
+    /// iOS kills a web view's content process under memory pressure.
+    /// Upstream turned that into a network-error page and never reloaded, so
+    /// a routine memory kill looked like a tailnet outage. The page must come
+    /// back by itself — a second load, not an error page. Hermetic: the
+    /// harness serves its page from an in-app URL scheme handler.
+    func testWebContentProcessTerminationReloadsAutomatically() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestProxyBounceHarness"]
+        app.launch()
+
+        let loads = app.staticTexts["bounce-load-count"]
+        XCTAssertTrue(loads.waitForExistence(timeout: 20), "harness should render")
+        XCTAssertTrue(waitForLabel(loads, "ONE LOAD", timeout: 20),
+                      "the page should load once first; got '\(loads.label)'")
+
+        app.buttons["simulate-web-content-termination"].tap()
+
+        // The page counts its loads in sessionStorage, which survives a
+        // reload in the same tab, so recovery shows up as a second load.
+        XCTAssertTrue(waitForLabel(loads, "LOADS 2", timeout: 20),
+                      "the page should reload by itself after its content process dies; got '\(loads.label)'")
+        let errorPage = app.descendants(matching: .any)
+            .matching(identifier: "nav-error-overlay").firstMatch
+        XCTAssertFalse(errorPage.exists,
+                       "an automatic recovery must not show the network-error page")
+    }
+
+    private func waitForLabel(_ element: XCUIElement, _ label: String,
+                              timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", label), object: element)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
     // MARK: - Latchkey re-points
 
     /// The marker `DashboardRootView` draws once the dashboard is presented.
