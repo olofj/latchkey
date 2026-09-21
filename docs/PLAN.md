@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | In implementation. M0 and M1 done; revisions from `docs/PLAN-REVISIONS.md` being applied — where they disagree with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
+| Status | In implementation. M0–M3 done (the M1 device check awaits owner actions O1–O3); revisions from `docs/PLAN-REVISIONS.md` being applied — where they disagree with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
 | Author | Drafted 2026-09-20 from three parallel research passes |
 | Repo | `~/src/latchkey` |
 | Base | Fork of [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) @ `dba0555` (2026-08-24), BSD-3-Clause |
@@ -28,7 +28,7 @@ document was verified against source during planning. Where something is
 settled — verify them in the milestone that depends on them.
 
 **Conventions used below**
-- `path/to/file.swift:123` — a real file and line in the upstream repo at `dba0555`. Line numbers drift once you start editing; treat them as "where to look", not as addresses.
+- `path/to/file.swift:123` — a real file and line in the upstream repo at `dba0555`. Line numbers drift once you start editing; treat them as "where to look", not as addresses. **R18:** libtailscale references (`tailscale.h`, `tstestcontrol/`, `swift/TailscaleKit/`) are to the vendored tree in `app/ThirdParty/libtailscale` (R16, `f55900d2`), not libtailscale `main`; they were re-checked against it on 2026-09-20.
 - **AC** — acceptance criteria. A milestone is done when all of its ACs pass.
 - Effort estimates assume one engineer working with an AI pair, and are in focused hours, not calendar time.
 
@@ -160,7 +160,7 @@ repo explicitly warns against collapsing the split tunnel back to an unscoped
 proxy config, and `TSNet/TailnetProxyPolicy.swift:11-82` documents the measured
 semantics.
 
-- tsnet exposes a loopback SOCKS5 listener; username is literally `tsnet`, password is the per-launch `proxyCredential` (`tailscale.h:155-176`).
+- tsnet exposes a loopback SOCKS5 listener; username is literally `tsnet`, password is the per-launch `proxyCredential` (`tailscale.h:202-223`, `tailscale_loopback`).
 - The app builds `ProxyConfiguration(socksv5Proxy:)`, calls `applyCredential(username:password:)`, and sets `matchDomains` to tailnet CIDRs plus MagicDNS names (`TSNet/TSNetManager.swift:501-549`).
 - `allowFailover` stays **false** (the Network.framework default, `proxy_config.h:220-224`). This is what guarantees a dead proxy fails the load instead of leaking direct. **Add a unit test asserting it is false** — flipping it would be a silent privacy regression.
 - TLS is end-to-end to the real `*.ts.net` Let's Encrypt certificate. The proxy sees only a CONNECT.
@@ -237,7 +237,7 @@ entirely. Do it in M7 and measure the difference.
 
 ### 3.4 Discovery design
 
-1. Ask the node for tailnet status. Prefer `statusJSON()` on `TailscaleNode` over the loopback HTTP `/status` endpoint: `tailscale.h:183-186` documents that the LocalAPI path keeps working when *"the OS reclaims the loopback TCP listener from a suspended process (observed on iOS), where the loopback address goes permanently stale."*
+1. Take the peers from `tsnetModel.localStatus`, which the app already polls through `LocalAPIClient.backendStatus()` — the same data `TailnetProxyPolicy.make(from:)` uses. **(R18:** this step originally said to prefer `TailscaleNode.statusJSON()`. That API and `tailscale_status_json` exist only in libtailscale `main`, which lacks `restartLoopback`; the vendored revision has neither, and the header text quoted here was from `main`.)
 2. Extract peer `DNSName`s. `TailnetProxyPolicy` already parses exactly this data — reuse its parsing rather than writing a second JSON path.
 3. For each peer, probe `GET https://<dnsname>/manifest.json` through the tsnet dialer with a short timeout (2 s) and bounded concurrency (4 at a time).
 4. A gateway is a match when the response is JSON with `"name": "Kiro Crew"`.
@@ -417,28 +417,40 @@ See §6 for the full strategy; this is the build-out.
 
 ### M3 — Fake control plane for tsnet tests (4–6 h; re-estimated 12–20 h by R36)
 
+**Status:** done 2026-09-20. `scripts/test-tailnet.sh` passes 3/3 in ~70 s with no Tailscale account; the harness self-test takes ~10 s. `docs/DECISIONS.md` "R17" and "M3 done" have the detail.
+
 **Goal:** exercise the real tsnet node — login, netmap, loopback, proxy — against a
 throwaway control server, still with no real tailnet.
 
+**Revised (R17).** The original tasks linked libtailscale's `tstestcontrol`
+c-archive into the iOS test target. That cannot work: `controlhttpserver` is
+`//go:build !ios`, so the archive does not build for the simulator; the
+`TailscaleKitXCTests` target is macOS-only; and the shim's `RunControl` assigns
+a shadowed local `control`, so `stop_control` never stops anything
+(`tstestcontrol/tstestcontrol.go:77`; its `fakeTB` calls `log.Fatal` at
+`:237-241`). The simulator shares the host's loopback, so the control plane
+runs as a **host process** instead.
+
 | # | Task | Detail |
 |---|---|---|
-| 3.1 | Build `libtstestcontrol` | libtailscale ships `tstestcontrol/`, a `c-archive` exposing exactly `run_control(char*, size_t)` and `stop_control()` (`tstestcontrol.h:17-20`), with a prebuilt `libtstestcontrol.xcscheme`. It wires in `integration.RunDERPAndSTUN` plus `testcontrol.Server`. |
-| 3.2 | Patch in MagicDNS | The shim's struct literal (`tstestcontrol.go:77-79`) sets neither `MagicDNSDomain` nor `DNSConfig`, so out of the box you get DERP+STUN but no `*.ts.net` names. Add `MagicDNSDomain: "tail-scale.ts.net"` and `DNSConfig: &tailcfg.DNSConfig{Proxied: true}`, rebuild the archive. Keep the patch in `ThirdParty/` and document it in `DECISIONS.md`. |
-| 3.3 | XCTest scaffolding | Follow `swift/TailscaleKitXCTests/TailscaleKitTests.swift:10-30` verbatim: `run_control` in `setUp`, `stop_control` in `tearDown`, feed the URL to `Configuration(controlURL:)`. The override already exists — `TailscaleNode.swift:14` has `public let controlURL: String`, and `tailscale.h:68` exposes `tailscale_set_control_url`. **No libtailscale patch needed for this part.** |
-| 3.4 | Node-joins-control test | Assert the node reaches `Running` against the fake control, and that `statusJSON()` reports the expected peer set. |
-| 3.5 | End-to-end over tsnet | Run a second tsnet node serving the fake dashboard; have the app reach it by MagicDNS name through the real loopback SOCKS5 proxy. This is the highest-fidelity test that needs no Tailscale account. |
-| 3.6 | Note the failure mode | `fakeTB.Fatal` calls `log.Fatal`, so a control-server failure kills the test process rather than failing a test (upstream TODO at `tstestcontrol.go:53`). Detect the dead process and report it as a test failure, not a hang. |
+| 3.1 | `testing/tsnet-harness/` | A host Go binary built against the app's vendored tailscale (R16): `testcontrol.Server` with `MagicDNSDomain: "tail-scale.ts.net"` and `DNSConfig{Proxied: true}`, DERP/STUN on `127.0.0.1`, and two tsnet peers — `dash` forwards tailnet :443 to `dashboard.py` (TLS by the M2 test-CA leaf, which already names `dash.tail-scale.ts.net`; not R17's wildcard, which would also cover M2's `wrong.tail-scale.ts.net` mismatch fixture) and journals each connection's tailnet source; `plain` serves nothing. Fixed control URL `http://127.0.0.1:8490`; test API on `:8491` (`/state`, `/reset?auth=&machine=`, `/approve?hostname=`). Serves the `/auth/<id>` login page testcontrol lacks. Sets `SetNoLogsNoSupport` like the app (D1). |
+| 3.2 | `-TestControlURL` | Launch argument behind `LATCHKEY_TEST_HOOKS` that overrides `WorkspaceDefinition.controlURL` for the launch only (never persisted). Loopback http(s) only; anything else is a crash, never a fall-back to the real control plane. Host-tested (`scripts/test-control-plane.sh`), with and without the hooks compiled in. |
+| 3.3 | Join and load | The node reaches `Running`, receives the netmap and MagicDNS config, and the dashboard loads by name through the node's own loopback SOCKS5 — asserted by the `dash` peer journaling a connection from the **app node's** tailnet address. Peers come from `tsnetModel.localStatus` (R18); the load itself proves the proxy policy covered the MagicDNS name, since the name is NXDOMAIN off the tailnet. |
+| 3.4 | Login (`RequireAuth`) | The node stops at `NeedsLogin`; the gate's Login opens the real `ASWebAuthenticationSession` on the harness's login page, which completes the login (`CompleteAuth`). Nothing loads before it. |
+| 3.5 | Device approval (`RequireMachineAuth`) | The app handles `NeedsMachineAuth` with its own gate text (no Login button; approval happens in the admin console), and continues by itself after `/approve`. Nothing loads before it. Mid-session handling is R31 (M6–M8). |
+| 3.6 | Address overlap | Verify once that the harness's `100.64.x` addresses do not collide with the host's real tailnet routes. |
+| 3.7 | Script | `scripts/test-tailnet.sh [--build]`: preflight, the harness's host-side self-test (`make -C testing/tsnet-harness check`, ~10 s, no simulator), harness up, `TailnetHarnessTests`, teardown. |
 
 **AC:**
-- A test boots a fake control plane in-process, joins a real tsnet node to it, and asserts `Running` — with no Tailscale account.
-- The end-to-end test loads a page from a second tsnet node through the app's own proxy path.
-- Both run from the command line via `xcodebuild test`.
+- A test joins the app's real tsnet node to a fake control plane and loads the dashboard through the node's proxy — with no Tailscale account.
+- Login and device approval are each exercised, and nothing loads before them.
+- Both the self-test and the UI suite run from the command line; the UI suite within 5 minutes.
 
 **Note:** HTTPS certs are the one thing testcontrol cannot give us. Tailscale's
 own tests mint them through `s.lb.ForTest().ConfigureCerts`, which panics outside
-`go test` (`ipn/ipnlocal/fortest.go:26-32`) and is unreachable from Swift. So M3
-tests either use plain HTTP over the tailnet, or the M2 test CA. That is fine —
-TLS is covered by M2.
+`go test` (`ipn/ipnlocal/fortest.go:26-32`). So the `dash` peer forwards to
+`dashboard.py`, which serves the M2 test CA's leaf. That is fine — TLS is
+covered by M2.
 
 ---
 
@@ -472,7 +484,7 @@ token only when renewal truly fails.
 
 | # | Task | Detail |
 |---|---|---|
-| 5.1 | `GatewayDiscovery` | New type. Enumerate peers via `statusJSON()` (not the loopback HTTP `/status`, per §3.4). Reuse `TailnetProxyPolicy`'s existing peer parsing. |
+| 5.1 | `GatewayDiscovery` | New type. Enumerate peers from `tsnetModel.localStatus` (R18; §3.4). Reuse `TailnetProxyPolicy`'s existing peer parsing. |
 | 5.2 | Probe | `GET https://<dnsname>/manifest.json` through the tsnet dialer; 2 s timeout; max 4 concurrent. Match on `"name": "Kiro Crew"`. Also try `http://<dnsname>:5476/manifest.json` for gateways not behind `tailscale serve`. |
 | 5.3 | Picker UI | List discovered gateways with hostname and reachability. Manual entry as a fallback. Persist the choice; skip the picker when only one is found and it already has a session. |
 | 5.4 | Wire into the start URL | Replace the M1 hardcoded URL: `HomePage.defaultURL` becomes the selected gateway. Keep `HomePageAvailability` (`App/Browser/HomePageAvailability.swift`) — it already checks whether a host exists in the tailnet before loading, which is exactly right here. |
@@ -494,7 +506,7 @@ likely to make the app feel unreliable in daily use.
 | # | Task | Detail |
 |---|---|---|
 | 6.1 | Inherit, don't rewrite | Upstream's failure-driven recovery (`TSNetManager.swift:355-415`) is the right design and replaced an earlier lifecycle-driven one that had real bugs. Do not reintroduce foreground rebuild logic. |
-| 6.2 | Use `statusJSON()` for liveness | `tailscale.h:183-186`: the LocalAPI path keeps working when the OS reclaims the loopback listener, where the loopback HTTP address goes **permanently stale**. Any liveness check that uses the loopback HTTP endpoint will lie to you after a suspend. |
+| 6.2 | ~~Use `statusJSON()` for liveness~~ **Liveness stays on the loopback status poll (R18)** | As written this was inverted: the loopback listener serves both SOCKS5 and LocalAPI, so the loopback poll failing is exactly the signal that the proxy is dead — which is what upstream's `recoverLoopbackAfterFailure` keys on. `statusJSON()` does not exist in the vendored revision anyway. Nothing to build; keep the upstream design (6.1). |
 | 6.3 | Session re-check on foreground | Hook `scenePhase == .active` (`App/ApertureApp.swift:69`) to `SessionManager.refreshIfNeeded()`. Note `:67` deliberately ignores `.inactive` — respect that; there is a stale-auth-URL bug behind it. |
 | 6.4 | WebSocket reconnect | **Write no app-side reconnect logic.** (One exception now exists, R7: if the *web content process* dies — routine under memory pressure — the app reloads the page, at most 2× per 60 s, deferred to foreground if it died in the background. The page's own reconnect cannot help when its JavaScript is gone.) The page already reconnects with exponential backoff (1 s, doubling, capped at 10 s; reset to 1 s on open) and on reconnect does a full refetch plus re-subscribe, because the protocol has no sequence numbers or cursor-based replay — anything missed while disconnected is recovered by HTTP, not by the socket. The app's only job is the foreground nudge (M4.7). Measure reconnect time after resume; intervene only if it is bad. |
 | 6.5 | Simulated suspend test | `XCUIDevice.shared.press(.home)` then `app.activate()`, then assert a page load still works. **`xcrun simctl` has no `suspend` subcommand** (verified) — there is no CLI path. **Corrected (R14):** there is a CLI path — upstream's `app/scripts/test-lock-resume.sh` freezes the app with SIGSTOP. Use it. |
@@ -559,7 +571,7 @@ much coverage as possible *down* to layers that need no tailnet at all.
 |---|---|---|---|
 | **L0** Host unit tests | Pure logic: split-tunnel policy, hostname qualification, URL parsing, session state machine, `allowFailover == false` | `swiftc`, nothing else | ~2 s |
 | **L1** Offline harness (M2) | WKWebView ↔ SOCKS5 ↔ HTTPS ↔ WebSocket ↔ SSE; the anti-leak negative test | Simulator + two Python processes | <3 min |
-| **L2** Fake control plane (M3) | Real tsnet node: login, netmap, loopback, proxy, MagicDNS names | Simulator + `libtstestcontrol.a` | <5 min |
+| **L2** Fake control plane (M3) | Real tsnet node: login, device approval, netmap, loopback, proxy, MagicDNS names | Simulator + the host-side `testing/tsnet-harness` (R17) | <5 min |
 | **L3** Headscale (optional) | Persistent identity, ACLs/tags, a second device | Docker | minutes |
 | **L4** Real tailnet + device | Suspension, jetsam, cellular, real certs, real dashboard | Olof's phone | manual |
 

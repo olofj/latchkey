@@ -13,6 +13,8 @@ app/
 
 # Offline harness runtime state (pidfiles, logs, the proxy journal).
 testing/harness/.run/
+# L2 tsnet harness: its binary, pidfile, log and node state.
+testing/tsnet-harness/.run/
 
 # Xcode / build
 app/build/

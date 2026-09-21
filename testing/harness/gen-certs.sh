@@ -30,11 +30,16 @@ if [[ $FORCE -eq 0 && -f ca.pem && -f ca.der && -f server.pem && -f server.key ]
     # Regenerate anyway if the leaf has expired or expires within a day —
     # a silently expired fixture produces a TLS error that looks like a
     # proxy bug and costs an hour.
-    if openssl x509 -checkend 86400 -noout -in server.pem >/dev/null 2>&1; then
+    # ...and if leaf.cnf changed since the leaf was minted (a new SAN would
+    # otherwise never reach the certificate).
+    if [[ leaf.cnf -nt server.pem ]]; then
+        echo "leaf.cnf is newer than the leaf; regenerating"
+    elif openssl x509 -checkend 86400 -noout -in server.pem >/dev/null 2>&1; then
         echo "certs present and valid; use --force to regenerate"
         exit 0
+    else
+        echo "leaf certificate has expired or is about to; regenerating"
     fi
-    echo "leaf certificate has expired or is about to; regenerating"
 fi
 
 echo "==> test root CA"
@@ -67,6 +72,11 @@ openssl x509 -in server.pem -noout -text | grep -q "DNS:dash.tail-scale.ts.net" 
     || { echo "error: leaf is missing subjectAltName — iOS ignores CN" >&2; exit 1; }
 openssl x509 -in server.pem -noout -text | grep -q "DNS:dash.localtest.me" \
     || { echo "error: leaf is missing dash.localtest.me — the anti-leak test (R10) needs it" >&2; exit 1; }
+# The M2 mismatch test needs a tailnet name this leaf does NOT cover. A
+# wildcard would cover it, and did once (M3).
+if openssl x509 -in server.pem -noout -checkhost wrong.tail-scale.ts.net | grep -q "does match"; then
+    echo "error: leaf covers wrong.tail-scale.ts.net — the certificate-mismatch test needs it not to" >&2; exit 1
+fi
 
 echo "ok: ca.pem, ca.der, server.pem, server.key"
 echo

@@ -841,3 +841,122 @@ path, independent of how the dashboard renders.
 releases): the reporter's published fix patched into byskebox's gateway venv,
 or a client-side `WKUserScript` carrying the same fix. Either is a small,
 contained change. Neither is started speculatively.
+
+## 2026-09-20 — R18: no `statusJSON()`; plan references re-checked
+
+**CHECK-FIRST result:** nothing in `App/` or `TSNet/` calls `statusJSON()`
+or `tailscale_status_json`. Neither exists anywhere in the vendored tree
+(grep over `ThirdParty/libtailscale`, excluding `tailscale-patched`'s
+unrelated `PrintTailnetLockStatusJSONV1`). So the code already met R18.
+Peers already come from `tsnetModel.localStatus` (the `backendStatus()` poll),
+which is what `TailnetProxyPolicy` reads.
+
+**Plan text fixed:** §3.4 step 1 and M5.1 now take peers from `localStatus`.
+M6.2 is rewritten per R18: liveness stays on the loopback poll, whose failure
+*is* the dead-proxy signal. **Porting `TsnetStatusJSON` from `main`: not
+done.** It is optional, and nothing needs it.
+
+**libtailscale line references, re-checked against the vendored tree:**
+
+| Plan said | Vendored tree |
+|---|---|
+| `tailscale.h:155-176` (loopback SOCKS5) | `:202-223` (`tailscale_loopback`). Fixed in §3.2 |
+| `tailscale.h:183-186` ("permanently stale") | Not in the vendored header — `main`-only text. Removed |
+| `tailscale.h:68` (`tailscale_set_control_url`) | `:78` |
+| `TailscaleNode.swift:14` (`controlURL`) | `:12` |
+| `TailscaleKitTests.swift:10-30` (setUp/tearDown) | `:36-56` |
+| `tstestcontrol.h:17-20`, `tstestcontrol.go:77-79` | Correct |
+| `tstestcontrol.go:53` as the `log.Fatal` site | `:53` is the logging TODO; `log.Fatal` is at `:237-241` (as R37 says) |
+
+The last four sat in M3's old table, which R17 replaces. The conventions
+line now says libtailscale references are to the vendored tree.
+
+## 2026-09-20 — R17: the L2 harness is a host process
+
+`testing/tsnet-harness/` (parent repo) was built from the review's
+proof of concept. It is a Go binary compiled against the **app's own vendored
+tailscale** (`replace` into `app/ThirdParty/libtailscale/tailscale-patched`),
+so it speaks the same protocol revision the app does. The app side is
+`-TestControlURL` plus a `NeedsMachineAuth` gate (`app/` `bed6baefd`). Design
+choices, each deliberate:
+
+- **Fixed ports, not ephemeral ones.** Control is on `127.0.0.1:8490` and the
+  test API on `:8491`, so `-TestControlURL` is a constant in the tests.
+  `make up` refuses stray listeners and checks that its own pid answers,
+  following M2's stray lesson.
+- **A fresh control plane per test** (`POST /reset?auth=&machine=`, about 1 s).
+  `RequireAuth` and `RequireMachineAuth` are server-wide fields, read under
+  testcontrol's private mutex, so they cannot safely be flipped on a live
+  server. A reset also means an earlier test's app node never appears as a
+  peer. Peers do their own login and approval (`awaitRunning`). The app's
+  node never gets that treatment.
+- **The `dash` peer forwards TCP; it does not terminate TLS.** `dashboard.py`
+  already serves the test CA's leaf, and a byte-level relay passes WebSocket
+  and SSE through untouched. The peer journals each connection's **tailnet
+  source address**. A journal entry from the app node's address proves the
+  load crossed the tailnet, since `dash.tail-scale.ts.net` is NXDOMAIN off it.
+- **Login completes when the auth URL is visited.** testcontrol issues
+  `<control>/auth/<id>` but serves nothing there. The harness serves it, and
+  visiting it completes the login, as for a browser that already holds an
+  IdP session. That keeps the UI test to one tap on the app's real Login
+  (the real `ASWebAuthenticationSession`). No consent prompt appeared: the
+  session is ephemeral.
+- **Log upload off in the harness too.** tsnet's `startLogger` builds a
+  logtail uploader to log.tailscale.com for every node outside `go test`.
+  The PoC did not disable it, so its test nodes would have uploaded logs. The
+  harness calls `envknob.SetNoLogsNoSupport()` in `init`, as the app does (D1).
+- **netns off**, as libtailscale's own shim does: binding to the default-route
+  interface is wrong for a loopback-only tailnet.
+- **All nodes share one owner** (`AllNodesSameUser`), like a personal tailnet.
+  M5's discovery filters by owner (R26).
+- **`-TestControlURL` is loopback http(s) only, and crashes otherwise.** A
+  typo must not send a test node to Tailscale's real control plane. It is
+  never written into the workspace definition.
+- **No wildcard SAN, though R17 suggested one.** `*.tail-scale.ts.net` was
+  added and broke M2's `testCertificateNameMismatchShowsTheErrorPage`: the
+  wildcard also covers `wrong.tail-scale.ts.net`. The mismatch test caught it
+  and was right to. The leaf keeps explicit names (`dash` is already there),
+  and `gen-certs.sh` now refuses a leaf that matches `wrong.tail-scale.ts.net`.
+  Each future gateway name is added explicitly. `gen-certs.sh` also re-mints
+  when `leaf.cnf` is newer than the leaf; before, a SAN edit never reached
+  the certificate.
+
+**R17's address check, verified:** `route -n get 100.64.0.1` on chonk answers
+`utun4`, because the host's real Tailscale claims 100.64/10. A probe node still
+reached the `dash` peer at `100.64.0.1` through its own SOCKS5. So harness
+addresses live in the userspace netstacks and never consult host routes. The
+self-test prints this each run.
+
+## 2026-09-20 — M3 done
+
+- `make -C testing/tsnet-harness check`: the host-side self-test, **~10 s**,
+  no simulator. It covers:
+  - open join;
+  - MagicDNS peers;
+  - the dashboard over a node's loopback SOCKS5, plus the negative (the same
+    name fails off the tailnet);
+  - the address check;
+  - RequireAuth: stays at NeedsLogin, then Running after the visit, and a
+    bogus link returns 404;
+  - RequireMachineAuth: held until `/approve`;
+  - a reset forgets old nodes.
+
+  Every step is written so it can fail. A probe that leaves NeedsLogin or
+  NeedsMachineAuth by itself is an error.
+- `scripts/test-tailnet.sh`: self-test, harness up, `TailnetHarnessTests`
+  **3/3 in 68–70 s** (budget 300 s). The three tests:
+  - the node joins and loads the dashboard, journaled from its own address;
+  - login through the real auth session;
+  - device approval.
+
+  Nothing loads before login or approval.
+- L1 unaffected after the certificate fix: `scripts/test-offline.sh` 9/9 in
+  104 s. `make test-policy` gained the control-plane override tests.
+- **Not done here:**
+  - M3.4's "expected peer set" is not asserted from inside the app. The
+    load proves the policy covered the MagicDNS name, and the self-test
+    asserts the peer set from a node's status.
+  - The diagnostics screen (R29, M8.2) is the natural place to show peers.
+  - Mid-session `NeedsLogin`/`NeedsMachineAuth` is R31.
+- **Actual:** ~40 min agent wall-clock, including R18 (not engineer-hours;
+  see "M2 done").
