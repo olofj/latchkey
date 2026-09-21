@@ -521,7 +521,9 @@ func (lg *Logger) drainPending(wait bool) (b []byte, flush *flushRequest, shutti
 				fmt.Fprintf(lg.stderr, "RAW-STDERR:\n")
 				lg.explainedRaw = true
 			}
-			fmt.Fprintf(lg.stderr, "RAW-STDERR: %s", b)
+			// Latchkey (R29): the line, not b (the batch so far); see
+			// latchkey_rawecho_test.go.
+			fmt.Fprintf(lg.stderr, "RAW-STDERR: %s", line)
 			// Do not add a client time, as it could be really old.
 			// Do not include instance key or ID either,
 			// since this came from a different instance.
