@@ -102,8 +102,15 @@ harness-up: certs harness-down  ## Start the fake dashboard + stub proxy
 
 .PHONY: harness-down
 harness-down:  ## Stop the fake dashboard + stub proxy
+	@# Wait for each process to actually exit before dropping its pidfile:
+	@# harness-up runs this and then checks the ports, and a process still
+	@# on its way out would look like a stray and block the start (M2 review).
 	@for f in $(PROXY_PID) $(DASH_PID); do \
-	    if [ -f $$f ]; then kill $$(cat $$f) 2>/dev/null || true; rm -f $$f; fi; \
+	    if [ -f $$f ]; then \
+	        pid=$$(cat $$f); kill $$pid 2>/dev/null || true; \
+	        for i in $$(seq 1 50); do kill -0 $$pid 2>/dev/null || break; sleep 0.1; done; \
+	        rm -f $$f; \
+	    fi; \
 	done
 	@echo "::: harness down :::"
 
@@ -151,6 +158,9 @@ harness-status:  ## Show what is running
 
 .PHONY: check
 check: harness-up  ## Self-test the harness host-side with curl (no simulator)
+	@# Negative checks are explicit `if ...; then exit 1; fi`, never `! cmd`:
+	@# POSIX tells `set -e` to ignore a command starting with `!`, so a
+	@# `! curl ...` that should fail the check can never fail it (M2 review).
 	@set -e; \
 	CTL=http://127.0.0.1:$(PROXY_CONTROL_PORT); DCTL=http://127.0.0.1:$(DASH_CONTROL_PORT); \
 	PX=socks5h://$(PROXY_USER):$(PROXY_PASS)@127.0.0.1:$(PROXY_PORT); \
@@ -158,7 +168,8 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	echo "==> HTTPS GET through the proxy (the tailnet-name path)"; \
 	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; echo "    ok"; \
 	echo "==> a wrong proxy password is rejected"; \
-	! curl -sS --fail --cacert ca.pem --proxy socks5h://$(PROXY_USER):wrong@127.0.0.1:$(PROXY_PORT) https://$(DASH_HOST)/ >/dev/null 2>&1; echo "    ok"; \
+	if curl -sS --fail --cacert ca.pem --proxy socks5h://$(PROXY_USER):wrong@127.0.0.1:$(PROXY_PORT) https://$(DASH_HOST)/ >/dev/null 2>&1; then \
+	    echo "FAIL: a wrong password got through" >&2; exit 1; fi; echo "    ok"; \
 	echo "==> the journal (file and control port) recorded the CONNECT"; \
 	grep -q '"event": *"connect"' $(JOURNAL); curl -s $$CTL/journal | grep -q '"connect"'; echo "    ok"; \
 	echo "==> R10 positive control: a DIRECT load of dash.localtest.me succeeds"; \
@@ -167,13 +178,15 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	test "$$(count dash.localtest.me)" -ge 1; echo "    ok (a leak to this origin WOULD succeed, so a leak is detectable)"; \
 	echo "==> R10 negative: blackholed proxy fails, dashboard sees ZERO requests"; \
 	curl -s -X POST $$DCTL/__reset >/dev/null; curl -s -X POST "$$CTL/mode?blackhole=1" >/dev/null; \
-	! curl -sS --fail --max-time 10 --cacert ca.pem --proxy $$PX https://dash.localtest.me:$(DASH_PORT)/ >/dev/null 2>&1; \
+	if curl -sS --fail --max-time 10 --cacert ca.pem --proxy $$PX https://dash.localtest.me:$(DASH_PORT)/ >/dev/null 2>&1; then \
+	    echo "FAIL: a blackholed proxy let the load through" >&2; exit 1; fi; \
 	test "$$(count dash.localtest.me)" -eq 0; \
 	curl -s $$CTL/journal | grep -q '"blackhole": true'; echo "    ok"; \
 	curl -s -X POST "$$CTL/mode?blackhole=0" >/dev/null; \
 	echo "==> R10 stub-gone variant: a closed listener refuses at TCP level"; \
 	curl -s -X POST $$CTL/close >/dev/null; \
-	! curl -sS --fail --max-time 5 --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ >/dev/null 2>&1; \
+	if curl -sS --fail --max-time 5 --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ >/dev/null 2>&1; then \
+	    echo "FAIL: a closed proxy listener still served the load" >&2; exit 1; fi; \
 	curl -s -X POST $$CTL/open >/dev/null; \
 	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; echo "    ok (and it recovers on /open)"
 	@$(MAKE) --no-print-directory harness-down

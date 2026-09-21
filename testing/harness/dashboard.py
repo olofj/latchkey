@@ -65,11 +65,21 @@ PAGE = """<!doctype html><meta charset=utf-8>
 <h1 id=title>FAKE DASHBOARD</h1>
 <p id=wsstate>ws:idle</p><p id=sse>sse:idle</p><p id=echo></p>
 <p><a id=away href="/redirect-away" style="font-size:22px">Redirect away</a></p>
-<p><button id=signin style="font-size:22px"
-   onclick="location.assign('/?token=OFFLINE-TEST-TOKEN-7f3a')">Sign in with token</button></p>
+<p><button id=signin style="font-size:22px" onclick="signIn()">Sign in with token</button></p>
 <script>
+// A random id per document, so a test can tell a report from THIS page load
+// from a stale one left by the previous page (M2 review: without it the
+// sign-in test could pass on the old page's last report).
+var DOC = Math.random().toString(36).slice(2);
+// The sign-in URL is assembled here rather than written out, so neither the
+// token nor 'token=' appears in the page source: a copy of the HTML in some
+// WebKit cache must not trip the R1 disk scan as a false positive.
+function signIn() {
+  location.assign('/?' + 'tok' + 'en=' + ['OFFLINE', 'TEST', 'TOKEN', '7f3a'].join('-'));
+}
 function report() {
   var s = {
+    doc: DOC,
     title: document.getElementById('title').textContent,
     ws: document.getElementById('wsstate').textContent,
     sse: document.getElementById('sse').textContent,
@@ -118,6 +128,13 @@ class Page(BaseHTTPRequestHandler):
             return self.sse()
         if path == "/healthz":
             return self.body(b'{"ok":true}', "application/json")
+        if path == "/away-target":
+            # Where /redirect-away points. Deliberately inert -- no scripts, no
+            # reports -- because Safari (which the app hands this origin to)
+            # can load it: a live page here could post reports as
+            # dash.localtest.me and impersonate the app (M2 review).
+            return self.body(b"<!doctype html><title>away</title><p>away target</p>",
+                             "text/html; charset=utf-8")
         if path == "/redirect-away":
             self.send_response(302)
             self.send_header("Location", self.away_url)

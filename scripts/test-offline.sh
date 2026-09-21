@@ -90,17 +90,28 @@ if [[ $BUILD -eq 1 ]]; then
 fi
 
 # -------------------------------------------------------------------- tests --
+# Two passes. The sign-in test runs LAST and alone, so R1's disk scan below
+# sees the state it left: every other test launches with
+# -UITestResetWorkspaces, which deletes the workspace data, and XCTest runs
+# tests alphabetically, so a later test would erase the evidence (M2 review).
+SIGNIN="LatchkeyUITests/OfflineHarnessTests/testSignInTokenIsStrippedFromTheAddress"
+run_tests() {   # $1 = label, rest = -only-testing/-skip-testing args
+    local label=$1; shift
+    (cd "$APP" && xcodebuild test-without-building -project Latchkey.xcodeproj -scheme Latchkey \
+        -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \
+        -derivedDataPath build/DerivedData -resultBundlePath "$LOG_DIR/$label.xcresult" \
+        -parallel-testing-enabled NO -test-timeouts-enabled YES \
+        -default-test-execution-time-allowance 120 "$@") > "$LOG_DIR/$label.log" 2>&1
+}
 say "OfflineHarnessTests"
-RESULT="$LOG_DIR/offline.xcresult"
 set +e
-(cd "$APP" && xcodebuild test-without-building -project Latchkey.xcodeproj -scheme Latchkey \
-    -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \
-    -derivedDataPath build/DerivedData -resultBundlePath "$RESULT" \
-    -parallel-testing-enabled NO -test-timeouts-enabled YES \
-    -default-test-execution-time-allowance 120 \
-    -only-testing:LatchkeyUITests/OfflineHarnessTests) > "$LOG_DIR/test.log" 2>&1
-TEST_RC=$?
+run_tests suite -only-testing:LatchkeyUITests/OfflineHarnessTests -skip-testing:"$SIGNIN"
+SUITE_RC=$?
+run_tests signin -only-testing:"$SIGNIN"
+SIGNIN_RC=$?
 set -e
+TEST_RC=$(( SUITE_RC | SIGNIN_RC ))
+cat "$LOG_DIR/suite.log" "$LOG_DIR/signin.log" > "$LOG_DIR/test.log"
 grep -E "Test Case .*(passed|failed)" "$LOG_DIR/test.log" | sed 's/^/    /' || true
 
 # ----------------------------------------------------------------- R1 check --
@@ -111,13 +122,25 @@ say "R1: no sign-in token in the app container's logs"
 CONTAINER=$(xcrun simctl get_app_container "$UDID" "$BUNDLE" data 2>/dev/null || true)
 LEAK_RC=0
 if [[ -n "$CONTAINER" ]]; then
-    if grep -rIl -e "OFFLINE-TEST-TOKEN" -e "token=" "$CONTAINER/Library/Application Support" \
-            "$CONTAINER/tmp" 2>/dev/null > "$LOG_DIR/token-leaks.txt"; then
-        echo "error: a sign-in token was written to disk by the app:" >&2
-        sed 's/^/    /' "$LOG_DIR/token-leaks.txt" >&2
+    # Everything the app can write: all of Library (Application Support,
+    # WebKit's website data and caches, Cookies, HTTPStorages, Preferences)
+    # and tmp. -a so binary stores (SQLite, the HTTP cache) are searched too;
+    # the page no longer carries the token as a literal, so a hit is real.
+    if grep -rla -e "OFFLINE-TEST-TOKEN" -e "token=" "$CONTAINER/Library" "$CONTAINER/tmp" \
+            2>/dev/null > "$LOG_DIR/token-leaks.txt"; then
+        echo "error: a sign-in token was written to disk:" >&2
+        sed "s|$CONTAINER/|    |" "$LOG_DIR/token-leaks.txt" >&2
         LEAK_RC=1
     else
-        echo "    ok"
+        # Not vacuous only if the sign-in run left WebKit data to search.
+        WK_FILES=$(find "$CONTAINER/Library/WebKit" -type f 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$WK_FILES" -eq 0 ]]; then
+            echo "error: no WebKit data on disk after the sign-in test, so the disk scan" >&2
+            echo "       searched nothing. Did the sign-in test run last?" >&2
+            LEAK_RC=1
+        else
+            echo "    ok (disk: all of Library + tmp, $WK_FILES WebKit files among them)"
+        fi
     fi
     # The unified log is the other place the app writes. Scan this run's.
     xcrun simctl spawn "$UDID" log show --last "$(( $(date +%s) - START + 30 ))s" \
