@@ -50,6 +50,10 @@ final class WorkspaceManager: ObservableObject {
             fatalError("Could not initialize process logging: \(error)")
         }
 
+        // Before any node key or cookie is written (R5): the data root holds
+        // the node keys, WebKit's store the 30-day refresh cookie.
+        logger.log(BackupExclusion.apply(appSupportRoot: WorkspaceStore.appSupportDir))
+
         let args = ProcessInfo.processInfo.arguments
 
         // Load the workspace list (or seed a single default on first launch).
