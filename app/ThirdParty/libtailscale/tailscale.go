@@ -82,7 +82,10 @@ func TsnetSetupLogs(dir *C.char) C.int {
 		// the original stderr floods the Xcode/console with stale warnings
 		// (e.g. SwiftUI "publishing changes" faults from the previous launch)
 		// that look like a live problem. io.Discard suppresses only the echo.
-		Stderr:              io.Discard,
+		// Latchkey (M8.3): the echo goes to a local, capped tsnet.log
+		// instead -- the only copy that survives, since uploads are off and
+		// the drain discards (latchkey_locallog.go).
+		Stderr:              latchkeyLocalLog(root),
 		Buffer:              buf,
 		CompressLogs:        true,
 		IncludeProcID:       true,
