@@ -133,7 +133,12 @@ struct SettingsView: View {
                 viewModel.deleteAnyway()
                 dismissAction()
             }
-            Button("Cancel", role: .cancel) { viewModel.cancelReset() }
+            // Closes Settings like the other two: the node stays, the
+            // dashboard is signed out and reloads behind it (final review).
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelReset()
+                dismissAction()
+            }
         } message: { reason in
             Text(TailnetLogout.failureMessage(reason))
         }
