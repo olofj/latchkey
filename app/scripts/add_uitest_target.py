@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add an ApertureUITests UI-test target to Aperture.xcodeproj.
+"""Add an LatchkeyUITests UI-test target to Latchkey.xcodeproj.
 
 The project uses Xcode synchronized folder groups, so a new `UITests/`
 PBXFileSystemSynchronizedRootGroup handles compilation membership automatically
@@ -11,7 +11,7 @@ Run once:
 import sys
 from pathlib import Path
 
-PROJ = Path("Aperture.xcodeproj/project.pbxproj")
+PROJ = Path("Latchkey.xcodeproj/project.pbxproj")
 T = "\t"
 
 # New 24-char hex object IDs (project-local, non-conflicting with existing C2... IDs).
@@ -65,17 +65,17 @@ def main():
     )
     content = insert_before(content, "/* Begin PBXCopyFilesBuildPhase section */", proxy)
 
-    # --- 2. PBXFileReference: add .xctest product after Aperture.app ---
+    # --- 2. PBXFileReference: add .xctest product after Latchkey.app ---
     # NOTE: every segment is an f-string so that `{{`/`}}` map to `{`/`}`.
     # Mixing f-string and plain segments would leave doubled braces.
     app_ref = (
-        f"{T}{T}C20F24742EF19A5900F57D67 /* Aperture.app */ = {{isa = PBXFileReference; "
-        f"explicitFileType = wrapper.application; includeInIndex = 0; path = Aperture.app; "
+        f"{T}{T}C20F24742EF19A5900F57D67 /* Latchkey.app */ = {{isa = PBXFileReference; "
+        f"explicitFileType = wrapper.application; includeInIndex = 0; path = Latchkey.app; "
         f"sourceTree = BUILT_PRODUCTS_DIR; }};"
     )
     xctest_ref = (
-        f"\n{T}{T}{XctestProduct} /* ApertureUITests.xctest */ = {{isa = PBXFileReference; "
-        f"explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ApertureUITests.xctest; "
+        f"\n{T}{T}{XctestProduct} /* LatchkeyUITests.xctest */ = {{isa = PBXFileReference; "
+        f"explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LatchkeyUITests.xctest; "
         f"sourceTree = BUILT_PRODUCTS_DIR; }};"
     )
     content = insert_after(content, app_ref, xctest_ref)
@@ -119,12 +119,12 @@ def main():
     content = content.replace(main_children_old, main_children_new, 1)
 
     products_old = (
-        f"{T}{T}{T}C20F24742EF19A5900F57D67 /* Aperture.app */,\n"
+        f"{T}{T}{T}C20F24742EF19A5900F57D67 /* Latchkey.app */,\n"
         f"{T}{T}{T});"
     )
     products_new = (
-        f"{T}{T}{T}C20F24742EF19A5900F57D67 /* Aperture.app */,\n"
-        f"{T}{T}{T}{XctestProduct} /* ApertureUITests.xctest */,\n"
+        f"{T}{T}{T}C20F24742EF19A5900F57D67 /* Latchkey.app */,\n"
+        f"{T}{T}{T}{XctestProduct} /* LatchkeyUITests.xctest */,\n"
         f"{T}{T}{T});"
     )
     # This children-list pattern (app, then `);`) is unique to the Products group.
@@ -132,9 +132,9 @@ def main():
 
     # --- 6. PBXNativeTarget: add the UITest target ---
     native_target = (
-        f"\n{T}{T}{NativeTarget} /* ApertureUITests */ = {{\n"
+        f"\n{T}{T}{NativeTarget} /* LatchkeyUITests */ = {{\n"
         f"{T}{T}{T}isa = PBXNativeTarget;\n"
-        f"{T}{T}{T}buildConfigurationList = {ConfigList} /* Build configuration list for PBXNativeTarget \"ApertureUITests\" */;\n"
+        f"{T}{T}{T}buildConfigurationList = {ConfigList} /* Build configuration list for PBXNativeTarget \"LatchkeyUITests\" */;\n"
         f"{T}{T}{T}buildPhases = (\n"
         f"{T}{T}{T}{T}{SourcesPhase} /* Sources */,\n"
         f"{T}{T}{T}{T}{FrameworksPhase} /* Frameworks */,\n"
@@ -148,11 +148,11 @@ def main():
         f"{T}{T}{T}fileSystemSynchronizedGroups = (\n"
         f"{T}{T}{T}{T}{UITestsGroup} /* UITests */,\n"
         f"{T}{T}{T});\n"
-        f"{T}{T}{T}name = ApertureUITests;\n"
+        f"{T}{T}{T}name = LatchkeyUITests;\n"
         f"{T}{T}{T}packageProductDependencies = (\n"
         f"{T}{T}{T});\n"
-        f"{T}{T}{T}productName = ApertureUITests;\n"
-        f"{T}{T}{T}productReference = {XctestProduct} /* ApertureUITests.xctest */;\n"
+        f"{T}{T}{T}productName = LatchkeyUITests;\n"
+        f"{T}{T}{T}productReference = {XctestProduct} /* LatchkeyUITests.xctest */;\n"
         f"{T}{T}{T}productType = \"com.apple.product-type.bundle.ui-testing\";\n"
         f"{T}{T}}};"
     )
@@ -167,7 +167,7 @@ def main():
     targets_new = (
         f"{T}{T}{T}targets = (\n"
         f"{T}{T}{T}{T}{AppTarget} /* Aperture */,\n"
-        f"{T}{T}{T}{T}{NativeTarget} /* ApertureUITests */,\n"
+        f"{T}{T}{T}{T}{NativeTarget} /* LatchkeyUITests */,\n"
         f"{T}{T}{T});"
     )
     content = content.replace(targets_old, targets_new, 1)
@@ -239,7 +239,7 @@ def main():
         f"{T}{T}{T}{T}ENABLE_USER_SCRIPT_SANDBOXING = NO;\n"
         f"{T}{T}{T}{T}GENERATE_INFOPLIST_FILE = YES;\n"
         f"{T}{T}{T}{T}MARKETING_VERSION = 1.0;\n"
-        f"{T}{T}{T}{T}PRODUCT_BUNDLE_IDENTIFIER = io.tailscale.Aperture.UITests;\n"
+        f"{T}{T}{T}{T}PRODUCT_BUNDLE_IDENTIFIER = net.lixom.latchkey.UITests;\n"
         f"{T}{T}{T}{T}PRODUCT_NAME = \"$(TARGET_NAME)\";\n"
         f"{T}{T}{T}{T}SWIFT_EMIT_LOC_STRINGS = NO;\n"
         f"{T}{T}{T}{T}SWIFT_VERSION = 6.0;\n"
@@ -259,7 +259,7 @@ def main():
         f"{T}{T}{T}{T}ENABLE_USER_SCRIPT_SANDBOXING = NO;\n"
         f"{T}{T}{T}{T}GENERATE_INFOPLIST_FILE = YES;\n"
         f"{T}{T}{T}{T}MARKETING_VERSION = 1.0;\n"
-        f"{T}{T}{T}{T}PRODUCT_BUNDLE_IDENTIFIER = io.tailscale.Aperture.UITests;\n"
+        f"{T}{T}{T}{T}PRODUCT_BUNDLE_IDENTIFIER = net.lixom.latchkey.UITests;\n"
         f"{T}{T}{T}{T}PRODUCT_NAME = \"$(TARGET_NAME)\";\n"
         f"{T}{T}{T}{T}SWIFT_EMIT_LOC_STRINGS = NO;\n"
         f"{T}{T}{T}{T}SWIFT_VERSION = 6.0;\n"
@@ -273,7 +273,7 @@ def main():
 
     # --- 12. XCConfigurationList: add config list for UITest target ---
     cfglist = (
-        f"\n{T}{T}{ConfigList} /* Build configuration list for PBXNativeTarget \"ApertureUITests\" */ = {{\n"
+        f"\n{T}{T}{ConfigList} /* Build configuration list for PBXNativeTarget \"LatchkeyUITests\" */ = {{\n"
         f"{T}{T}{T}isa = XCConfigurationList;\n"
         f"{T}{T}{T}buildConfigurations = (\n"
         f"{T}{T}{T}{T}{DebugCfg} /* Debug */,\n"

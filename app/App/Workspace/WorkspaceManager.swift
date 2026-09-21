@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //  WorkspaceManager.swift
-//  Aperture
+//  Latchkey
 //
 //  The app-level coordinator: owns the workspace list + the active workspace,
 //  initializes process-wide persistent logging, applies the UI-test
 //  launch-arg resets across all workspaces, fans out `scenePhase` to every
 //  workspace, and persists the workspace list. Replaces the old single
-//  `TSNetManager` held directly by `ApertureApp`.
+//  `TSNetManager` held directly by `LatchkeyApp`.
 //
 //  In Phase 1 there is exactly one workspace (the default), so behavior is
 //  identical to the pre-refactor app. The concurrency plumbing for multiple
@@ -86,7 +86,7 @@ final class WorkspaceManager: ObservableObject {
         // UI-test hook: reset every workspace's home page to the default so
         // connected tests are hermetic (a prior test may have left a non-default
         // value). Mirrors the old `HomePage.standard.url = default` in
-        // `ApertureApp.init`.
+        // `LatchkeyApp.init`.
         if args.contains("-UITestResetHomePage") {
             defs = defs.map {
                 var d = $0

@@ -12,6 +12,7 @@ struct SettingsView: View {
 
     @State private var showLogoutAlert: Bool = false
     @State private var routeTestHost: String = ""
+    @State private var showingLogs: Bool = false
 
     var body: some View {
         settingsContainer
@@ -74,6 +75,9 @@ struct SettingsView: View {
         Form {
             settingsSections
         }
+        .sheet(isPresented: $showingLogs) {
+            LogViewer(dismissAction: { showingLogs = false })
+        }
     }
 
     @ViewBuilder
@@ -106,6 +110,27 @@ struct SettingsView: View {
                         }
                 }
 
+                // The log viewer moved here when the browser toolbar was
+                // deleted (PLAN §1.5). It had been reachable only from that
+                // toolbar's "more" menu, which would have left an iPhone with
+                // no way at all to read the app's own logs — the exact thing
+                // §1.9 says to keep, and the only diagnostic available on a
+                // device that cannot be attached to a Mac.
+                Section(header: Text("Diagnostics")) {
+                    Button {
+                        showingLogs = true
+                    } label: {
+                        HStack {
+                            Text("Logs")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .accessibilityIdentifier("logs-button")
+                }
+
                 Section {
                     StatusButton(text: "Logout",
                                  action: { showLogoutAlert = true },
@@ -126,7 +151,7 @@ struct SettingsView: View {
     }
 
     private var logoutAlertMessage: some View {
-        Text("This will delete this session, including its tabs, bookmarks, and website data.")
+        Text("This will delete this session, including its tailnet identity, saved page and website data.")
     }
 
     // MARK: - Routing (split tunnel) diagnostic

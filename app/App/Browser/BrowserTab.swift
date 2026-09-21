@@ -3,7 +3,7 @@
 
 //
 //  BrowserTab.swift
-//  Aperture
+//  Latchkey
 //
 //  A lightweight tab record. Its WKWebView is created only when selected and
 //  can be released again while the persisted URL/title remain available.
@@ -48,7 +48,7 @@ final class BrowserTab: Identifiable, ObservableObject {
         self.model = model
         self.onMetadataChange = onMetadataChange
         // Default to the hostname (not the app name) so a no-title page shows
-        // where it is rather than "Aperture".
+        // where it is rather than "Latchkey".
         let initialHost = initialURL.host?.isEmpty == false
             ? initialURL.host!
             : initialURL.absoluteString
@@ -139,7 +139,7 @@ final class BrowserTab: Identifiable, ObservableObject {
         } else if let host = URL(string: displayURL)?.host, !host.isEmpty {
             displayTitle = host
         } else {
-            displayTitle = "Aperture"
+            displayTitle = "Latchkey"
         }
         if displayTitle != previous {
             onMetadataChange()

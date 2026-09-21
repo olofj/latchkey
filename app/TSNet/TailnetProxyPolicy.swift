@@ -3,7 +3,7 @@
 
 //
 //  TailnetProxyPolicy.swift
-//  Aperture
+//  Latchkey
 //
 //  Decides WHICH hosts go through the tsnet SOCKS5 proxy and which load
 //  DIRECT — split tunnelling for the browser.

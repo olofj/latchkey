@@ -7,7 +7,7 @@
 #      log, surfaced via `simctl log stream` into unified.log. (It does NOT
 #      appear in the UI-test runner's own stdout, so combined.log usually has
 #      no `tsnet:` lines; unified.log is the authoritative source.)
-#   2. Apple's unified logging system (OSLog, subsystem io.tailscale.Aperture)
+#   2. Apple's unified logging system (OSLog, subsystem net.lixom.latchkey)
 #      — streamed live via `simctl log stream`.
 #
 # Usage:
@@ -60,9 +60,9 @@ echo "▶ Destination: $DEST"
 
 # --- Start the unified-log stream in the background -------------------------
 UNIFIED_LOG="$LOG_DIR/unified.log"
-echo "▶ Streaming unified logs (subsystem == io.tailscale.Aperture) → $UNIFIED_LOG"
+echo "▶ Streaming unified logs (subsystem == net.lixom.latchkey) → $UNIFIED_LOG"
 xcrun simctl spawn "$UDID" log stream \
-    --predicate 'subsystem == "io.tailscale.Aperture"' \
+    --predicate 'subsystem == "net.lixom.latchkey"' \
     --level debug --style compact >"$UNIFIED_LOG" 2>&1 &
 LOG_PID=$!
 sleep 1   # let the stream attach
@@ -83,7 +83,7 @@ trap cleanup EXIT
 # xcodebuild does NOT forward arbitrary parent-shell env vars to the UI-test
 # runner process, so the test can't read APERTURE_TEST_AUTHKEY from its own
 # ProcessInfo.environment. Instead, write the key to a file the test reads
-# (see ApertureUITests.resolvedTestAuthKey). The shell here DOES see the env.
+# (see LatchkeyUITests.resolvedTestAuthKey). The shell here DOES see the env.
 AUTHKEY_FILE="${APERTURE_TEST_AUTHKEY_FILE:-/tmp/aperture-test-authkey}"
 if [[ -n "${APERTURE_TEST_AUTHKEY:-}" ]]; then
     printf '%s' "$APERTURE_TEST_AUTHKEY" > "$AUTHKEY_FILE"
@@ -104,7 +104,7 @@ COMBINED="$LOG_DIR/combined.log"
 if [[ "$BUILD" -eq 1 ]]; then
     echo "▶ Building for testing…"
     xcodebuild build-for-testing \
-        -project Aperture.xcodeproj -scheme Aperture \
+        -project Latchkey.xcodeproj -scheme Aperture \
         -configuration Debug -destination "$DEST" \
         -derivedDataPath "$DERIVED" 2>&1 | tee "$COMBINED"
 fi
@@ -112,7 +112,7 @@ fi
 echo "▶ Running tests…"
 set +e
 xcodebuild test-without-building \
-    -project Aperture.xcodeproj -scheme Aperture \
+    -project Latchkey.xcodeproj -scheme Aperture \
     -configuration Debug -destination "$DEST" \
     -derivedDataPath "$DERIVED" 2>&1 | tee -a "$COMBINED"
 TEST_RC=${PIPESTATUS[0]}

@@ -118,11 +118,11 @@ final class TSNetManager {
     }
 #endif
 
-    /// A fresh default tailnet hostname: `aperture-` + a random 6-digit number
+    /// A fresh default tailnet hostname: `latchkey-` + a random 6-digit number
     /// (100000–999999, always exactly six digits with no leading zeros).
     nonisolated static func generateDefaultHostName() -> String {
         let number = Int.random(in: 100_000..<1_000_000)
-        return "aperture-\(number)"
+        return "latchkey-\(number)"
     }
 
     /// The auth key supplied at launch, if any. See the doc comment above the

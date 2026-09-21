@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "C20F24732EF19A5900F57D67"
-               BuildableName = "Aperture.app"
-               BlueprintName = "Aperture"
-               ReferencedContainer = "container:Aperture.xcodeproj">
+               BuildableName = "Latchkey.app"
+               BlueprintName = "Latchkey"
+               ReferencedContainer = "container:Latchkey.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -35,9 +35,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "F10000060000000000000006"
-               BuildableName = "ApertureUITests.xctest"
-               BlueprintName = "ApertureUITests"
-               ReferencedContainer = "container:Aperture.xcodeproj">
+               BuildableName = "LatchkeyUITests.xctest"
+               BlueprintName = "LatchkeyUITests"
+               ReferencedContainer = "container:Latchkey.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -59,9 +59,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C20F24732EF19A5900F57D67"
-            BuildableName = "Aperture.app"
-            BlueprintName = "Aperture"
-            ReferencedContainer = "container:Aperture.xcodeproj">
+            BuildableName = "Latchkey.app"
+            BlueprintName = "Latchkey"
+            ReferencedContainer = "container:Latchkey.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -76,9 +76,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C20F24732EF19A5900F57D67"
-            BuildableName = "Aperture.app"
-            BlueprintName = "Aperture"
-            ReferencedContainer = "container:Aperture.xcodeproj">
+            BuildableName = "Latchkey.app"
+            BlueprintName = "Latchkey"
+            ReferencedContainer = "container:Latchkey.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

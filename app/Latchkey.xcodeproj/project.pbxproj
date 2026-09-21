@@ -17,7 +17,7 @@
 			containerPortal = C213B9832EE8BF80002D0531 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = C20F24732EF19A5900F57D67;
-			remoteInfo = Aperture;
+			remoteInfo = Latchkey;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -36,14 +36,14 @@
 
 /* Begin PBXFileReference section */
 		C20F23E62EF09A7900F57D67 /* TailscaleKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = TailscaleKit.xcframework; path = "ThirdParty/libtailscale/swift/build/Build/Products/Release-iphonefat/TailscaleKit.xcframework"; sourceTree = "<group>"; };
-		C20F24742EF19A5900F57D67 /* Aperture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Aperture.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		C22045AD2EF45E7000242E27 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; name = Info.plist; path = Aperture/Info.plist; sourceTree = "<group>"; };
+		C20F24742EF19A5900F57D67 /* Latchkey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Latchkey.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C22045AD2EF45E7000242E27 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; name = Info.plist; path = Latchkey/Info.plist; sourceTree = "<group>"; };
 		C25B4D752EF5F507000539A5 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
-		F10000020000000000000002 /* ApertureUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ApertureUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F10000020000000000000002 /* LatchkeyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LatchkeyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		C20F24982EF1B4A700F57D67 /* Exceptions for "TSNet" folder in "Aperture" target */ = {
+		C20F24982EF1B4A700F57D67 /* Exceptions for "TSNet" folder in "Latchkey" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AuthManager.swift,
@@ -53,7 +53,7 @@
 				TSNetManager.swift,
 				TSNetModel.swift,
 			);
-			target = C20F24732EF19A5900F57D67 /* Aperture */;
+			target = C20F24732EF19A5900F57D67 /* Latchkey */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -66,7 +66,7 @@
 		C20F24932EF1B4A700F57D67 /* TSNet */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				C20F24982EF1B4A700F57D67 /* Exceptions for "TSNet" folder in "Aperture" target */,
+				C20F24982EF1B4A700F57D67 /* Exceptions for "TSNet" folder in "Latchkey" target */,
 			);
 			path = TSNet;
 			sourceTree = "<group>";
@@ -121,8 +121,8 @@
 		C213B98C2EE8BF80002D0531 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C20F24742EF19A5900F57D67 /* Aperture.app */,
-				F10000020000000000000002 /* ApertureUITests.xctest */,
+				C20F24742EF19A5900F57D67 /* Latchkey.app */,
+				F10000020000000000000002 /* LatchkeyUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -138,9 +138,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		C20F24732EF19A5900F57D67 /* Aperture */ = {
+		C20F24732EF19A5900F57D67 /* Latchkey */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C20F247E2EF19A5C00F57D67 /* Build configuration list for PBXNativeTarget "Aperture" */;
+			buildConfigurationList = C20F247E2EF19A5C00F57D67 /* Build configuration list for PBXNativeTarget "Latchkey" */;
 			buildPhases = (
 				C20F24702EF19A5900F57D67 /* Sources */,
 				C20F24712EF19A5900F57D67 /* Frameworks */,
@@ -154,16 +154,16 @@
 			fileSystemSynchronizedGroups = (
 				C20F24752EF19A5900F57D67 /* App */,
 			);
-			name = Aperture;
+			name = Latchkey;
 			packageProductDependencies = (
 			);
-			productName = Aperture;
-			productReference = C20F24742EF19A5900F57D67 /* Aperture.app */;
+			productName = Latchkey;
+			productReference = C20F24742EF19A5900F57D67 /* Latchkey.app */;
 			productType = "com.apple.product-type.application";
 		};
-		F10000060000000000000006 /* ApertureUITests */ = {
+		F10000060000000000000006 /* LatchkeyUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = F10000090000000000000009 /* Build configuration list for PBXNativeTarget "ApertureUITests" */;
+			buildConfigurationList = F10000090000000000000009 /* Build configuration list for PBXNativeTarget "LatchkeyUITests" */;
 			buildPhases = (
 				F10000030000000000000003 /* Sources */,
 				F10000040000000000000004 /* Frameworks */,
@@ -177,11 +177,11 @@
 			fileSystemSynchronizedGroups = (
 				F10000010000000000000001 /* UITests */,
 			);
-			name = ApertureUITests;
+			name = LatchkeyUITests;
 			packageProductDependencies = (
 			);
-			productName = ApertureUITests;
-			productReference = F10000020000000000000002 /* ApertureUITests.xctest */;
+			productName = LatchkeyUITests;
+			productReference = F10000020000000000000002 /* LatchkeyUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -199,7 +199,7 @@
 					};
 				};
 			};
-			buildConfigurationList = C213B9862EE8BF80002D0531 /* Build configuration list for PBXProject "Aperture" */;
+			buildConfigurationList = C213B9862EE8BF80002D0531 /* Build configuration list for PBXProject "Latchkey" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -213,8 +213,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C20F24732EF19A5900F57D67 /* Aperture */,
-				F10000060000000000000006 /* ApertureUITests */,
+				C20F24732EF19A5900F57D67 /* Latchkey */,
+				F10000060000000000000006 /* LatchkeyUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -256,7 +256,7 @@
 /* Begin PBXTargetDependency section */
 		F10000080000000000000008 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = C20F24732EF19A5900F57D67 /* Aperture */;
+			target = C20F24732EF19A5900F57D67 /* Latchkey */;
 			targetProxy = F10000070000000000000007 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -277,7 +277,7 @@
 					"$(PROJECT_DIR)/ThirdParty/libtailscale/swift/build/Build/Products/Release-iphoneos",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Aperture/Info.plist;
+				INFOPLIST_FILE = Latchkey/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -315,7 +315,7 @@
 					"$(PROJECT_DIR)/ThirdParty/libtailscale/swift/build/Build/Products/Release-iphoneos",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Aperture/Info.plist;
+				INFOPLIST_FILE = Latchkey/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -475,7 +475,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Aperture;
+				TEST_TARGET_NAME = Latchkey;
 			};
 			name = Debug;
 		};
@@ -493,14 +493,14 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Aperture;
+				TEST_TARGET_NAME = Latchkey;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		C20F247E2EF19A5C00F57D67 /* Build configuration list for PBXNativeTarget "Aperture" */ = {
+		C20F247E2EF19A5C00F57D67 /* Build configuration list for PBXNativeTarget "Latchkey" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C20F247F2EF19A5C00F57D67 /* Debug */,
@@ -509,7 +509,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C213B9862EE8BF80002D0531 /* Build configuration list for PBXProject "Aperture" */ = {
+		C213B9862EE8BF80002D0531 /* Build configuration list for PBXProject "Latchkey" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C213B9A12EE8BF81002D0531 /* Debug */,
@@ -518,7 +518,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		F10000090000000000000009 /* Build configuration list for PBXNativeTarget "ApertureUITests" */ = {
+		F10000090000000000000009 /* Build configuration list for PBXNativeTarget "LatchkeyUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				F100000A000000000000000A /* Debug */,

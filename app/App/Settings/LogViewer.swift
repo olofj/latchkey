@@ -3,7 +3,7 @@
 
 //
 //  LogViewer.swift
-//  Aperture
+//  Latchkey
 //
 //  Shows the app's own recent log messages (from `LogRing`) inside the app.
 //

@@ -3,7 +3,7 @@
 
 //
 //  SocksLogProxy.swift
-//  Aperture
+//  Latchkey
 //
 //  A tiny SOCKS5 pass-through relay that sits between WebKit and tsnet's real
 //  SOCKS5 proxy, logging **every** connection attempt and its outcome.
@@ -62,7 +62,7 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
 
     private let upstreamHost: String
     private let upstreamPort: UInt16
-    private let queue = DispatchQueue(label: "io.tailscale.Aperture.sockslog")
+    private let queue = DispatchQueue(label: "net.lixom.latchkey.sockslog")
     private var listener: NWListener?
     /// Monotonic id so a CONNECT and its reply can be correlated in the log.
     private var nextID: UInt64 = 1

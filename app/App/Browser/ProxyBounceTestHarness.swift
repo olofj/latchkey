@@ -3,7 +3,7 @@
 
 //
 //  ProxyBounceTestHarness.swift
-//  Aperture
+//  Latchkey
 //
 //  Hermetic in-app integration harness used by XCUITest. It runs a real
 //  WKWebView against an app-provided WKURLSchemeHandler, then simulates tsnet
@@ -18,7 +18,7 @@ import WebKit
 import TailscaleKit
 
 private nonisolated final class BounceSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked Sendable {
-    private let queue = DispatchQueue(label: "io.tailscale.Aperture.bounce-test")
+    private let queue = DispatchQueue(label: "net.lixom.latchkey.bounce-test")
     private var delayedTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
 
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {

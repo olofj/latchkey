@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //  WorkspaceStore.swift
-//  Aperture
+//  Latchkey
 //
 //  On-disk persistence for the workspace list + per-workspace path helpers.
 //
 //  Each workspace is a separate Tailscale (tsnet) identity, so each one gets
-//  its own state directory, its own SwiftData bookmarks store, and (via the
-//  definition) its own WKWebsiteDataStore UUID. Everything lives under the
+//  its own state directory and (via the definition) its own
+//  WKWebsiteDataStore UUID. Everything lives under the
 //  app's persistent Application Support — NOT NSTemporaryDirectory, which iOS
 //  purges under storage pressure (a logged-in node could silently lose its
 //  credentials). Process-wide logtail state also uses Application Support;
@@ -16,14 +16,11 @@
 //
 //  Layout:
 //
-//    <Application Support>/Aperture/
+//    <Application Support>/Latchkey/
 //        workspaces.json                 # [WorkspaceDefinition] + activeId
 //        Workspaces/<id>/
 //            state/                       # tsnet state dir (tailscale_set_dir)
-//            Bookmarks.store              # per-workspace SwiftData file
-//            tabs.json                     # lightweight restored tab metadata
-//            VM/metadata.json              # optional workspace-owned appliance metadata
-//            VM/disk.raw                   # optional persistent appliance disk
+//            tabs.json                    # the restored page's URL and title
 //
 //  Auth keys are NEVER stored here — they come from launch args/env (tests) or
 //  persist implicitly inside each workspace's tsnet state dir (real logins).
@@ -75,13 +72,12 @@ struct WorkspaceDefinition: Codable, Identifiable {
     var lastKnownIdentity: WorkspaceIdentity?
 
     /// The single workspace created on first launch (or when the list is
-    /// empty). Matches the pre-multi-workspace defaults: an
-    /// `aperture-<6digit>` hostname, the `http://ai/chat` home page, the
-    /// default control URL, and the launch-arg ephemeral flag.
+    /// empty): a generated tailnet hostname, the default gateway, the default
+    /// control URL, and the launch-arg ephemeral flag.
     static func makeDefault() -> WorkspaceDefinition {
         WorkspaceDefinition(
             id: UUID(),
-            displayName: "Aperture",
+            displayName: "Latchkey",
             hostname: TSNetManager.generateDefaultHostName(),
             homePageURL: HomePage.defaultURL,
             controlURL: kDefaultControlURL,
@@ -114,8 +110,8 @@ enum WorkspaceStore {
             || environment["XCInjectBundleInto"] != nil
     }()
 
-    /// Root for all Aperture data. Normal launches use
-    /// `<Application Support>/Aperture/`; UI tests use a platform-specific
+    /// Root for all Latchkey data. Normal launches use
+    /// `<Application Support>/Latchkey/`; UI tests use a platform-specific
     /// sibling so iOS and macOS test credentials are isolated from normal
     /// credentials and from each other.
     static var appSupportDir: URL = {
@@ -123,11 +119,11 @@ enum WorkspaceStore {
                                             in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
 #if os(iOS)
-        let name = isUITestProcess ? "Aperture-UI-Test-iOS" : "Aperture"
+        let name = isUITestProcess ? "Latchkey-UI-Test-iOS" : "Latchkey"
 #elseif os(macOS)
-        let name = isUITestProcess ? "Aperture-UI-Test-macOS" : "Aperture"
+        let name = isUITestProcess ? "Latchkey-UI-Test-macOS" : "Latchkey"
 #else
-        let name = isUITestProcess ? "Aperture-UI-Test" : "Aperture"
+        let name = isUITestProcess ? "Latchkey-UI-Test" : "Latchkey"
 #endif
         let dir = base.appending(path: name, directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: dir,

@@ -1,4 +1,4 @@
-# Top-level Makefile for Aperture.
+# Top-level Makefile for Latchkey.
 #
 #   make            build everything from scratch (libtailscale + app for sim)
 #   make test       build, then run the UI tests on the simulator
@@ -13,8 +13,8 @@
 # libtailscale build if the xcframework already exists.
 
 # ----- config -----
-PROJECT      := Aperture.xcodeproj
-SCHEME       := Aperture
+PROJECT      := Latchkey.xcodeproj
+SCHEME       := Latchkey
 CONFIG       := Debug
 SIM_NAME     ?= iPhone 17
 DERIVED      := build/DerivedData
@@ -29,7 +29,7 @@ SUBTRAC       := go tool git-subtrac
 SUBTRAC_BRANCH := $(shell git branch --show-current)
 
 # Device IPA build (see `make ipa`). Archive + export live under build/.
-ARCHIVE      := build/Aperture.xcarchive
+ARCHIVE      := build/Latchkey.xcarchive
 IPA_DIR      := build/ipa
 EXPORT_OPTS  := ExportOptions.plist
 
@@ -90,9 +90,9 @@ $(XCFRAMEWORK): $(LIBTSCALE_SOURCES)
 
 # ----- app -----
 .PHONY: app
-app: framework  ## Build the Aperture app for the simulator
+app: framework  ## Build the Latchkey app for the simulator
 	@echo
-	@echo "::: Building Aperture for $(SIM_NAME) simulator :::"
+	@echo "::: Building Latchkey for $(SIM_NAME) simulator :::"
 	$(XCB) build \
 		-project $(PROJECT) -scheme $(SCHEME) \
 		-configuration $(CONFIG) \
@@ -104,7 +104,7 @@ app: framework  ## Build the Aperture app for the simulator
 ipa: framework  ## Archive + export a dev-signed .ipa for a real iOS device
 	@./scripts/unlock-keychain.sh
 	@echo
-	@echo "::: Archiving Aperture for generic iOS (Release) :::"
+	@echo "::: Archiving Latchkey for generic iOS (Release) :::"
 	@echo "(needs a valid signing identity + provisioning profile for team W5364U7YZB;"
 	@echo " the login keychain must be unlocked — unlock-keychain.sh above prompts"
 	@echo " interactively if it's locked, or aborts if stdin isn't a terminal)"
@@ -125,7 +125,7 @@ ipa: framework  ## Archive + export a dev-signed .ipa for a real iOS device
 	@echo
 	@echo "✅ IPA: $$(ls -1 $(IPA_DIR)/*.ipa 2>/dev/null | head -1)"
 	@echo "Install on a plugged-in device with Xcode locally:"
-	@echo "  xcrun devicectl device install app --device <udid-or-name> $(IPA_DIR)/Aperture.ipa"
+	@echo "  xcrun devicectl device install app --device <udid-or-name> $(IPA_DIR)/Latchkey.ipa"
 
 # ----- test -----
 # An auth key automates login on a fresh sim so the connected tests run.

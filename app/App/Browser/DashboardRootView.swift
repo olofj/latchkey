@@ -146,10 +146,6 @@ private struct DashboardContent: View {
     @ObservedObject var statusViewModel: StatusViewModel
     let onSettings: () -> Void
 
-    /// In-app log viewer. The only way to read the app's logs on a device that
-    /// cannot be attached to a Mac.
-    @State private var showingLogs = false
-
     var body: some View {
         NavigationStack {
             dashboardContent
@@ -161,6 +157,9 @@ private struct DashboardContent: View {
         // Without this the root layout leaves an app-background strip beneath
         // dark web content.
         .ignoresSafeArea(.container, edges: .bottom)
+        .overlay(alignment: .topTrailing) {
+            settingsAffordance
+        }
         .overlay(alignment: .bottomTrailing) {
             // A concrete accessibility element for UI automation. An
             // identifier applied to a container view is not reliably surfaced.
@@ -177,25 +176,50 @@ private struct DashboardContent: View {
                     .opacity(0.01)
             }
         }
-        .sheet(isPresented: $showingLogs) {
-            LogViewer(dismissAction: { showingLogs = false })
-        }
-        // With the toolbar gone, these shortcuts are the only way to reach
-        // Settings and Logs from a hardware keyboard. Defined here so they
-        // stay available regardless of what has focus inside the web content.
+        // With the toolbar gone, these are the hardware-keyboard paths to
+        // Settings (which owns the log viewer) and to a reload. Defined here
+        // so they stay available regardless of what has focus inside the web
+        // content.
         .background {
 #if !os(macOS)
             Group {
                 Button("Settings") { onSettings() }
                     .keyboardShortcut(",", modifiers: .command)
-                Button("Logs") { showingLogs = true }
-                    .keyboardShortcut("l", modifiers: [.command, .shift])
                 Button("Reload") { tab.viewModel.reload() }
                     .keyboardShortcut("r", modifiers: .command)
             }
             .hidden()
 #endif
         }
+    }
+
+    /// The one piece of app chrome the dashboard keeps.
+    ///
+    /// Deleting the browser toolbar (PLAN §1.5) also deleted the only gear
+    /// button reachable after connecting — the other one lives in the
+    /// connection gate, which is gone by then. That left Settings, and through
+    /// it the log viewer and the routing diagnostic, reachable ONLY by ⌘, on a
+    /// hardware keyboard: unreachable on an iPhone. §1.9 says keep the
+    /// diagnostics, so something has to be tappable.
+    ///
+    /// Kept deliberately small and faint so it reads as an affordance rather
+    /// than chrome, and placed top-trailing where KiroCrew's own header has no
+    /// controls. It sits inside the safe area, so it does not fight the status
+    /// bar.
+    private var settingsAffordance: some View {
+        Button(action: onSettings) {
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(7)
+                .background(.thinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(0.45)
+        .padding(.trailing, 10)
+        .padding(.top, 4)
+        .accessibilityIdentifier("settings-button")
+        .accessibilityLabel("Settings")
     }
 
     private var dashboardContent: some View {

@@ -4,8 +4,8 @@
 set -euo pipefail
 
 SIM_NAME="${1:-${SIM_NAME:-iPhone 17}}"
-BUNDLE="io.tailscale.Aperture"
-APP="build/DerivedData/Build/Products/Debug-iphonesimulator/Aperture.app"
+BUNDLE="net.lixom.latchkey"
+APP="build/DerivedData/Build/Products/Debug-iphonesimulator/Latchkey.app"
 DSYM="ThirdParty/libtailscale/swift/build/Build/Products/Release-iphonesimulator/TailscaleKit.framework.dSYM/Contents/Resources/DWARF/TailscaleKit"
 OUT=$(mktemp); SERVER=$(mktemp); LOG_PID=""
 fail() { echo "FAIL: $*" >&2; exit 1; }

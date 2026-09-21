@@ -3,7 +3,7 @@
 
 //
 //  TailnetHostnameQualifier.swift
-//  Aperture
+//  Latchkey
 //
 //  Pure MagicDNS short-name qualification. This file deliberately depends only
 //  on Foundation so its shipping implementation can be compiled and tested on

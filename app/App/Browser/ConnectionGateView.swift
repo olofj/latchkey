@@ -3,7 +3,7 @@
 
 //
 //  ConnectionGateView.swift
-//  Aperture
+//  Latchkey
 //
 //  The pre-connection "onboarding" screen: the brand header + Tailscale status
 //  + Login button. Shown by `DashboardRootView` until the tailnet first
@@ -21,7 +21,7 @@ struct ConnectionGateView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ApertureBrandHeader {
+            LatchkeyBrandHeader {
                 HStack(spacing: 14) {
                     Button {
                         onSettings()

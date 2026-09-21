@@ -41,7 +41,7 @@ fi
 
 UNIFIED="$LOG_DIR/unified.log"
 xcrun simctl spawn "$UDID" log stream \
-    --predicate 'subsystem == "io.tailscale.Aperture"' \
+    --predicate 'subsystem == "net.lixom.latchkey"' \
     --level debug --style compact >"$UNIFIED" 2>&1 &
 LOG_PID=$!
 TEST_PID=""
@@ -55,14 +55,14 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "${NO_BUILD:-0}" != 1 ]]; then
-    xcodebuild build-for-testing -project Aperture.xcodeproj -scheme Aperture \
+    xcodebuild build-for-testing -project Latchkey.xcodeproj -scheme Aperture \
         -configuration Debug -destination "$DEST" -derivedDataPath "$DERIVED" \
         >"$LOG_DIR/build.log" 2>&1
 fi
 
-xcodebuild test-without-building -project Aperture.xcodeproj -scheme Aperture \
+xcodebuild test-without-building -project Latchkey.xcodeproj -scheme Aperture \
     -configuration Debug -destination "$DEST" -derivedDataPath "$DERIVED" \
-    -only-testing:ApertureUITests/ApertureUITests/testExternalProcessSuspendRecoversWithoutReloadingPage \
+    -only-testing:LatchkeyUITests/LatchkeyUITests/testExternalProcessSuspendRecoversWithoutReloadingPage \
     >"$LOG_DIR/test.log" 2>&1 &
 TEST_PID=$!
 
@@ -77,7 +77,7 @@ if ! grep -q 'Background: leaving tsnet, proxy, and observers unchanged' "$UNIFI
     exit 1
 fi
 
-APP_PID=$(pgrep -f "Devices/$UDID/.*/Aperture.app/Aperture" | head -1 || true)
+APP_PID=$(pgrep -f "Devices/$UDID/.*/Latchkey.app/Aperture" | head -1 || true)
 if [[ -z "$APP_PID" ]]; then
     echo "Could not find Aperture simulator process" >&2
     exit 1

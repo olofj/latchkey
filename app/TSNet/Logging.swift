@@ -9,17 +9,17 @@ import Foundation
 import TailscaleKit
 import os
 
-/// Unified-logging subsystem used for all Aperture/libtailscale messages.
+/// Unified-logging subsystem used for all Latchkey/libtailscale messages.
 /// Filter for these in Console.app or with:
 ///
 ///   xcrun simctl spawn booted log stream \
-///     --predicate 'subsystem == "io.tailscale.Aperture"'
+///     --predicate 'subsystem == "net.lixom.latchkey"'
 ///
 /// The members are `nonisolated` (and `OSLog` is `Sendable`) so they can be
 /// read from `Logger.log`'s nonisolated context — libtailscale calls `log`
 /// from its Go-backed threads, off the main actor.
-enum ApertureLog {
-    nonisolated static let subsystem = "io.tailscale.Aperture"
+enum LatchkeyLog {
+    nonisolated static let subsystem = "net.lixom.latchkey"
     /// libtailscale / tsnet messages.
     nonisolated static let tsnet = OSLog(subsystem: subsystem, category: "tsnet")
 }
@@ -42,7 +42,7 @@ struct Logger: TailscaleKit.LogSink {
         // Also route into the unified logging system so the messages are
         // captured by `log stream` / Console.app / `log show` during UI tests
         // (where the app's stdout isn't always easy to read in real time).
-        os_log("%{public}@", log: ApertureLog.tsnet, type: .default, message)
+        os_log("%{public}@", log: LatchkeyLog.tsnet, type: .default, message)
 
         // And keep a copy in memory so the in-app log viewer can show it. This
         // is the ONLY way to read these messages on a device that can't be
@@ -178,7 +178,7 @@ nonisolated final class LogRing: @unchecked Sendable {
                     : entries
                 recent = ordered.suffix(80).map(\.line).joined(separator: "\n")
             }
-            TailscaleLogging.log("fatal error: Aperture detected log spin loop rate=\(appendsThisSecond)/s appends=\(lifetimeAppends) wraps=\(lifetimeWraps) busErrors=\(lifetimeBusErrors)\n\(recent)")
+            TailscaleLogging.log("fatal error: Latchkey detected log spin loop rate=\(appendsThisSecond)/s appends=\(lifetimeAppends) wraps=\(lifetimeWraps) busErrors=\(lifetimeBusErrors)\n\(recent)")
             Darwin.abort()
         }
         if entries.count < capacity {

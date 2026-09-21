@@ -3,7 +3,7 @@
 
 //
 //  RawWebView.swift
-//  Aperture
+//  Latchkey
 //
 //  SwiftUI bridge for the tab's owned WKWebView. Keeping the actual UIKit view
 //  gives WebKit the exact frame SwiftUI assigns to the browser region and lets

@@ -3,10 +3,10 @@
 
 //
 //  HomePageAvailability.swift
-//  Aperture
+//  Latchkey
 //
 //  Checks the configured home-page host against the live tailnet peer list
-//  before WebKit gets a chance to turn a missing Aperture instance into a
+//  before WebKit gets a chance to turn a missing KiroCrew gateway into a
 //  generic navigation error.
 //
 
@@ -47,7 +47,7 @@ enum HomePageAvailabilityChecker {
         // lookup. It is a valid user-configured home page and should load
         // directly, just as any other non-tailnet browser navigation does.
         // Only ts.net names need to be confirmed against the peer list before
-        // we decide that the configured Aperture instance is missing.
+        // we decide that the configured gateway is missing.
         if !isBareHostname(host), !TailnetHostnameQualifier.isTailnetFQDN(host) {
             return .available
         }

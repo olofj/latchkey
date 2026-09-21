@@ -3,7 +3,7 @@
 
 //
 //  TabManager.swift
-//  Aperture
+//  Latchkey
 //
 //  Owns one workspace's persisted page record. Latchkey has no tabs
 //  (PLAN §1.4), so the cap is 1 — but the type survives the tab removal

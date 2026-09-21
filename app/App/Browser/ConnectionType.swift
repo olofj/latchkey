@@ -3,7 +3,7 @@
 
 //
 //  ConnectionType.swift
-//  Aperture
+//  Latchkey
 //
 //  Classifies a browser tab's current page for its URL-bar status indicator, so
 //  we can show a small per-tab indicator (see the URL pill on iPhone, the tab

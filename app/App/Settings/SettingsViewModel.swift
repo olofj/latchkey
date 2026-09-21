@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //  SettingsViewModel.swift
-//  Aperture
+//  Latchkey
 //
 //  Backs the Settings sheet for the ACTIVE workspace. Reads the workspace's
 //  hostname/home page from its `WorkspaceDefinition` and writes edits back

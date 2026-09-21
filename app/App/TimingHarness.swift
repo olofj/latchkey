@@ -5,24 +5,24 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //  TimingHarness.swift
-//  Aperture
+//  Latchkey
 //
 //  A text-mode (no-UI) timing harness that drives the SAME libtailscale-Swift
 //  integration the app uses (TailscaleNode + LocalAPIClient + TSNetModel via
 //  the IPN bus), mirroring the pure-Go `build/timing-go` harness so the two
-//  can be compared. Gated by the `-TimingHarness` launch arg (see ApertureApp);
+//  can be compared. Gated by the `-TimingHarness` launch arg (see LatchkeyApp);
 //  in that mode the app skips WorkspaceManager entirely and just runs this.
 //
 //  Launch on the sim:
 //
-//    xcrun simctl launch booted io.tailscale.Aperture \
+//    xcrun simctl launch booted net.lixom.latchkey \
 //        -TimingHarness -TimingRuns 5 -AuthKey tskey-auth-...
 //
 //  Output is written both to `print()` and to OSLog (subsystem
-//  io.tailscale.Aperture, category "timing"), so `log stream` captures it:
+//  net.lixom.latchkey, category "timing"), so `log stream` captures it:
 //
 //    xcrun simctl spawn booted log stream \
-//        --predicate 'subsystem == "io.tailscale.Aperture"' --style compact
+//        --predicate 'subsystem == "net.lixom.latchkey"' --style compact
 //
 //  Each iteration measures the 5 phases (cold, fresh state dir per server):
 //    1. Up() with NO auth key  → first login URL (BrowseToURL)
@@ -43,7 +43,7 @@ import SwiftUI
 import WebKit
 import TailscaleKit
 
-private let timingLog = OSLog(subsystem: "io.tailscale.Aperture", category: "timing")
+private let timingLog = OSLog(subsystem: "net.lixom.latchkey", category: "timing")
 private let harnessDefaultControlURL = "https://controlplane.tailscale.com"
 
 @MainActor

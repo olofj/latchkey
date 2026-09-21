@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //
-//  ApertureApp.swift
-//  Aperture
+//  LatchkeyApp.swift
+//  Latchkey
 //
 //  Created by Jonathan Nobels on 2025-12-16.
 //
@@ -13,7 +13,7 @@ import AppIntents
 import TailscaleKit
 
 @main
-struct ApertureApp: App {
+struct LatchkeyApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var workspaceManager: WorkspaceManager?

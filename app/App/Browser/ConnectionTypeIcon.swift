@@ -3,7 +3,7 @@
 
 //
 //  ConnectionTypeIcon.swift
-//  Aperture
+//  Latchkey
 //
 //  The per-tab connection-type indicator. Small and harmless-looking (the
 //  direct/derped distinction is for diagnostics, not a warning):

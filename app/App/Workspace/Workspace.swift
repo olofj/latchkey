@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //  Workspace.swift
-//  Aperture
+//  Latchkey
 //
 //  A workspace = one Tailscale (tsnet) identity + everything that belongs to
 //  it: its own node, model, tab manager, home page, bookmarks store, and web
