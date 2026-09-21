@@ -41,11 +41,9 @@ final class LatchkeyUITests: XCTestCase {
 
     // MARK: - Fixtures
 
-    /// The app's default gateway (`HomePage.defaultURL`). The UI test target
-    /// cannot import the app module, so it is duplicated here rather than
-    /// shared -- keep the two in step. M5 replaces the app-side constant with
-    /// a discovered gateway, at which point these tests should set a gateway
-    /// explicitly instead of asserting the default.
+    /// The gateway these tailnet-dependent tests load. Since M5 the app has
+    /// no default gateway (the picker chooses one), so `launchConnected` sets
+    /// it explicitly with `-UITestHomePage`.
     static let defaultGatewayURL = "https://byskebox.example.ts.net"
 
     /// A substring of `defaultGatewayURL`'s host, used to recognise the loaded
@@ -339,8 +337,11 @@ final class LatchkeyUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10))
         let restoredField = app.textFields["home-page-field"]
         XCTAssertTrue(restoredField.waitForExistence(timeout: 10))
-        XCTAssertEqual((restoredField.value as? String) ?? "", Self.defaultGatewayURL,
-                       "Home page should be restored to the default after the reset relaunch")
+        // Since M5 the default is "no gateway": the field is empty (XCUITest
+        // reports an empty field's placeholder as its value).
+        let restored = (restoredField.value as? String) ?? ""
+        XCTAssertTrue(restored.isEmpty || restored == restoredField.placeholderValue,
+                      "Home page should be reset to no gateway after the reset relaunch; got \(restored)")
         app.buttons["settings-done-button"].tap()
     }
 
@@ -525,7 +526,9 @@ final class LatchkeyUITests: XCTestCase {
         // in production: resetting only HomePage does not rewrite a persisted
         // current tab left by an earlier bad-URL test.
         // No tab reset needed: nothing about the page is restored (R2).
-        app.launchArguments += ["-UITestResetHomePage"]
+        // -UITestHomePage wins over the reset (it is applied after it): the
+        // app has no default gateway since M5.
+        app.launchArguments += ["-UITestResetHomePage", "-UITestHomePage", Self.defaultGatewayURL]
         app.launch()
     }
 

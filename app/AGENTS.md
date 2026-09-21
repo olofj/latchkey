@@ -139,6 +139,10 @@ this machine.
   - `scripts/test-session.sh` — M4: the dashboard session against KiroCrew's
     real 0.6.0 frontend, served by `testing/harness/fake_gateway.py`. It is
     pinned to that bundle and refuses to run against another.
+  - `scripts/test-discovery.sh` — M5: gateway discovery on the L2 harness,
+    with a real-looking gateway peer, a non-gateway page, a dead peer and a
+    peer that never answers. It also enforces R26's timing budget from the
+    app's own log.
 
   Each takes `--build`. Each fails unless every test in its file passed; a
   stale build that runs nothing is not a pass. Add coverage there, not to

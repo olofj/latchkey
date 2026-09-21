@@ -112,17 +112,18 @@ enum WorkspaceStore {
     /// the normal app. This matters especially on native macOS, where the UI
     /// test launches the same bundle identifier as the user's running app.
     ///
-    /// The explicit `-UITest...` check covers the launch hooks used by the
-    /// suite. The XCTest environment check also protects newly-added tests
-    /// that forget to add a reset hook. Neither signal exists during a normal
-    /// app launch.
+    /// The explicit `-UITest...` / `-Test...` check covers the launch hooks
+    /// used by the suites (`-TestControlURL` alone once sent a relaunch to
+    /// the REAL directory: M5). The XCTest environment check also protects
+    /// newly-added tests that forget to add a reset hook. Neither signal
+    /// exists during a normal app launch.
     ///
     /// Deliberately NOT behind TestHooks (R15). It grants no capability — it
     /// only moves a test run's data to a separate directory — and it has to
     /// hold in every build, so a test run can never touch a real session.
     private static let isUITestProcess: Bool = {
         let process = ProcessInfo.processInfo
-        if process.arguments.contains(where: { $0.hasPrefix("-UITest") }) {
+        if process.arguments.dropFirst().contains(where: { $0.hasPrefix("-UITest") || $0.hasPrefix("-Test") }) {
             return true
         }
         let environment = process.environment

@@ -177,6 +177,7 @@ private struct DashboardContent: View {
     @ObservedObject var statusViewModel: StatusViewModel
     @ObservedObject var session: SessionManager
     let onSettings: () -> Void
+    @State private var showingGatewayPicker = false
 
     var body: some View {
         NavigationStack {
@@ -217,6 +218,17 @@ private struct DashboardContent: View {
                 .padding(.top, 4)
                 .accessibilityIdentifier("session-signin-button")
             }
+        }
+        // M5.5: re-probe when the chosen gateway is unreachable.
+        .sheet(isPresented: $showingGatewayPicker) {
+            GatewayPickerView(discovery: workspace.discovery, model: model,
+                              savedHost: URL(string: homePage.url)?.host(),
+                              autoSelectSingle: false,
+                              onSelect: { origin in
+                                  showingGatewayPicker = false
+                                  workspace.selectGateway(origin)
+                              },
+                              onCancel: { showingGatewayPicker = false })
         }
 #if LATCHKEY_TEST_HOOKS
         .overlay(alignment: .bottom) {
@@ -288,10 +300,24 @@ private struct DashboardContent: View {
         .accessibilityLabel("Settings")
     }
 
+    @ViewBuilder
     private var dashboardContent: some View {
+        if homePage.hasGateway {
+            gatewayContent
+        } else {
+            // First run (M5): no gateway yet. Discovery picks the only one
+            // found, or the user chooses.
+            GatewayPickerView(discovery: workspace.discovery, model: model, savedHost: nil,
+                              autoSelectSingle: true,
+                              onSelect: { workspace.selectGateway($0) })
+        }
+    }
+
+    private var gatewayContent: some View {
         VStack(spacing: 0) {
             if homePageAvailability == .unavailable {
-                GatewayUnreachableBanner(onSettings: onSettings)
+                GatewayUnreachableBanner(onSettings: onSettings,
+                                         onFindGateways: { showingGatewayPicker = true })
             }
             BrowserView(model: tab.viewModel)
                 .frame(minHeight: 0, maxHeight: .infinity)
@@ -375,6 +401,7 @@ struct ReturnToDashboardAffordance: View {
 /// gateway address can be corrected. M5 replaces this with the picker.
 private struct GatewayUnreachableBanner: View {
     let onSettings: () -> Void
+    let onFindGateways: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -384,6 +411,9 @@ private struct GatewayUnreachableBanner: View {
                 .font(.subheadline.weight(.medium))
                 .multilineTextAlignment(.leading)
             Spacer(minLength: 0)
+            Button("Find") { onFindGateways() }
+                .font(.subheadline.weight(.semibold))
+                .accessibilityIdentifier("gateway-unreachable-find-button")
             Button("Change") { onSettings() }
                 .font(.subheadline.weight(.semibold))
                 .accessibilityIdentifier("gateway-unreachable-settings-button")

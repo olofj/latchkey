@@ -21,17 +21,9 @@ import Combine
 
 @MainActor
 final class HomePage: ObservableObject {
-    /// The gateway loaded when the user hasn't chosen one.
-    ///
-    /// TEMPORARY (PLAN §1.7): hardcoded to Olof's primary gateway so M1 has a
-    /// single destination to pin. M5 replaces this with the gateway chosen by
-    /// `GatewayDiscovery`, and this constant becomes the last-resort fallback
-    /// for a first run that discovers nothing.
-    ///
-    /// HTTPS because `byskebox` is fronted by `tailscale serve` on 443 with a
-    /// real Let's Encrypt certificate for the MagicDNS name. `chonk` answers
-    /// plain HTTP on :5476 instead; that asymmetry is M5.2's problem.
-    static let defaultURL = "https://byskebox.example.ts.net"
+    /// No gateway: the dashboard shows the gateway picker (M5) until one is
+    /// chosen. Until M5 this was a hardcoded `https://byskebox.<tailnet>`.
+    static let defaultURL = ""
 
     /// The current home-page URL. `@Published` so Settings' text field and the
     /// bookmarks sheet react to changes; the owning `Workspace` persists
@@ -41,4 +33,7 @@ final class HomePage: ObservableObject {
     init(url: String) {
         self.url = url
     }
+
+    /// Whether a gateway has been chosen.
+    var hasGateway: Bool { !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }

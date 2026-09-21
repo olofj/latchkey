@@ -56,6 +56,10 @@ final class Workspace: ObservableObject, Identifiable {
                                      dataStore: dataStore,
                                      session: session)
     lazy var statusViewModel = StatusViewModel(manager: manager)
+    /// Finds KiroCrew gateways on this workspace's tailnet (M5).
+    lazy var discovery = GatewayDiscovery(model: model) { [manager] in
+        await manager.refreshStatusNow()
+    }
 
     /// Called whenever the definition changes, so `WorkspaceManager` can
     /// persist the workspace list. Set after init to avoid a retain cycle.
@@ -141,6 +145,13 @@ final class Workspace: ObservableObject, Identifiable {
         definition.hostname = trimmed
         onChange?(definition)
         manager.setHostName(trimmed)
+    }
+
+    /// Makes `origin` the gateway and loads it (M5).
+    func selectGateway(_ origin: String) {
+        logger.log("Gateway chosen: \(origin)")
+        setHomePage(origin)
+        tabManager.reopenHomeTab()
     }
 
     func setHomePage(_ url: String) {

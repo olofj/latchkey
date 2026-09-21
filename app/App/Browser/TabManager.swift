@@ -64,7 +64,10 @@ final class TabManager: ObservableObject {
 
     @discardableResult
     func openChatTab(select: Bool = true) -> BrowserTab? {
-        let url = URL(string: homePage.url) ?? URL(string: HomePage.defaultURL)!
+        // No gateway yet (M5): a placeholder the dashboard never shows -- the
+        // gateway picker stands in for the web view until one is chosen.
+        let url = URL(string: homePage.url).flatMap { $0.host() == nil ? nil : $0 }
+            ?? URL(string: "about:blank")!
         return openTab(url: url, select: select, isHomePage: true)
     }
 
@@ -124,6 +127,15 @@ final class TabManager: ObservableObject {
         guard !tabs.isEmpty else { return }
         selectedIndex = (selectedIndex + 1) % tabs.count
         unloadHiddenTabs()
+    }
+
+    /// Replaces the dashboard tab with a fresh one on the current home page:
+    /// how a newly chosen gateway takes effect (M5).
+    func reopenHomeTab() {
+        for tab in tabs { tab.unloadWebView() }
+        tabs.removeAll()
+        selectedIndex = 0
+        _ = openChatTab(select: true)
     }
 
     /// Called when its workspace leaves the visible pane.
