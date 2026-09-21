@@ -269,6 +269,11 @@ public struct IpnState: Sendable {
         public var SSH_HostKeys: [String]?
         public var ShareeNode: Bool?
         public var Expired: Bool?
+        /// The peer's OS as Tailscale reports it ("linux", "macOS", "windows",
+        /// "iOS", ...). Latchkey: added for gateway discovery (R26).
+        public var OS: String?
+        /// The peer's owner. Latchkey: added for gateway discovery (R26).
+        public var UserID: Int64?
     }
 
     public  struct PeerStatusLite: Codable, Sendable, Equatable {
