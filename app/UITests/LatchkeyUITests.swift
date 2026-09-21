@@ -274,9 +274,12 @@ final class LatchkeyUITests: XCTestCase {
         let homePageField = app.textFields["home-page-field"]
         XCTAssertTrue(homePageField.waitForExistence(timeout: 10),
                       "Home Page text field should be present in Settings")
-        // A value guaranteed to differ from the reset default.
-        let marker = String(UUID().uuidString.prefix(8))
-        let newValue = "https://example.test/\(marker)"
+        // A value guaranteed to differ from the reset default. The marker goes
+        // in the host, not the path: the gateway is persisted as its origin
+        // (revision R2), so a path would be dropped by design. Lowercase,
+        // because the stored origin's host is lowercased.
+        let marker = String(UUID().uuidString.prefix(8)).lowercased()
+        let newValue = "https://\(marker).example.test"
 
         homePageField.clearAndType(text: newValue)
         XCTAssertEqual(homePageField.value as? String, newValue,
