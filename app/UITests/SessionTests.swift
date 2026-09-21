@@ -129,10 +129,9 @@ final class SessionTests: XCTestCase {
     // MARK: - R20 / R25: the page keeps the session alive by itself
 
     /// Short-lived access sessions: the real scheduler refreshes about every
-    /// 5 s (it aims for exp − 1 h, floored at 5 s). Across ~40 s — with one
-    /// forced expiry midway, so the 403 interceptor path runs too — the sheet
-    /// never appears, rotations are counted, and no superseded refresh token
-    /// is ever reused.
+    /// 5 s (it aims for exp − 1 h, floored at 5 s). Across ~40 s the sheet
+    /// never appears (counted, not sampled), rotations are counted, and no
+    /// superseded refresh token is ever reused.
     func testThePageRefreshesAcrossExpiriesWithoutTheSheet() async throws {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
@@ -142,20 +141,46 @@ final class SessionTests: XCTestCase {
         let start = try await gatewayState()
         let asked = authRequiredCount(app)
 
-        try await Task.sleep(for: .seconds(20))
-        let beforeExpiry = try await gatewayState()
-        _ = try await Self.post("\(Self.gatewayControl)/__expire")
-        try await Task.sleep(for: .seconds(20))
+        try await Task.sleep(for: .seconds(40))
         let end = try await gatewayState()
         XCTAssertEqual(authRequiredCount(app), asked,
                        "the page never asked for a token (counted, so a flash between looks is caught)")
         XCTAssertFalse(element(app, "token-sheet").exists)
         let rotations = counter(end, "rotations") - counter(start, "rotations")
         XCTAssertGreaterThanOrEqual(rotations, 5, "the page must have refreshed repeatedly; saw \(rotations)")
-        XCTAssertGreaterThan(counter(end, "denials"), counter(beforeExpiry, "denials"),
-                             "the forced expiry must actually have hit a 403 (the interceptor path)")
         XCTAssertEqual(violations(end), 0, "no superseded refresh token reused: \(end["violations"] ?? [])")
         XCTAssertEqual(counter(end, "redemptions"), 1, "no re-sign-in happened")
+    }
+
+    /// The other recovery path: the 403 interceptor. With a session far from
+    /// expiry, the scheduler's next refresh is ~400 s away (exp − 1 h), so
+    /// after a forced expiry the page's own 30 s poll is the first to hit
+    /// the 403, and the interceptor must refresh -- no sheet. (Inside the
+    /// short-session test the scheduler usually cured the expiry first, so
+    /// the 403 path ran only by luck: M5 regression run.)
+    func testAnExpiredSessionIsRecoveredByThePagesInterceptor() async throws {
+        _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=4000")
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+        let asked = authRequiredCount(app)
+        let before = try await gatewayState()
+
+        _ = try await Self.post("\(Self.gatewayControl)/__expire")
+        var after = before
+        for _ in 0..<50 {
+            try await Task.sleep(for: .seconds(1))
+            after = try await gatewayState()
+            if counter(after, "denials") > counter(before, "denials"),
+               counter(after, "rotations") > counter(before, "rotations") { break }
+        }
+        XCTAssertGreaterThan(counter(after, "denials"), counter(before, "denials"),
+                             "the expired session hit a 403 (the interceptor's trigger)")
+        XCTAssertGreaterThan(counter(after, "rotations"), counter(before, "rotations"),
+                             "and the page refreshed in response")
+        XCTAssertEqual(authRequiredCount(app), asked, "silently: no token needed")
+        XCTAssertEqual(violations(after), 0)
     }
 
     // MARK: - R21: the terminal path, and recovery
