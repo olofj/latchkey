@@ -310,7 +310,9 @@ func TsnetClose(sd C.int) C.int {
 		return 0
 	}
 	if err := s.s.Close(); err != nil {
-		s.s.Logf("tailscale_close: failed with %v", err)
+		if s.s.Logf != nil { // nil unless the caller set it (see TsnetDebugShutdownTCPConnections)
+			s.s.Logf("tailscale_close: failed with %v", err)
+		}
 		return -1
 	}
 
@@ -747,7 +749,13 @@ func TsnetDebugShutdownTCPConnections(sd C.int) C.int {
 		return -1
 	}
 	matched, succeeded, err := debugShutdownTCPConnections()
-	s.s.Logf("debug shutdown TCP sockets: matched=%d succeeded=%d err=%v", matched, succeeded, err)
+	// Logf is a caller-supplied field and is nil here (only UserLogf is set,
+	// R29 review); calling it unguarded was a nil dereference that took the
+	// app down with the first use of this hook (M6). The accept path below
+	// already guards it the same way.
+	if s.s.Logf != nil {
+		s.s.Logf("debug shutdown TCP sockets: matched=%d succeeded=%d err=%v", matched, succeeded, err)
+	}
 	if matched == 0 {
 		return s.recErr(fmt.Errorf("no TCP sockets found"))
 	}
