@@ -619,3 +619,174 @@ denied, and the phone's iOS version recorded. PLAN M1's AC now points at it.
 **Blocked on Olof:** O1, O2 and O3 were requested in a notification on
 2026-09-20. The check is not attempted until they are done (R8: "Do not
 attempt it before they are"). Work that does not need a phone continues.
+
+## 2026-09-20 — Review of the R1–R8 batch
+
+Adversarial review of `app/` `199f046ab..1ee6f457e` (code-review skill, high).
+All three findings were in R3, and all three held up. **Fixed** in `e140c40c6`:
+
+1. **A redirect the policy blocked painted the error page over the
+   dashboard.** Cancelling a navigation mid-flight makes WebKit report
+   WebKitErrorDomain 102, and the failure handlers only skipped
+   `NSURLErrorCancelled`. 102 is now the policy doing its job: ignored with a
+   page showing, and a plain explanation when the app's own first load was
+   redirected away.
+2. **Reload trusted whatever URL had failed.** It retried through the app's
+   own `load(url:)`, which trusts its target's origin, so one tap could have
+   loaded the foreign redirect target in place. It now retries only what the
+   policy allows, and otherwise reloads the gateway.
+3. **`window.open` could blank the dashboard or silently do nothing.**
+   KiroCrew 0.6.0 has 26 `window.open` call sites, several of them the
+   popup-blocker pattern `w = window.open('', '_blank'); await …; w.location
+   = url` (a Drive download among them). `PopupCatcher` now hands WebKit a
+   throwaway web view, catches the popup's real destination and routes it
+   through the policy. Same-origin pages load in place with a "Dashboard" way
+   back. The new tests also caught a SwiftUI bug in that control: it read the
+   flag through an object that does not republish, so it would never have
+   appeared.
+
+Finding 1 needed an HTTP redirect, which a custom-scheme handler cannot issue.
+It is now covered by the offline suite's
+`testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard`.
+
+Also fixed along the way: a flaky text-field clear in the UI test helper
+(`18080051a`). A centre tap could land mid-text, so backspace left the old
+value's tail behind.
+
+## 2026-09-20 — R9: `xcodebuild test` works from the agent shell
+
+**Satisfied:** one combined `xcodebuild test` (build plus run) of
+`testAppLaunchesAndShowsStatus` passed from the agent shell in 19 s, using
+the `NESTED_SANDBOX` detection for the build. The runner launch, CoreSimulator
+and testmanagerd all work, and every run since has used the same path. **No
+Terminal fallback is needed.**
+
+## 2026-09-20 — R15: test hooks behind `LATCHKEY_TEST_HOOKS`, not `DEBUG`
+
+**Applied** (`app/` `c6d49a395`): a new **Testing** build configuration —
+a clone of Debug whose project-level `SWIFT_ACTIVE_COMPILATION_CONDITIONS`
+adds `LATCHKEY_TEST_HOOKS` — added by `scripts/add-testing-configuration.py`
+(deterministic ids, idempotent). The scheme's Test action uses it. Run keeps
+Debug and Archive keeps Release, and neither defines the flag. Every hook reads
+through `App/TestHooks.swift`, which returns nothing unless the flag is
+compiled in:
+
+- `-AuthKey`/`APERTURE_AUTHKEY`, `-Ephemeral`, `-ProxyEverything`,
+  `-NoSocksLog`, `-UITestLogResponses`, `-UITestReset*`, `-UITestHomePage`,
+  and the L2 chaos hooks.
+- The timing and proxy-bounce harness views, and R7's private-SPI hook, are
+  compiled out entirely.
+
+**Verified against the binaries:** the Debug build contains none of
+`_killWebContentProcess`, `ProxyBounceTestHarnessView`, `TimingHarnessView`
+or `bounce-test`, and the Testing build contains them. **Deliberately
+ungated:** `WorkspaceStore.isUITestProcess`, which only moves a test run's
+data to a separate directory. **Not done:** building the daily driver in
+Release. R15 says "consider", and Run stays Debug so it can be debugged on
+the device. It is now hook-free, which was the point.
+
+## 2026-09-20 — R12: the proxy configuration comes from a pure factory
+
+**Applied** (`app/` `00cafbca2`): `App/Network/ProxyConfigurationFactory.swift`
+sets `allowFailover = false` explicitly and takes `matchDomains` from the
+policy. `scripts/test-proxy-config.sh` (15 checks) asserts on the app's own
+objects rather than on Apple's default.
+
+**Finding while doing it: `ProxyConfiguration` is a struct with reference
+semantics underneath.** It wraps a shared `nw_proxy_config`, and its mutating
+setters write through with no copy-on-write, so `var copy = installed;
+copy.matchDomains = …` also changes `installed`. Verified with a standalone
+program, and pinned by a premise check in the test. Upstream's
+`refreshProxyPolicyIfNeeded` did exactly that, rewriting the configuration
+already installed in WebKit's data store in place before republishing it.
+The factory now only builds fresh objects, and `TSNetManager` keeps the
+endpoint so it can rebuild on a policy change. This interacts with R27
+(before M5), which pins the rules so republication becomes rare anyway.
+
+## 2026-09-20 — R11: a test status fixture drives the production path
+
+**Applied** (`app/` `51721db6a`): `-TestStatusFixture <IpnState.Status JSON>`
+plus `-TestProxyEndpoint` and `-TestProxyCredential` (test builds only). With
+them, `TSNetManager` starts no node: it puts the fixture and `.Running` on the
+model and publishes through the normal `proxyConfig` → factory → policy path,
+logging relay included. Everything above the model runs unmodified. A
+malformed fixture is fatal rather than falling back to a real node, and a
+fixture naming the real tailnet is refused (R10). The fixture is passed
+inline as a launch argument, so no files need sharing with the simulator.
+
+## 2026-09-20 — R10 and R13: an anti-leak test that can fail, read server-side
+
+**Applied** (`app/` `99d1bdaba`, parent `4320fc5`):
+
+- **The negative-test origin is `dash.localtest.me`,** a public name
+  resolving to `127.0.0.1` and `::1`, served by the fake dashboard on both
+  families, with the leaf's SAN extended to cover it. A leak to it would
+  succeed, which is what makes the test meaningful.
+- **Sequence:**
+  - positive control — with `localtest.me` outside the tailnet it loads
+    direct, and the journal shows no CONNECT for it, which is also R11's
+    split-tunnel assertion;
+  - then, with `localtest.me` as the fixture tailnet's MagicDNS suffix so the
+    origin is proxied, three variants each fail the load with **zero**
+    requests reaching the dashboard: stub blackholed (the journal shows the
+    attempt), stub gone (listener closed), and stub gone with `-NoSocksLog`.
+- **The stub's control port** switches those modes at runtime, so one harness
+  run serves every variant. `make check` proves the same mechanics host-side
+  with curl before any simulator is involved.
+- **Observation is server-side (R13):** the page POSTs its state to
+  `/__report`, and tests read `/__state` (reports, per-Host request counts,
+  paths with User-Agent) and the stub's `/journal` over plain HTTP on
+  127.0.0.1.
+- **Never a real tailnet name or address in a test:** fixture addresses are
+  `100.127.255.x` and never dialled. `scripts/test-offline.sh` fails on any
+  `example` in the test config, and **warns** when host Tailscale is up.
+  It is up on chonk (a `utun` holds `100.104.128.67`). Accepted per D7: leak
+  coverage for tailnet *IP* destinations is limited on this host, because a
+  leak to a real tailnet IP would succeed through the host's VPN, and the
+  tests deliberately use none.
+
+## 2026-09-20 — R14: recovery tests go to the right layer (recorded for M6)
+
+**Adopted for M6** (PLAN updated): stub-killed (M6.7) never triggers
+`recoverLoopbackAfterFailure`, which is driven by LocalAPI poll failures.
+Recovery is tested at L2 with upstream's `-UITestDefunctLoopback` /
+`-UITestShutdownTCPConnections`, which R15 now gates. M6.5's "no CLI path to
+suspend" is wrong: `app/scripts/test-lock-resume.sh` suspends with SIGSTOP,
+and it now builds with the Testing configuration.
+
+## 2026-09-20 — M2 done
+
+**AC:** `scripts/test-offline.sh` passes 9/9 with no Tailscale account and no
+tailnet: ~95 s with `test-without-building`, 99 s with an incremental build,
+against a budget of 180 s. The blackhole variant fails the load, not the
+test. R1's second check (no sign-in token on disk or in the unified log)
+runs in the same script and is **validated**: the sign-in test logs every
+navigation, so the redacted sign-in URL (`https://dash.tail-scale.ts.net/?…`)
+must be present, which means the check cannot pass vacuously.
+
+**Plan items:**
+
+- 2.1–2.3 (harness, certs, CA trust in the script) are done.
+- 2.4 was replaced by R11.
+- 2.5 (happy path) is done.
+- 2.6 was replaced by R10 plus R12's L0 check.
+- 2.7 (journal) is done.
+- 2.8 was replaced by R13.
+- 2.9 (the script) is done.
+- Also covered: the four error-overlay cases lost in M1 (cert mismatch and
+  refused connection here; bad URL no longer applies without an address bar),
+  R3 review finding 1, and R2's token strip in a real WebKit.
+
+**Actual time (R36).** Agent wall-clock from commit timestamps:
+
+| Milestone | Wall-clock |
+|---|---|
+| M0 | ~10 min |
+| M1 + review | ~30 min |
+| R1–R8 + review | ~60 min |
+| R9–R15 + M2 | ~45 min |
+
+Part of the harness work predates Olof's pause. These are not comparable to
+the plan's engineer-hour estimates (M2 10–16 h after R36): an agent with the
+toolchain warm is a different instrument. They are recorded because R36 asks
+for actuals, not as a claim about human effort.

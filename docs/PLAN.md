@@ -386,7 +386,9 @@ Deletions first, then the pin. Keep each in its own commit.
 
 ---
 
-### M2 — Offline test harness (5–8 h)
+### M2 — Offline test harness (5–8 h; re-estimated 10–16 h by R36) — **done**
+
+**Status:** done 2026-09-20. `scripts/test-offline.sh` passes 9/9 in ~95 s with no Tailscale account. The table below is the original plan. Revisions R9–R13 and R15 replaced 2.4, 2.6 and 2.8, noted inline. `docs/DECISIONS.md` "M2 done" has the detail.
 
 **Goal:** prove the WebKit-through-SOCKS5 path with **zero Tailscale involvement**,
 so every later change has a fast, deterministic regression net. This milestone is
@@ -399,12 +401,12 @@ See §6 for the full strategy; this is the build-out.
 | 2.1 | Move the harness in | `testing/harness/` already holds `dashboard.py`, `socks5stub.py`, `ca.cnf`, `leaf.cnf`, verified working during planning. Add a `Makefile` with `harness-up` / `harness-down`. |
 | 2.2 | Generate test certs | Script `testing/harness/gen-certs.sh` per §6.3. The CA **must** carry `keyUsage=critical,keyCertSign,cRLSign` or iOS rejects it with "CA cert does not include key usage extension". The leaf needs `subjectAltName` (iOS ignores CN) and `extendedKeyUsage=serverAuth`. |
 | 2.3 | Trust the CA in the simulator | `xcrun simctl keychain booted add-root-cert testing/harness/ca.der`. Wire this into the test bootstrap so a fresh simulator works unattended. |
-| 2.4 | Test-only proxy override | Add a launch argument `-TestProxyEndpoint <host:port>` + `-TestProxyCredential <pass>` so XCUITests can point the app at `socks5stub.py` instead of tsnet. Follow the upstream pattern in `TSNetManager.swift:133-174`. **Gate it on a debug build** so a release build cannot be pointed at an arbitrary proxy. |
+| 2.4 | Test-only proxy override | ~~Endpoint-only override, gated on DEBUG.~~ **Replaced (R11, R15):** an endpoint-only override never loads (`loadInitial` needs `.Running` and a peer status), so `-TestStatusFixture <IpnState.Status JSON>` + `-TestProxyEndpoint` + `-TestProxyCredential` start no node and drive the production `proxyConfig` → factory → policy path. Gated on `LATCHKEY_TEST_HOOKS` (Testing configuration), because DEBUG is what Xcode's Run installs on the phone. |
 | 2.5 | Happy-path UI test | Launch with the override, load `https://dash.tail-scale.ts.net/` (mapped by the stub to `127.0.0.1:8443`), assert the page renders, the WebSocket echoes, and the SSE stream advances. |
-| 2.6 | **Negative test** | Run the stub with `--blackhole`; assert the load **fails** rather than succeeding directly. Then assert `proxyConfiguration.allowFailover == false` in a host-side unit test. This pair is the anti-leak guarantee. |
+| 2.6 | **Negative test** | ~~Blackhole `dash.tail-scale.ts.net`.~~ **Replaced (R10, R12):** that name is NXDOMAIN, so a leak failed exactly like a proxied load and the test proved nothing. The origin is now `dash.localtest.me` (public, resolves to loopback): a positive control proves a direct load succeeds, then blackhole, stub-gone and stub-gone-with-`-NoSocksLog` must each fail with **zero** requests reaching the dashboard. `allowFailover == false` is asserted on the app's own object by `scripts/test-proxy-config.sh`. |
 | 2.7 | Journal assertion | Assert `testing/harness/proxy.ndjson` contains a `connect` event for the dashboard host — proof the traffic actually traversed the proxy rather than reaching it some other way. |
-| 2.8 | JS bridge for web assertions | The accessibility tree is flaky for dynamic web content. Add a debug-only bridge behind `-UITestBridge`: poll `evaluateJavaScript("document.getElementById('wsstate').textContent")` and publish into a hidden view's `accessibilityValue` for XCUITest to read. (INFERRED — established practice, not verified here; if it proves awkward, fall back to `WKScriptMessageHandler`.) |
-| 2.9 | Script the whole thing | `scripts/test-offline.sh`: certs → harness up → `xcodebuild test -only-testing:...` → harness down, with logs and a screenshot on failure. |
+| 2.8 | JS bridge for web assertions | ~~Hidden-view `accessibilityValue` bridge.~~ **Replaced (R13):** hidden views drop out of the accessibility tree and an `evaluateJavaScript` poll fights XCUITest idle detection. The page POSTs its state to `dashboard.py`'s `/__report`; tests read `/__state` (and the stub's `/journal`) over plain HTTP on 127.0.0.1. |
+| 2.9 | Script the whole thing | `scripts/test-offline.sh`: certs → harness up → `xcodebuild test -only-testing:...` → harness down, with logs and a screenshot on failure. **Done**, plus R10's preflight and R1's validated token check. **R9:** `xcodebuild test` from the agent shell is proven, so no Terminal fallback is needed. |
 
 **AC:**
 - `scripts/test-offline.sh` passes from a clean checkout on a machine with **no Tailscale account and no tailnet**.
@@ -413,7 +415,7 @@ See §6 for the full strategy; this is the build-out.
 
 ---
 
-### M3 — Fake control plane for tsnet tests (4–6 h)
+### M3 — Fake control plane for tsnet tests (4–6 h; re-estimated 12–20 h by R36)
 
 **Goal:** exercise the real tsnet node — login, netmap, loopback, proxy — against a
 throwaway control server, still with no real tailnet.
@@ -440,7 +442,7 @@ TLS is covered by M2.
 
 ---
 
-### M4 — KiroCrew session management (8–12 h)
+### M4 — KiroCrew session management (8–12 h; re-estimated 14–20 h by R36)
 
 **Goal:** the app holds a durable session, renews it silently, and asks for a new
 token only when renewal truly fails.
@@ -495,9 +497,9 @@ likely to make the app feel unreliable in daily use.
 | 6.2 | Use `statusJSON()` for liveness | `tailscale.h:183-186`: the LocalAPI path keeps working when the OS reclaims the loopback listener, where the loopback HTTP address goes **permanently stale**. Any liveness check that uses the loopback HTTP endpoint will lie to you after a suspend. |
 | 6.3 | Session re-check on foreground | Hook `scenePhase == .active` (`App/ApertureApp.swift:69`) to `SessionManager.refreshIfNeeded()`. Note `:67` deliberately ignores `.inactive` — respect that; there is a stale-auth-URL bug behind it. |
 | 6.4 | WebSocket reconnect | **Write no app-side reconnect logic.** (One exception now exists, R7: if the *web content process* dies — routine under memory pressure — the app reloads the page, at most 2× per 60 s, deferred to foreground if it died in the background. The page's own reconnect cannot help when its JavaScript is gone.) The page already reconnects with exponential backoff (1 s, doubling, capped at 10 s; reset to 1 s on open) and on reconnect does a full refetch plus re-subscribe, because the protocol has no sequence numbers or cursor-based replay — anything missed while disconnected is recovered by HTTP, not by the socket. The app's only job is the foreground nudge (M4.7). Measure reconnect time after resume; intervene only if it is bad. |
-| 6.5 | Simulated suspend test | `XCUIDevice.shared.press(.home)` then `app.activate()`, then assert a page load still works. **`xcrun simctl` has no `suspend` subcommand** (verified) — there is no CLI path. |
+| 6.5 | Simulated suspend test | `XCUIDevice.shared.press(.home)` then `app.activate()`, then assert a page load still works. **`xcrun simctl` has no `suspend` subcommand** (verified) — there is no CLI path. **Corrected (R14):** there is a CLI path — upstream's `app/scripts/test-lock-resume.sh` freezes the app with SIGSTOP. Use it. |
 | 6.6 | Real-device suspend test | The simulator keeps processes far more alive than a real device; genuine listener reclamation and jetsam kills are **device-only**. Write a manual test script: background for 1 min / 10 min / 1 h / overnight, foreground, and record time-to-interactive each time. A debugger prevents suspension entirely, so run it untethered and read logs afterwards. |
-| 6.7 | Network churn | Kill the stub proxy or run it `--blackhole` mid-session. `simctl status_bar` is **cosmetic only** and cannot simulate network loss (verified). Assert the app shows a real error and recovers when the proxy returns. |
+| 6.7 | Network churn | Kill the stub proxy or run it `--blackhole` mid-session. `simctl status_bar` is **cosmetic only** and cannot simulate network loss (verified). Assert the app shows a real error and recovers when the proxy returns. **Revised (R14):** a dead stub never triggers `recoverLoopbackAfterFailure`, which is driven by LocalAPI poll failures — test recovery at L2 with `-UITestDefunctLoopback` / `-UITestShutdownTCPConnections`. The stub's control port (`/mode?blackhole=1`, `/close`, `/open`) serves the page-level error/recovery half. |
 | 6.8 | Known upstream flake | Five upstream iOS UI tests flake at ~66–68 s against a 60 s page-load timeout on a cold node, because the initial navigation waits on netmap peer data while `watch-ipn-bus` times out. The code involved is `BrowserViewModel.loadInitial` (`:277-312`) and `TailnetProxyPolicy.hasPeerData`. Decide deliberately: raise the timeout, or gate the first load on peer data. Record the decision. |
 
 **AC:**
@@ -783,6 +785,6 @@ python3 testing/harness/socks5stub.py --port 1080 --user tsnet --password s3cret
     --journal /tmp/proxy.ndjson --map dash.tail-scale.ts.net:443=127.0.0.1:8443
 ```
 
-**Total estimated effort: 43–70 focused hours across M0–M8.** M0–M2 (14–23 h) is
+**Total estimated effort: 43–70 focused hours across M0–M8. Re-estimated by R36: M2 10–16 h, M3 12–20 h, M4 14–20 h, total ≈ 75–110 h.** Actuals per milestone are recorded in `docs/DECISIONS.md`. M0–M2 (14–23 h) is
 the point at which the riskiest unknowns are resolved and there is a working
 test net; if the project is going to fail, it fails there, cheaply.
