@@ -976,6 +976,24 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		return
 	}
 
+	// Latchkey (R32): a logout -- a RegisterRequest whose Expiry is in the
+	// past (controlclient's TryLogout sends time.Unix(123, 0)) -- expires the
+	// node key, as the real control plane does. testcontrol ignored it, so a
+	// client's logout left its node registered with a valid key and no test
+	// could tell a real logout from a local forget.
+	if !req.Expiry.IsZero() && req.Expiry.Before(time.Now()) {
+		s.mu.Lock()
+		if n, ok := s.nodes[req.NodeKey]; ok {
+			n.KeyExpiry = req.Expiry
+			s.updateLocked("logout", s.nodeIDsLocked(0))
+		}
+		s.mu.Unlock()
+		res := must.Get(s.encode(false, tailcfg.RegisterResponse{NodeKeyExpired: true}))
+		w.WriteHeader(200)
+		w.Write(res)
+		return
+	}
+
 	// If this is a followup request, wait until interactive followup URL visit complete.
 	isFollowup := req.Followup != ""
 	if isFollowup {
