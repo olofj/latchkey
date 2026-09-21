@@ -200,7 +200,7 @@ set +e
     -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \
     -derivedDataPath build/DerivedData -resultBundlePath "$LOG_DIR/tests.xcresult" \
     -parallel-testing-enabled NO -test-timeouts-enabled YES \
-    -default-test-execution-time-allowance 180 \
+    -default-test-execution-time-allowance 300 \
     -only-testing:LatchkeyUITests/LifecycleHarnessTests) > "$LOG_DIR/test.log" 2>&1 &
 XCODEBUILD_PID=$!
 ( sleep "$SUITE_TIMEOUT"; echo "error: xcodebuild exceeded ${SUITE_TIMEOUT}s; killing it" >&2; kill "$XCODEBUILD_PID" 2>/dev/null ) &

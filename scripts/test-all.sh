@@ -49,13 +49,13 @@ touches() { [[ "$CHANGED" == "(no successful full pass recorded)" ]] || grep -qE
 
 # Code each optional suite exercises. The vendored library and TSNet are the
 # network path under all of them.
-SESSION_RE='^app/(App/(Session|Browser|Workspace)/|TSNet/|ThirdParty/|UITests/(SessionTests|UITestSupport)\.swift)|^testing/harness/(fake_gateway|tls_accept)\.py|^testing/harness/kirocrew|^scripts/test-session\.sh'
+SESSION_RE='^app/(App/(Session|Settings|Browser|Workspace)/|TSNet/|ThirdParty/|UITests/(SessionTests|UITestSupport)\.swift)|^testing/harness/(fake_gateway|tls_accept)\.py|^testing/harness/kirocrew|^scripts/test-session\.sh'
 DISCOVERY_RE='^app/(App/(Discovery|Network|Browser)/|TSNet/|ThirdParty/|UITests/(DiscoveryTests|UITestSupport)\.swift)|^testing/tsnet-harness/|^testing/harness/(fake_gateway|tls_accept)\.py|^scripts/test-discovery\.sh'
 # M6: socket damage and a frozen process, on the L2 harness. About 4 min and
 # a SIGSTOP of the app, so quick runs take it only when the recovery code
 # (TSNet, the browser, the relay policy, the vendored hooks) or its own
 # fixtures changed.
-LIFECYCLE_RE='^app/(App/(Browser|Network|Workspace)/|TSNet/|ThirdParty/|UITests/(LifecycleHarnessTests|UITestSupport)\.swift)|^testing/tsnet-harness/|^testing/harness/(dashboard|tls_accept)\.py|^testing/harness/page_check\.js|^scripts/test-lifecycle\.sh'
+LIFECYCLE_RE='^app/(App/(Browser|Network|Workspace|Session|Diagnostics)/|TSNet/|ThirdParty/|UITests/(LifecycleHarnessTests|UITestSupport)\.swift)|^testing/tsnet-harness/|^testing/harness/(dashboard|tls_accept)\.py|^testing/harness/page_check\.js|^scripts/test-lifecycle\.sh'
 
 RUN_SESSION=$FULL; RUN_DISCOVERY=$FULL; RUN_LIFECYCLE=$FULL
 if [[ $FULL -eq 0 ]]; then

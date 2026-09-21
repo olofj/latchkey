@@ -2005,7 +2005,8 @@ misreads pooled connections and loads that never dialled.
 The same probe also runs:
 - on return to the foreground: it gathers evidence and rebuilds nothing,
   per M6.1;
-- after two unanswered session checks.
+- after a session check whose two `/api/auth/me` attempts both go
+  unanswered.
 
 A listener that reports `.failed` after being ready is replaced directly.
 
@@ -2151,3 +2152,33 @@ reconnects like KiroCrew's, the two mid-session tests end by cutting the
 page's WebSocket at the dashboard and requiring a reconnect received after
 the cut. The dashboard is reachable only through the tailnet, so the PAGE
 recovered through the node, not just the node's state. L2 9/9.
+
+## 2026-09-21 — Final review: M6 tests and the R30/R32 fixes
+
+One adversarial review (Fable) of the M6 lifecycle suite, and a
+verification of the R30 and R32 review fixes. **No high or medium
+findings.** It confirmed each of the following against the code:
+- the anti-leak invariants are intact;
+- the probe connects to the address WebKit uses;
+- a dead gateway and a dead relay are told apart;
+- the relay test cannot pass through the page's own reconnect;
+- the freeze checks are server-stamped;
+- the reset ordering is right;
+- the new tests can fail.
+
+**Fixed:**
+- the lifecycle suite's per-test allowance, 180 → 300 s, so a slow run fails
+  with its own message;
+- the reset alert's Cancel now closes Settings like Retry and Delete anyway;
+- the quick tier re-runs lifecycle on `App/Session` and `App/Diagnostics`
+  changes, and session on `App/Settings` changes;
+- the R30 entry's wording on when the probe runs.
+
+**Not fixed:**
+- *(low, unconfirmed)* A foreground probe right after a resume might time
+  out before the listener is re-armed. That costs one budgeted restart, and
+  M6.6 will show whether it happens.
+- *(low)* The freezer reads the pid from the log line. If the log format
+  changes, it fails loudly rather than passing.
+
+Rerun after the fixes: lifecycle 6/6, session 16/16 with R1 clean.
