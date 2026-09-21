@@ -105,6 +105,14 @@ final class TSNetManager {
             return
         }
         startInFlight = true
+#if LATCHKEY_TEST_HOOKS
+        // R11: the offline harness supplies what a node would have produced
+        // and everything above the model runs as in production.
+        if let fixture = TestNetworkFixture.fromLaunchArguments() {
+            startFromTestFixture(fixture)
+            return
+        }
+#endif
         Task(priority: .userInitiated) {
             await startTailscale()
         }
@@ -113,6 +121,23 @@ final class TSNetManager {
     func getModel() -> TSNetModel {
         return model
     }
+
+#if LATCHKEY_TEST_HOOKS
+    /// Test builds only (R11, R15). No tsnet node: the fixture's status and
+    /// `.Running` go straight onto the model, and the proxy configuration is
+    /// published through the same `proxyConfig` path production uses — relay,
+    /// factory and policy included — just pointed at the stub proxy.
+    @MainActor
+    private func startFromTestFixture(_ fixture: TestNetworkFixture) {
+        logger.log("TEST FIXTURE: no tsnet node; proxy \(fixture.proxyHost):\(fixture.proxyPort), \(fixture.status.Peer?.count ?? 0) peer(s)")
+        model.localStatus = fixture.status
+        model.tailnetName = fixture.status.CurrentTailnet?.MagicDNSSuffix
+        model.state = .Running
+        model.proxyConfiguration = proxyConfig(upstreamHost: fixture.proxyHost,
+                                               upstreamPort: fixture.proxyPort,
+                                               credential: fixture.credential)
+    }
+#endif
 
     /// The auth key supplied at launch, if any. See the doc comment above the
     /// class for the resolution order. Test builds only (R15): in any other
