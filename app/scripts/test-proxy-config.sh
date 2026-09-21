@@ -11,9 +11,11 @@ OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 
 sed 's/^import TailscaleKit$//' TSNet/TailnetProxyPolicy.swift > "$OUT/policy.swift"
+sed 's/^import TailscaleKit$//' App/Network/StableProxyPolicy.swift > "$OUT/stable.swift"
 cp scripts/test-proxy-config.swift "$OUT/main.swift"
 xcrun swiftc -O \
     "$OUT/policy.swift" \
+    "$OUT/stable.swift" \
     scripts/test-proxy-policy-stubs.swift \
     App/Network/ProxyConfigurationFactory.swift \
     "$OUT/main.swift" \

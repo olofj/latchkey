@@ -167,11 +167,11 @@ network loss, blackhole the stub proxy.
 - **iOS pre-filters by `matchDomains` against the literal URL host** before any
   DNS search-path expansion, and never asks the proxy to decide. That is why a
   bare `http://host/` must be rewritten to its FQDN to be routable.
-- `Info.plist` sets `NSAllowsArbitraryLoads` /
-  `NSAllowsArbitraryLoadsInWebContent`. Upstream needed it for plain-HTTP and
-  self-signed tailnet nodes. Latchkey loads one HTTPS origin with a real
-  certificate, so M8.6 revisits whether to tighten it — do not remove it
-  casually before then; `chonk` is reached over plain HTTP on :5476.
+- **App Transport Security is on, with no exceptions** (R28). The app loads
+  one HTTPS gateway with a real certificate, and discovery probes HTTPS only
+  (R26). The LocalAPI and SOCKS traffic is loopback, which ATS does not
+  cover. Do not add `NSAllowsArbitraryLoads` back to reach a plain-HTTP
+  gateway: `chonk`'s `:5476` is out of v1 (D4).
 - One-shot surgery scripts live in `scripts/strip-*.py`, `scripts/prune-*.py`
   and `scripts/repoint-*.py`. They are kept as the record of what was removed
   from upstream and why. Upstream is tracked by cherry-pick only (R16), so

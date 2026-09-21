@@ -501,7 +501,7 @@ final class TSNetManager {
         }
 
         proxyEndpoint = (proxyHost, proxyPort, credential)
-        let policy = TailnetProxyPolicy.make(from: model.localStatus,
+        let policy = StableProxyPolicy.make(from: model.localStatus,
                                              exitNodeEnabled: proxyEverythingRequested())
         guard let proxyConfig = ProxyConfigurationFactory.make(
             proxyHost: proxyHost, proxyPort: proxyPort,
@@ -533,7 +533,7 @@ final class TSNetManager {
     @MainActor
     func refreshProxyPolicyIfNeeded() {
         guard model.proxyConfiguration != nil else { return }
-        let policy = TailnetProxyPolicy.make(from: model.localStatus,
+        let policy = StableProxyPolicy.make(from: model.localStatus,
                                              exitNodeEnabled: proxyEverythingRequested())
         guard policy != model.proxyPolicy else { return }
         // Build a fresh configuration rather than editing the published one:

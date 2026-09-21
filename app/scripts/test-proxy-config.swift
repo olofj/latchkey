@@ -94,6 +94,31 @@ expect(ProxyConfigurationFactory.make(proxyHost: "127.0.0.1", proxyPort: 70_000,
 expect(ProxyConfigurationFactory.make(proxyHost: "127.0.0.1", proxyPort: -1,
                                       credential: "x", policy: split) == nil, "negative port is refused")
 
+section("R27: the stable policy Latchkey publishes")
+let stable = StableProxyPolicy.make(from: tailnet)
+expect(stable.matchDomains == [TailnetProxyPolicy.tailscaleIPv4CIDR, TailnetProxyPolicy.tailscaleIPv6CIDR,
+                               "tail-scale.ts.net"],
+       "the two tailnet ranges plus the MagicDNS suffix, nothing else: \(stable.matchDomains)")
+let churned = status(suffix: "tail-scale.ts.net",
+                     peers: [("dash", "dash.tail-scale.ts.net."), ("phone", "phone.tail-scale.ts.net."),
+                             ("renamed-laptop", "renamed-laptop.tail-scale.ts.net.")])
+expect(StableProxyPolicy.make(from: churned) == stable,
+       "peers joining, leaving or being renamed do not change it (so it is not republished)")
+expect(TailnetProxyPolicy.make(from: churned) != split,
+       "control: upstream's own policy DOES change with the same churn")
+expect(stable.hasPeerData, "peer data is still reported once the suffix is known")
+expect(stable.matchingRule(for: "gw.tail-scale.ts.net") != nil, "a gateway FQDN is proxied")
+expect(stable.matchingRule(for: "example.com") == nil, "public names are not")
+expect(stable.matchingRule(for: "100.100.1.2") != nil, "tailnet addresses are proxied")
+expect(!stable.matchDomains.contains(""), "no empty rule (an empty rule would proxy everything)")
+let unknown = StableProxyPolicy.make(from: nil)
+expect(unknown.matchDomains == [TailnetProxyPolicy.tailscaleIPv4CIDR, TailnetProxyPolicy.tailscaleIPv6CIDR]
+       && !unknown.hasPeerData, "no status yet: the ranges only, and no peer data")
+expect(StableProxyPolicy.make(from: tailnet, exitNodeEnabled: true).proxiesEverything,
+       "the proxy-everything test mode is unchanged")
+expect(ProxyConfigurationFactory.make(proxyHost: "127.0.0.1", proxyPort: 1080,
+                                      credential: "x", policy: stable) != nil, "the factory accepts it")
+
 print("")
 if failures == 0 {
     print("\(checks)/\(checks) proxy configuration checks passed")
