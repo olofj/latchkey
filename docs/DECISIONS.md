@@ -1880,3 +1880,31 @@ Nothing is deleted; every milestone and review commit still gets `--full`.
   - There was no deep-link interim left in PLAN to drop.
   - §9's note on claude-agent-acp PR #735 now carries R34's trigger: if it
     merges, re-evaluate what is left of M5–M8 before building it.
+
+## 2026-09-21 — R31: key expiry and approval, mid-session
+
+R29 already shipped the expiry parts: `KeyExpiry` decoded and shown in
+Status, and a dashboard warning 14 days ahead. What R31 still needed:
+- **Mid-session NeedsLogin.** The inherited Login banner already offered
+  the right path: `showAuth` → `startLoginInteractive` → the auth sheet. Now
+  proven at L2 with an expired key. The dashboard stays up rather than
+  dropping back to the gate, and an expired key shows no second, stale
+  warning; the Login banner says it.
+- **Mid-session NeedsMachineAuth** gets its own banner ("Waiting for
+  approval"). It has no button, because approval happens in the admin
+  console, and it leaves room for the gear. It goes by itself on approval.
+  Before, a revoked device showed nothing at all while every load failed.
+
+**Tests (L2, 8/8):**
+- `testAKeyAboutToExpireIsWarnedAbout`: `/expire` 10 days out → the
+  warning, with the day count.
+- `testAnExpiredKeyMidSessionAsksForLoginAgain`: RequireAuth, an expired
+  key, the Login banner, a NEW completed login, and Status reporting
+  Running.
+- `testARevokedDeviceMidSessionWaitsForApproval`: `/deauthorize` → the
+  banner with no Login button, then `/approve` → the banner goes and Status
+  reports Running.
+
+Harness support (`/expire`, `/deauthorize`, and key renewal at login)
+landed with the R29 review. The node's state comes from the app's own
+Status screen: the harness sees registrations, not a client's state.
