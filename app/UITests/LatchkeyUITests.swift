@@ -1273,13 +1273,25 @@ private extension XCUIElement {
     /// Return would persist — which we deliberately avoid in the home-page
     /// persistence test).
     func clearAndType(text: String) {
-        tap()
+        // Tap at the trailing edge, not the centre. Backspace only deletes
+        // what is BEFORE the cursor, and a centre tap can land mid-text: the
+        // old value's tail then survives and the new text is typed in front
+        // of it. Seen as "https://<marker>.example.testgoblin.ts.net" — the
+        // new value with the end of the old gateway URL still attached.
+        coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
         // Over-delete rather than deleting by `value.count`: the accessibility
         // `value` can disagree with the true editable text length (e.g. it may
         // report the placeholder), and pressing delete on an empty field is a
         // no-op, so a generous fixed count reliably clears the field.
         let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue, count: 100)
         typeText(deletes)
+        // Belt and braces: if a stray tap still left the cursor mid-text,
+        // something is left. Move to the end once more and clear again.
+        let placeholder = placeholderValue ?? ""
+        if let left = value as? String, !left.isEmpty, left != placeholder {
+            coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+            typeText(deletes)
+        }
         typeText(text)
     }
 
