@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | Plan approved for implementation; no code written yet |
+| Status | In implementation. M0 and M1 done; revisions from `docs/PLAN-REVISIONS.md` being applied — where they disagree with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
 | Author | Drafted 2026-09-20 from three parallel research passes |
 | Repo | `~/src/latchkey` |
 | Base | Fork of [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) @ `dba0555` (2026-08-24), BSD-3-Clause |
@@ -178,8 +178,9 @@ first run ──► no token in Keychain
         load https://<gateway>/?token=<token> in the WKWebView
               │  (server sets mc_token_<port> + mc_refresh_<port> cookies)
               ▼
-        persist: gateway URL + a marker in Keychain; cookies live in
-        the WKWebsiteDataStore (persistent, per-workspace UUID)
+        persist: the gateway ORIGIN only (never a URL that could carry
+        ?token=, R2); cookies live in the WKWebsiteDataStore.
+        The token is stripped from the address at document start (R2).
               │
               ▼
         steady state: poll GET /api/auth/me for session_exp
@@ -280,36 +281,40 @@ page if the session itself died.
 └── README.md
 ```
 
-Keeping the fork in a subdirectory (`app/`) rather than at the repo root means
-the harness, docs and any future server-side helpers are versioned alongside it
-without entangling them in upstream merges.
+Keeping the fork in a subdirectory (`app/`) keeps the harness, docs and any
+future server-side helpers out of the fork's history. **Revised:** `app/` is its
+own git repository, gitignored by the parent — they are two repositories, and a
+milestone is committed in each. Neither has a remote; commits are local.
 
 ### 4.2 Fork strategy
 
-```bash
-cd ~/src/latchkey
-git clone https://github.com/tailscale/aperture-plus app
-cd app
-git remote rename origin upstream
-git remote add origin <your fork URL>       # optional; a local-only fork is fine
-git checkout -b latchkey
-git submodule update --init --recursive     # pulls ThirdParty/libtailscale + tailscale-patched
-```
+**Revised (R16, D2).** The original sequence here — clone, rename `origin` to
+`upstream`, `git submodule update --init --recursive` — does not work: both
+submodules are declared `url = .` and their pinned commits live only as
+unreferenced objects inside the aperture-plus repository, so renaming `origin`
+broke resolution (M0 worked around it). It was replaced by:
 
-**Track upstream, don't diverge silently.** Upstream is an active experiment by
-the person who knows tsnet-on-iOS best; its bug fixes are worth having. Keep
-deletions and additions in separate commits so a future `git merge upstream/main`
-has the best chance. Record every non-obvious divergence in `docs/DECISIONS.md`.
+- **libtailscale is vendored as plain source** in `app/ThirdParty/libtailscale/`,
+  with the patched tailscale tree at `tailscale-patched/` inside it. The first
+  commit is a pristine, import-only copy of `f55900d2` and `b5adfd85`, verified
+  blob-for-blob; every Latchkey change to it is a later, separate commit.
+  Provenance and diff recipes: `app/ThirdParty/VENDORED.md`.
+- **Upstream is tracked by cherry-pick only**, from `TSNet/` and the vendored
+  tree — never a merge. After the pbxproj rewrites, the rename and the vendoring
+  a merge would be a wall of modify/delete conflicts. The last upstream revision
+  reviewed is recorded in `docs/DECISIONS.md`. New code goes in `App/`.
+- `git subtrac`, the absolute-URL `.gitmodules` workaround and
+  `scripts/bootstrap.sh` are gone; they only existed to serve the submodules.
+- Work is committed straight to `main` (no topic branches, no PRs).
 
-**License**: BSD-3-Clause. Keep `LICENSE` intact and add a `NOTICE` naming the
-origin.
+**License**: BSD-3-Clause. `LICENSE` is intact and `app/NOTICE` names the origin.
 
 ### 4.3 Identity changes
 
 | What | Where | From | To |
 |---|---|---|---|
 | Development team | `app/Aperture.xcodeproj/project.pbxproj` (10 sites: 446, 488, 525, 542, 562, 600, 666, 731, 759, 777) | `W5364U7YZB` | your personal team |
-| Bundle id (app) | same file, 581 / 619 | `io.tailscale.Aperture` | `net.lixom.latchkey` |
+| Bundle id (app) | same file, 581 / 619 — M0 found **four** sites: the Mac target shared the id | `io.tailscale.Aperture` | `net.lixom.latchkey` |
 | Bundle id (UI tests) | same file, 763 / 781 | `io.tailscale.Aperture.UITests` | `net.lixom.latchkey.UITests` |
 | Export team | `app/ExportOptions.plist` | `W5364U7YZB` | your personal team |
 | Display name | `app/Aperture/Info.plist` | Aperture | Latchkey |
@@ -528,7 +533,7 @@ likely to make the app feel unreliable in daily use.
 |---|---|
 | 8.1 | App icon and launch screen. |
 | 8.2 | Diagnostics screen: node state, selected gateway, session expiry, proxy endpoint, last error — everything needed to debug a failure without a Mac. |
-| 8.3 | Surface tsnet's own logs. Upstream writes Go/tsnet detail to `Logs/tsnet.log`, **not** to `LogRing`/`os_log`, so Settings → Logs currently hides magicsock/DERP/loopback failures. Pipe them in. |
+| 8.3 | Surface tsnet's own logs. Upstream writes Go/tsnet detail to `Logs/tsnet.log`, **not** to `LogRing`/`os_log`, so Settings → Logs currently hides magicsock/DERP/loopback failures. Pipe them in. **Local only (R1/D1):** nothing is uploaded to Tailscale's log service — upload is disabled inside the vendored libtailscale — and every line is redacted (`URL.redactedForLog`, `LogRedaction.scrub`). Revision R29 moves this before M6's device tests. |
 | 8.4 | `README.md`: build, install, re-sign, test, troubleshoot. |
 | 8.5 | Clean up upstream oddity: `Aperture/Info.plist:11-28` has a malformed nested `NSAllowsArbitraryLoadsInWebContentUsageDescription` dict. |
 | 8.6 | Decide whether to keep `NSAllowsArbitraryLoads`. We only ever load one HTTPS origin with a real cert; tightening ATS is easy hardening. |
@@ -609,7 +614,8 @@ Wrap simulator runs in a hard `timeout`; on failure, capture a screenshot and
 
 ## 7. Risks
 
-### 7.1 Xcode 27 vs the required 26 — *medium, early*
+### 7.1 Xcode 27 vs the required 26 — *resolved in M0*
+**Resolved:** framework and app build on Xcode 27 / Go 1.27.1 with no side-by-side install (DECISIONS, M0 baseline). Original text kept for context:
 Upstream mandates iOS/macOS 26.0 SDKs and Xcode 26.x; `chonk` has Xcode 27 with
 the iOS 27 SDK. A newer SDK with an unchanged deployment target normally builds
 fine, and `SWIFT_VERSION = 6.0` with strict concurrency is unchanged in 27.
@@ -618,6 +624,7 @@ Xcode 26.x side by side with `xcodes` and set `DEVELOPER_DIR`. Note that
 `DEVELOPER_DIR` does not appear anywhere in upstream's Makefile — you would add it.
 
 ### 7.2 libtailscale instability — *medium, ongoing*
+**Revised (R16):** the pin is now vendored source rather than a submodule SHA; changes arrive only by deliberate cherry-pick.
 No releases or tags ever, issues disabled, and a Tailscale maintainer describing
 iOS support as "a work-in-progress and it can be tricky to get (and keep)
 everything working reliably". **Mitigation:** we consume it through upstream's

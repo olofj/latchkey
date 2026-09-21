@@ -6,10 +6,13 @@ testing/harness/*.srl
 testing/harness/*.log
 *.ndjson
 
-# The aperture-plus fork is its own git repository (branch latchkey, remote
-# `upstream`), not a submodule of this one. See docs/DECISIONS.md; recreate it
-# with scripts/bootstrap.sh.
+# The aperture-plus fork is its own git repository (branch main; `upstream` is a
+# read-only fetch source), not a submodule of this one. It has no remote of its
+# own, so it exists only where it was built. See docs/DECISIONS.md.
 app/
+
+# Offline harness runtime state (pidfiles, logs, the proxy journal).
+testing/harness/.run/
 
 # Xcode / build
 app/build/

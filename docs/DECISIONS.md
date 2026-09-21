@@ -349,3 +349,173 @@ and the "Git workflow" section of `app/AGENTS.md` now say the same thing.
 
 PLAN.md itself is not edited in place. A separate revisions document for it is
 on its way, and this log is where divergences from the plan are recorded.
+
+---
+
+# Plan revisions (`docs/PLAN-REVISIONS.md`)
+
+## 2026-09-20 — Adopting the plan revisions
+
+**Decision:** apply `docs/PLAN-REVISIONS.md` (R1–R38, owner decisions D1–D10)
+per its "How to apply": each revision before the milestone it is filed under,
+CHECK-FIRST items verified against the current code, one entry here per
+adopted revision, and PLAN.md updated at each affected section as it is
+reached. Where a revision and PLAN.md disagree, the revision wins. §C owner
+actions are raised with Olof when a revision needs one, and nothing is built
+around a missing one.
+
+The review behind them is
+`~/.kiro/crew/workspace/latchkey-plan-review-2026-09-20.md`
+(outside this repo). Its finding IDs (B1, H3, …) are cited below.
+
+**Also applied:** R16 was pulled forward from "Before M3" because R1 needs a
+change inside libtailscale, and R16 requires every such change to follow a
+pristine import commit.
+
+## 2026-09-20 — R4: the exit-node trap was already closed (CHECK-FIRST)
+
+**Finding:** already satisfied by M1.8. `proxyEverythingRequested()` returns
+only the `-ProxyEverything` launch override and ignores `prefs.ExitNodeID`;
+both routing call sites (`proxyConfig`, `refreshProxyPolicyIfNeeded`) go
+through it. **Follow-up applied:** its "ignoring ExitNodeID" warning fired on
+every 5-second policy poll while an ID was set; it now logs once per value.
+Gating `-ProxyEverything` behind a test-only compile flag is R15 (before M2).
+
+## 2026-09-20 — R1: log upload off, URLs redacted everywhere
+
+**Decision:** no app or tsnet log line leaves the device (D1), and no log line
+anywhere carries a query string.
+
+**Measured first.** `scripts/check-no-log-upload.sh` launches the simulator
+build and samples its sockets with `lsof` every 0.5 s, failing on any
+connection to `log.tailscale.com` / `log.tailscale.io`. Against the pre-R1
+build it saw an upload to `2606:b740:1:20::102` within 60 s, which confirms
+H1 and shows the detector can see an upload. After R1, a 300 s run (486
+samples) saw only control-plane connections (`192.200.0.115:80`,
+`[2606:b740:49::116]:80`) and nothing to either log host.
+
+The first after-run also exposed a weakness in the detector: the log hosts
+rotate between sibling addresses (`.100/::102` in one run, `.101/::103` in
+the next), so an address set resolved once at startup can miss a sibling. It
+now re-resolves every ~10 s and also matches log.tailscale.com's ranges
+(`199.165.136.0/24`, `2606:b740:1:20::/64`), which were checked against the
+control plane's (`192.200.0.0/24`, `2606:b740:49::/48`) so they cannot
+false-positive on node traffic.
+
+**App side** (`app/` `2ff37512c`): `Logger.log` loses its fourth sink,
+`TailscaleLogging.log`, which mirrored every app line into a logtail pointed
+at Tailscale. New `App/Logging/LogRedaction.swift` provides
+`URL.redactedForLog` (scheme, host, port, path; `?…`/`#…` markers where
+something was dropped), `LogRedaction.describe(error)` (an interpolated
+`NSError` prints `NSErrorFailingURLStringKey` with the full query) and
+`LogRedaction.scrub`. Every URL-logging call site uses them, and
+`Logger.log` scrubs every line as a backstop for libtailscale's Go-side
+messages and future log lines. 24 host checks in `make test-policy`. The
+`make crashtest` path, `scripts/logcatcher` and the `-CrashTest` /
+`-UITestFlushLogs` hooks are removed: they verified that a Go panic is
+*uploaded* after relaunch, which is exactly what D1 turns off.
+
+**libtailscale side** (`app/` `683532aa5`, post-import per R16): a Go
+`init()` in `ThirdParty/libtailscale/latchkey_nologs.go` calls
+`envknob.SetNoLogsNoSupport()`. Both upstream upload paths — the process
+logtail from `TsnetSetupLogs` and tsnet's per-node `startLogger` — build
+their HTTP client with `logpolicy.TransportOptions.New()`, which returns a
+no-op, pretend-success transport when that knob is set, so one switch covers
+both. **The app cannot set it itself:** this is a statically linked c-archive,
+Go copies the process environment when its runtime starts (image load,
+before Swift's `main` — `runtime.goenvs_unix`, `syscall.copyenv`), and a
+`setenv` from Swift is never visible to `os.Getenv`.
+
+**Consequences, accepted with D1:** logs still reach the local filch buffers
+(drained into the no-op transport); Hostinfo reports `NoLogsNoSupport`, so
+the admin console shows logging disabled for this node; and **if the tailnet
+ever enables network flow logs (`CapabilityDataPlaneAuditLogs`), ipnlocal
+refuses to run a no-logs node** — `WantRunning=false` plus a health warning.
+The tailnet does not use flow logs today. If it starts to, this is why the
+app stops connecting.
+
+**Still open:** R1's second acceptance check — `grep -r 'token='` over the
+app container's logs after a real sign-in load — needs the app to actually
+load a `?token=` URL, which in the simulator needs M2's status-fixture path
+(R11). It will be run there.
+
+## 2026-09-20 — R2: never persist or replay the sign-in URL (CHECK-FIRST)
+
+**Finding:** not satisfied — `TabManager` wrote each tab URL to `tabs.json`
+and reopened it on cold launch. **Applied** (`app/` `b26e403f0`):
+
+- Nothing about the page is persisted. Every cold start opens the gateway, and
+  a `tabs.json` from an earlier build is deleted unread. This reverses M1's
+  reason for keeping `TabManager` ("restores the page you were last looking
+  at"). The dashboard restores its own state from the server, and the gateway
+  origin is the only safe place to land. `TabManager` stays only for the page's
+  WKWebView lifecycle.
+- The token is stripped from the address at **document start**, by a
+  main-frame `WKUserScript` that removes just the `token` parameter with
+  `history.replaceState`, keeping other parameters, the fragment and
+  `history.state`. **Why that early is safe:** KiroCrew's middleware serves the
+  page and sets both the session and refresh cookies on the same response
+  (`dashboard/token_auth.py:2891-3037`, 0.6.0), so the token has done its job
+  before any page script runs. There are no redirects in the dashboard server
+  except a canonical-host one. **Why that early is necessary:** React Router
+  snapshots the location at start, so a later rewrite could have the router
+  write the token back on its next `setSearchParams`. **Cost:** 0.6.0 reads
+  `?token=` for one optional feature — a token carrying a `prompt` claim
+  prefills the chat. Sign-in links carry no prompt.
+- The gateway field cannot persist a token either. It is saved on every
+  keystroke, and pasting a sign-in URL into it is the natural mistake.
+  `App/Browser/GatewayAddress.swift` cuts everything after `?`/`#` before
+  anything is stored and reduces a committed entry to `scheme://host[:port]`.
+- Host tests: 19 gateway-address checks, plus the exact injected script run
+  under Node against a fake `window` (9 checks, skipped cleanly without Node).
+- Verified in the simulator: launching the R2 build deleted the live data
+  root's `tabs.json`, and `workspaces.json` holds only the gateway origin.
+
+**Residue, accepted:** WebKit's in-memory `WKBackForwardListItem.initialURL`
+still holds the original request URL for that one entry. It is never
+persisted, because the app saves no interaction state.
+
+## 2026-09-20 — M1 cleanup that answers an R3 question
+
+**Finding:** R3 asks why upstream's focus script used `forMainFrameOnly:
+false` before touching it. Upstream `e8c9e6658` ("Prevent web pages from
+stealing focus from the address bar") installed it in every frame so no frame
+could call `HTMLElement.focus()` and steal keyboard focus from the address bar
+mid-edit. With the address bar deleted in M1.5, that script, the
+navigation-blanking overlay beside it and their entry points
+(`setChromeInputFocus`, `loadUserEntered`) had no callers. Its installer also
+called `removeAllUserScripts()`, which would have wiped R2's and R3's scripts.
+**Removed** in `app/` `1dfe9c530`.
+
+## 2026-09-20 — R16: libtailscale vendored as plain source (pulled forward)
+
+**Decision:** replace the `ThirdParty/libtailscale` submodule, and the
+`tailscale-patched` submodule nested inside it, with plain source.
+
+**Applied:**
+
+- **Import commit, `app/` `ace19a4ef`.** Byte-for-byte `f55900d2efb7…` and
+  `b5adfd852c01…`, gitlink and `.gitmodules` removed,
+  `ThirdParty/VENDORED.md` added, nothing else. Exported with `git archive`
+  and staged with `git add -f` from the exact file list, so no `.gitignore`
+  could drop a file. **Verified:** the mode and blob hash of all 2,867 staged
+  entries equal `git ls-tree -r` of the two pinned commits. Identical blob
+  hashes mean identical bytes.
+- **Build commit, `app/` `ffceb1162`.** The `subtrac` target and variables
+  are removed. The framework rule's source list now covers
+  `tailscale-patched/` too — as a nested submodule, `git ls-files` never
+  descended into it, so an edit to the patched Go tree could not trigger a
+  rebuild. That latent stale-binary bug disappears with the vendoring.
+- **First modification, `app/` `683532aa5`** (R1). `make framework` rebuilt
+  the xcframework from the vendored tree, the first proof that it builds.
+- `scripts/bootstrap.sh` is deleted. It cloned upstream and fixed the
+  submodule URLs, so with vendored source and no remote of our own it could
+  only reproduce upstream's pristine tree, which is not Latchkey.
+  **Consequence to know about:** `app/` now exists only on chonk (and in its
+  backups). The parent repo gitignores it, and Olof has said there are no
+  remotes for now.
+- **Upstream tracking is cherry-pick only**, from `TSNet/` and the vendored
+  tree. **Last upstream revision reviewed: `dba0555`** — upstream `main` is
+  still at the fork point (`git ls-remote`, 2026-09-20).
+
+Supersedes the M0 entry "Submodule URLs rewritten to an absolute URL".
