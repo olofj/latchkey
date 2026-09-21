@@ -1,21 +1,121 @@
 # Latchkey (app)
 
-A single-purpose iPhone app for reaching a self-hosted
-[KiroCrew](https://github.com/kirodotdev/KiroCrew) dashboard over Tailscale,
-with the Tailscale node embedded in the app binary. No system VPN.
-
-This directory is a fork of
+A single-purpose iPhone app that reaches a self-hosted
+[KiroCrew](https://github.com/kirodotdev/KiroCrew) dashboard over Tailscale
+without a system VPN. It brings up a userspace Tailscale node inside its own
+process, points a `WKWebView` at that node's loopback SOCKS5 proxy, and loads
+the one dashboard. One window, one destination: no tabs, no address bar, no
+bookmarks, no macOS app. It is a fork of
 [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) — see
-[`NOTICE`](NOTICE) for attribution and [`../docs/PLAN.md`](../docs/PLAN.md) for
-what is being built and why. Every divergence from upstream is recorded in
-[`../docs/DECISIONS.md`](../docs/DECISIONS.md).
+[`NOTICE`](NOTICE) for attribution, [`../docs/PLAN.md`](../docs/PLAN.md) for
+what is being built and why, and [`../docs/DECISIONS.md`](../docs/DECISIONS.md)
+for every divergence from upstream. [`AGENTS.md`](AGENTS.md) has the working
+notes that are easy to get wrong.
 
-## What it is
+Bundle id `net.lixom.latchkey`; one target and one scheme, `Latchkey`.
 
-One window, one destination. The app brings up a userspace Tailscale node
-inside its own process, points a `WKWebView` at that node's loopback SOCKS5
-proxy, and loads the dashboard. There are no tabs, no address bar, no
-bookmarks, and no macOS app — all removed in milestone M1.
+## First-time setup
+
+Verified on Xcode 27.0 (iOS 27 SDK; deployment target iOS 26.0) and Go 1.27.1.
+
+```bash
+make framework     # TailscaleKit.xcframework from the vendored libtailscale — needs Go; slow the first time
+make app           # simulator build
+make test-policy   # host-only unit tests, ~2 s, no simulator
+make help          # everything else
+```
+
+The xcframework is **not in git**. It is built from
+`ThirdParty/libtailscale/` (plain vendored source, not a submodule — see
+[`ThirdParty/VENDORED.md`](ThirdParty/VENDORED.md)) into
+`ThirdParty/libtailscale/swift/build/Build/Products/Release-iphonefat/TailscaleKit.xcframework`,
+and stamped with a hash of the sources it was built from. `make framework`
+skips the build when the stamp matches and fails when it does not; every Go
+change needs it.
+
+If a build inside an agent shell or CI fails with
+`sandbox_apply: Operation not permitted`, the shell forbids nested sandboxes.
+`make` detects this and passes `-disable-sandbox` to the Swift driver; force
+it with `NESTED_SANDBOX=1` or off with `NESTED_SANDBOX=0`. The symptom
+without the fix is a flood of `cannot find '$binding' in scope` errors.
+
+### Signing
+
+Signing is a **free personal team**, deliberately (PLAN §7.7): the vendored
+xcframework has no privacy manifest, so there is no TestFlight or App Store
+path, and a paid team would buy only a longer profile. The owner actions
+before the first device install are O1–O3 in
+[`../docs/PLAN-REVISIONS.md`](../docs/PLAN-REVISIONS.md) §C: the Apple ID
+in Xcode (O1), Developer Mode on the phone (O2), and the tailnet policy that
+puts a new node in purgatory until it is moved into `kiro-clients` (O3, then
+O3b after the first login). Do them in that order.
+
+`DEVELOPMENT_TEAM` is blank in the project on purpose. Open
+`Latchkey.xcodeproj`, select the `Latchkey` target → Signing & Capabilities,
+and pick your personal team; Xcode manages the profile from there. A free
+team allows three sideloaded apps per device.
+
+## Installing on the iPhone
+
+1. Plug the phone into the Mac and trust it; Developer Mode must be on
+   (Settings → Privacy & Security → Developer Mode).
+2. In Xcode, choose the phone as the run destination and press Run. This
+   installs the Debug configuration, which carries no test hooks.
+3. The first time, trust the profile on the phone under General → VPN &
+   Device Management.
+
+`make ipa` (archive + export a dev-signed `.ipa` under `build/ipa/`) is for
+a paid team only: it needs `teamID` in `ExportOptions.plist` and a profile
+that lasts. With a free team, Run from Xcode is the install path.
+
+## The weekly re-sign
+
+A free team's provisioning profile expires **7 days** after the build. The
+app warns **48 hours** ahead — a banner above the dashboard and the
+"Profile expires" row under Settings → Status — and after that it simply
+stops launching. The ritual: plug the phone in, press Run in Xcode, done.
+Nothing else changes: the app's data (the node identity, the chosen gateway,
+the dashboard session) survives a rebuild over the installed app.
+
+Two things break that:
+
+- **Deleting the app** deletes its node key and session. The next install is
+  a new node, which lands back in purgatory (O3b again) and needs a new
+  dashboard token.
+- **Moving to a paid team** changes the Team ID, and a different Team ID is
+  a different app to iOS: delete and reinstall, with the same consequences
+  (PLAN §7.7). Pick a convenient moment.
+
+## First run
+
+1. **Connect the node.** The connection gate shows the Tailscale status
+   and a Login button. Login opens Tailscale's sign-in in a browser sheet;
+   sign in with your own account, so the node is yours and untagged. The
+   node is named `latchkey-iphone` (Settings → Name). Do not rename it once
+   the dashboard is signed in: KiroCrew ties the session to your login and
+   the node name, and a rename signs it out.
+2. **Approval and purgatory.** If the tailnet requires device approval, the
+   gate says so and connects by itself once you approve the machine in the
+   admin console. Then move the node out of purgatory (O3b). Until that is
+   done the node is connected but can reach nothing — expected, not a bug.
+3. **Find the gateway.** With no gateway saved, the app sweeps the tailnet
+   for KiroCrew gateways: online peers of yours, probed over HTTPS through
+   the node's own proxy, a match being `/manifest.json` named "Kiro Crew"
+   plus `/api/auth/me` demanding auth. One match is chosen automatically;
+   otherwise the "Choose a gateway" picker lists what it found, with
+   "Search again" and "Enter manually". The choice is kept. Change it later
+   under Settings → Gateway, or with "Find gateways…" there. A gateway looks
+   like `https://byskebox.tail-scale.ts.net/`.
+4. **Sign in to the dashboard.** The dashboard loads and asks for a token;
+   the app puts up its own sheet. On a computer run `kirocrew token` and
+   paste what it prints (a link or the bare token; the app applies it to the
+   selected gateway only), or tap "Scan QR code" and scan the Phone access
+   card on the dashboard. A link is valid for 5 minutes. After that the page
+   keeps its own 30-day session refreshed; CLI-link sessions survive a
+   gateway restart, QR sessions do not unless the gateway is configured for
+   it (PLAN M7.5). Never paste a token anywhere but the app.
+5. **Turn the Tailscale app's VPN off** and confirm the dashboard still
+   loads. That is the point.
 
 ## How traffic is routed (split tunnel)
 
@@ -24,7 +124,7 @@ Only **tailnet** destinations go through the embedded node's SOCKS5 proxy:
 | destination | route |
 | --- | --- |
 | Tailnet IPs (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) | via the tsnet proxy |
-| MagicDNS names — `https://byskebox.your-tailnet.ts.net/` | via the tsnet proxy |
+| MagicDNS names — `https://byskebox.tail-scale.ts.net/` | via the tsnet proxy |
 | Everything else (fonts, CDN scripts the dashboard loads) | **direct**, like any other app |
 
 This is least-privilege, and it is also required for correctness: routing
@@ -42,99 +142,94 @@ See **Settings → Routing** in the app for the live rules and a per-host test,
 comment before touching it), and `scripts/proxy-semantics/README.md` for how
 the behaviour was measured.
 
-## Build
-
-```bash
-make framework     # TailscaleKit.xcframework — needs Go; slow the first time
-make app           # simulator build
-make test-policy   # host-only unit tests, ~2s, no simulator needed
-make help          # everything else
-```
-
-Requires Xcode and Go. Built and verified on Xcode 27.0 / iOS 27 SDK and Go
-1.27.1, both newer than upstream asks for.
-
-The xcframework is **not in git** and must exist at
-`ThirdParty/libtailscale/swift/build/Build/Products/Release-iphonefat/TailscaleKit.xcframework`
-before the project will build. A missing-framework error means you skipped
-`make framework`.
-
-### Vendored libtailscale
-
-`ThirdParty/libtailscale/` (with `tailscale-patched/` inside it) is plain
-source committed into this repository, not a submodule — see
-[`ThirdParty/VENDORED.md`](ThirdParty/VENDORED.md) for provenance, the pinned
-upstream revisions, and how to diff against upstream. Every Latchkey change
-to it is a separate commit after the pristine import.
-
-### If the build fails with `sandbox_apply: Operation not permitted`
-
-You are building inside a sandbox that forbids nested sandboxes (an AI coding
-agent's shell, some CI runners). `make` detects this and passes
-`-disable-sandbox` to the Swift driver; force it either way with
-`make app NESTED_SANDBOX=1` or `NESTED_SANDBOX=0`. Without it, Swift macro
-expansion fails and the build drowns in misleading
-`cannot find '$binding' in scope` errors that point at the wrong layer
-entirely. See `../docs/DECISIONS.md`.
-
-## Install on a device
-
-Signing is deliberately personal-sideload only; there is no TestFlight path
-(the vendored TailscaleKit xcframework fails App Store validation for a missing
-privacy manifest — [libtailscale#57](https://github.com/tailscale/libtailscale/pull/57)).
-
-1. Open `Latchkey.xcodeproj` in Xcode.
-2. Select the `Latchkey` target → Signing & Capabilities → pick your team.
-   `DEVELOPMENT_TEAM` is intentionally blank in the project so Xcode prompts.
-3. Enable Developer Mode on the phone (Settings → Privacy & Security), then
-   press Run.
-4. Trust the profile under General → VPN & Device Management.
-
-With a **free** Apple ID the provisioning profile expires after 7 days and the
-app stops launching until you rebuild; its data survives. The $99 program makes
-profiles last a year and is the only thing that changes. `make ipa` exists for
-a paid team — set `teamID` in `ExportOptions.plist` first.
-
 ## Tests
 
-| Layer | Command | Needs |
+The strategy is PLAN §6: push coverage down to layers that need no tailnet.
+Run the suites by tier from the parent repository:
+
+```bash
+../scripts/test-all.sh            # quick, about 4–5 min: while iterating
+../scripts/test-all.sh --full     # about 13 min: before a milestone or review commit
+../scripts/test-all.sh --build    # build for testing once, in the first simulator suite
+```
+
+Quick runs the host tests, the vendored Go tests, L1 and L2, and adds the
+session and discovery suites only when code they exercise changed since the
+last full pass. Full runs everything and records the commits it passed, which
+is what quick compares against. Every simulator suite fails unless every test
+in its file passed: a stale build that runs nothing is not a pass.
+
+| Suite | Command | What it covers |
 |---|---|---|
-| L0 host unit tests | `make test-policy` | nothing (~2s) |
-| L1 offline harness | `../scripts/test-offline.sh` | simulator + Python (M2) |
-| L2 fake control plane | `../scripts/test-tsnet.sh` | simulator (M3) |
-| L4 real tailnet | `make test-ios-ui` | a tailnet **and** an auth key |
+| L0 host | `make test-policy` | Split tunnel, hostname qualification, log redaction, proxy config, token parsing, gateway candidates, diagnostics — pure logic, ~2 s, no simulator |
+| Go | (in `../scripts/test-all.sh`) | The vendored library's local log and the logtail patch |
+| L1 offline | `../scripts/test-offline.sh` | The real app and WKWebView against a stub SOCKS5 proxy and a fake dashboard, including the anti-leak tests; <3 min |
+| L2 tailnet | `../scripts/test-tailnet.sh` | The app's real tsnet node against a host-side fake control plane: login, approval, key expiry, MagicDNS, diagnostics; <5 min |
+| M4 session | `../scripts/test-session.sh` | The dashboard session against KiroCrew's real, pinned frontend served by the fake gateway; ~6 min |
+| M5 discovery | `../scripts/test-discovery.sh` | Gateway discovery on the L2 harness with a real-looking gateway, a non-gateway, a dead peer and one that never answers, plus R26's timing budget; ~1.5 min |
+| inherited | `../scripts/test-inherited.sh` | The three upstream XCUITests that need no tailnet; full tier only |
+| L4 real tailnet | `make test-ios-ui` | The rest of the inherited XCUITest suite: needs a tailnet and an auth key at `~/.aperture-ios-authkey` |
 
-`make test-ios-ui` runs the inherited XCUITest suite. Most of it needs a real
-tailnet plus an auth key staged at `~/.aperture-ios-authkey`, which is exactly
-the dependency milestones M2 and M3 exist to remove — see `../docs/PLAN.md` §6.
-Three tests are connection-independent and pass with no tailnet at all:
-`testAppLaunchesAndShowsStatus`, `testOpenAndCloseSettings`,
-`testHomePageSettingPersistsAcrossSettingsReopen`.
+Each simulator script takes `--build`; without it the last test build is
+reused. On failure they leave a screenshot, the harness logs and the xcresult
+under `build/offline-logs/`, `build/tailnet-logs/`, `build/discovery-logs/`
+or `build/uitest-logs/`, one directory per run. Two more, run by hand:
+`make test-lock-resume` freezes the app process and asserts a prompt resume;
+`../scripts/check-no-log-upload.sh` watches the app's sockets for Tailscale's
+log service, which the vendored library must never contact. After a KiroCrew
+upgrade, `../testing/harness/contract_test.py` against a real gateway checks
+that the fake backend has not drifted (O7).
 
-`README.ui-automation.md` documents the test tooling, log capture and
-simulator handling. It predates the fork, so its references to tabs, bookmarks
-and the macOS target no longer apply.
+`README.ui-automation.md` documents the simulator tooling and log capture in
+depth. It predates the fork, so its references to tabs, bookmarks and the
+macOS target no longer apply.
 
-## Diagnostics
+## Troubleshooting
 
-Everything needed to debug a failure without a Mac lives in Settings:
+Everything needed to debug a failure on a phone that is not attached to a Mac
+is under Settings → Diagnostics. Each screen has Copy.
 
-- **Routing** — the live split-tunnel rules, plus a field to test any host.
+- **Status** — the node (state, name, tailnet, addresses, peers, key
+  expiry), the gateway and the last discovery, the dashboard session and
+  when it and its access token expire, the proxy endpoint and rules, the
+  last page error, and the app's version, configuration and profile expiry,
+  with any warnings. Nothing secret is on it.
+- **Node log (tsnet)** — tsnet's own lines: control, magicsock, DERP and
+  loopback, which the app's log never sees. Kept locally and redacted, never
+  uploaded. A switch shows the process's raw stderr — a Go panic from the
+  last run — which is not kept under Xcode or XCTest.
 - **Logs** — the app's own log ring, including a `socks[n]` line for every
-  proxy connection attempt and its outcome. Moved here from the deleted
-  browser toolbar; it is the only diagnostic channel on a device that cannot be
-  attached to a Mac.
+  proxy connection attempt and its outcome; the filter defaults to `socks`.
+- **Routing** — the live split-tunnel rules and a field to test any host.
 
-Streaming from a Mac:
+From a Mac, with the simulator:
 
 ```bash
 xcrun simctl spawn booted log stream --level debug \
   --predicate 'subsystem == "net.lixom.latchkey"'
 ```
 
+Common failures:
+
+| Symptom | Cause and fix |
+|---|---|
+| `no such module 'TailscaleKit'`, or a missing-framework error | The xcframework is not built: `make framework`. |
+| `STALE: TailscaleKit.xcframework was not built from the current libtailscale sources` | A Go change since the last build, or an interrupted one: `make -B framework`. `make check-framework` asks without building. |
+| `sandbox_apply: Operation not permitted` | Nested sandbox; see First-time setup. |
+| The app does not launch on the phone; last week it did | The 7-day profile expired. Plug in, Run from Xcode. For the 48 hours before, the dashboard and Status said "This build of Latchkey stops launching in …". |
+| "Login Required" banner over the dashboard | The node key expired (or an admin expired it). Login signs in again in place; the dashboard stays up. The key warns 14 days ahead; disable key expiry for the device in the admin console to avoid it. |
+| "Waiting for approval" banner | The device was revoked or the tailnet requires approval. Approve it under Machines in the admin console; the banner goes by itself. |
+| "No KiroCrew gateway with this name is in your tailnet" | The saved gateway is not among the node's peers, or discovery is stale. **Find** re-sweeps and opens the picker; **Change** opens Settings → Gateway. A new node that is connected but reaches nothing is still in purgatory: O3b. |
+| The picker says the tailnet connection isn't passing traffic yet | The node is not Running yet, or every probe failed at the proxy. Check Status, then Search again. |
+| Public resources on the page fail with "invalid URL" (-1000) while the dashboard loads | The split tunnel is proxying everything; Settings → Routing shows it. Someone changed `TailnetProxyPolicy` or launched with `-ProxyEverything`. |
+| "Your dashboard session has ended" | The page's refresh chain ended (a gateway restart on a QR session, or 30 days). Mint a new token and use the sheet. |
+| Logout under Settings | Deletes the session, including the tailnet identity and website data. The next launch is a new node: purgatory, then a new token. Not a fix for anything above. |
+
 ## Adding source files
 
 `App/` and `UITests/` are Xcode **synchronized folder groups** — a new
 `.swift` file there is compiled automatically. `TSNet/` is **not**: it has a
 `membershipExceptions` list in `project.pbxproj`, and a new file dropped there
-is silently not compiled until you add its name to that list.
+is silently not compiled until you add its name to that list. The app icon is
+rendered by `scripts/render-app-icon.swift`; rerun it rather than editing the
+PNG.
