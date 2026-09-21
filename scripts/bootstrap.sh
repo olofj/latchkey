@@ -18,7 +18,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$REPO_ROOT/app"
 UPSTREAM_URL="https://github.com/tailscale/aperture-plus"
 UPSTREAM_SHA="dba05551d3577825ecc44ca8dd0645c9eaca1f8c"
-BRANCH="latchkey"
 
 say() { printf '::: %s\n' "$*"; }
 
@@ -26,7 +25,13 @@ if [ ! -d "$APP_DIR/.git" ]; then
     say "Cloning $UPSTREAM_URL -> app/"
     git clone "$UPSTREAM_URL" "$APP_DIR"
     git -C "$APP_DIR" remote rename origin upstream
-    git -C "$APP_DIR" checkout -b "$BRANCH" "$UPSTREAM_SHA"
+    # Work happens directly on `main` -- single developer, no topic branches
+    # (docs/DECISIONS.md). Pin it to the fork point, and stop it tracking
+    # upstream/main so a bare `git pull` cannot drag in upstream changes and a
+    # bare `git push` does not try to write to tailscale/aperture-plus. Upstream
+    # merges are deliberate: `git merge upstream/main`.
+    git -C "$APP_DIR" checkout -q -B main "$UPSTREAM_SHA"
+    git -C "$APP_DIR" branch --unset-upstream main
 else
     say "app/ already exists; leaving its history alone"
 fi

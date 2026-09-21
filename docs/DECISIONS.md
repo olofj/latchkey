@@ -211,3 +211,141 @@ pushing `app/` to a private remote is a real (small) follow-up before this is
 backed up anywhere.
 
 **M0 landed as `app/` commit `3cc8d5f94`.**
+
+---
+
+# M1 — Strip to single purpose
+
+## 2026-09-20 — Also remove TestFlight/App Store, not just macOS
+
+**Decision:** delete the `tf*` Makefile targets, `ExportOptions.AppStore.plist`,
+`ExportOptions.MacAppStore.plist`, `scripts/tf-check-creds.sh` and
+`README.testflight.md` along with the macOS target. Keep `make ipa`.
+
+**Why:** §1.3 lists App Store/TestFlight as a non-goal, and the route is not
+merely unwanted but closed: the vendored `TailscaleKit.xcframework` fails App
+Store validation for a missing privacy manifest
+([libtailscale#57](https://github.com/tailscale/libtailscale/pull/57), open and
+blocked). Leaving the targets in place invites someone to spend forty minutes
+on an archive that cannot be uploaded. `make ipa` is dev-signed for a real
+device, which *is* the install path, so it stays.
+
+**Evidence:** `app/Makefile`; `app/scripts/strip-mac-makefile.py`.
+
+## 2026-09-20 — `proxyEverythingRequested()` no longer reads `prefs.ExitNodeID`
+
+**Decision:** the split tunnel's "proxy everything" mode is now reachable only
+through the `-ProxyEverything` launch override. A non-empty `ExitNodeID` in
+prefs is logged and ignored.
+
+**Why:** upstream tied the two together deliberately — an exit node is the one
+legitimate reason to push public traffic through the tailnet — and the Exit
+Node toggle doubled as the on-device routing control. §1.8 removes that toggle
+because exit nodes are broken under tsnet (§7.4). That leaves a trap: nothing
+can clear an `ExitNodeID` any more, so one arriving from restored prefs or a
+tailnet policy would silently route every public request through a proxy with
+nothing carrying it, and the user would have no way to turn it off. The
+symptom would be "the whole internet is broken in this app", with no control
+to undo it.
+
+`TailnetProxyPolicy` itself is untouched, and `make test-policy` still covers
+the proxies-everything case — `-ProxyEverything` still reaches it.
+
+**Evidence:** `TSNet/TSNetManager.swift`, `proxyEverythingRequested()`.
+
+## 2026-09-20 — A floating gear on the dashboard
+
+**Decision:** `DashboardRootView` draws one small, semi-transparent gear in the
+top-trailing corner, carrying the same `settings-button` identifier the
+connection gate uses.
+
+**Why:** this was a bug introduced by §1.5, caught by the UI tests. Deleting
+the browser toolbar also deleted the only Settings entry point that exists
+*after* connecting — the gate's gear is gone by then. Settings owns the log
+viewer and the routing diagnostic, which §1.9 explicitly says to keep, so
+without this they were reachable only by ⌘, on a hardware keyboard: that is to
+say, not at all on an iPhone.
+
+Rejected: leaving it keyboard-only (unusable on the target device); a
+swipe/long-press gesture (undiscoverable, and it would fight the dashboard's
+own gestures); restoring a toolbar (defeats §1.4/§1.5).
+
+**Evidence:** `App/Browser/DashboardRootView.swift`, `settingsAffordance`.
+
+## 2026-09-20 — The log viewer moved into Settings
+
+**Decision:** `LogViewer` is presented from `SettingsView` → Diagnostics rather
+than from the browser view.
+
+**Why:** the same §1.5 fallout. Its only entry point was the compact toolbar's
+"more" menu. Settings is reachable from both the gate and the dashboard, so
+putting it there also makes the logs readable *before* the tailnet connects —
+which is when a connection failure most needs reading.
+
+**Evidence:** `App/Settings/SettingsView.swift`, the `Diagnostics` section.
+
+## 2026-09-20 — UI test suite: 29 tests → 13, and what that costs
+
+**Decision:** delete the 16 tests whose features no longer exist; re-point the
+survivors at the UI that does.
+
+**Removed as dead:** exit node (1), tabs (3), bookmarks (1), address bar (1),
+workspace switcher (2), the connection-type indicator that lived in the deleted
+toolbar (1), and two keyboard-layout tests that assert against the Aperture
+chat UI's own input field — KiroCrew's dashboard is a different page.
+
+**Removed as a real coverage loss (4), and worth naming:**
+`testBadURLShowsErrorOverlay`, `testNavErrorOverlayShowsEscapedURLAndCategory`,
+`testHTTPSCertMismatchShowsError`, `testValidHTTPSURLDoesNotShowInvalidError`.
+The navigation-error overlay they cover still exists and still matters — it is
+what the user sees when the gateway is unreachable. They are gone only because
+every one of them navigated by typing into the deleted address bar. **M2 must
+re-establish this coverage at L1**, where the harness can serve a bad response
+or a bad certificate directly and no URL bar is needed. Cheaper and more
+deterministic there than it ever was here.
+
+**Re-pointed:** the "is the browser up" anchor moved from the toolbar's More
+button to `connected-browser`; reload moved from a toolbar button to ⌘R;
+`openSettings` collapsed from two paths (gear on iPad, More menu on iPhone) to
+one gear in both; the Logs path now goes through Settings; the brand-header
+identifier changed with the rename; and the default-gateway URL became a single
+fixture constant rather than four copies of `http://ai/chat`, so M5 changes it
+in one place.
+
+**Evidence:** `scripts/prune-uitests.py`, `scripts/repoint-uitests*.py`.
+
+## 2026-09-20 — Branding is a placeholder, and looks like one
+
+**Decision:** the brand header is an SF Symbol plus the text "Latchkey". The
+`ApertureIcon` and `ApertureWordmark` image assets are deleted.
+
+**Why:** they are Tailscale's marks and this is not Tailscale's app. A
+deliberately plain placeholder is also honest about M8.1 being unfinished,
+where a borrowed logo that looks finished would not be. The `AppIcon` set is
+left alone for now — it is what the installer needs to not be a blank tile, and
+M8.1 replaces it.
+
+**Evidence:** `App/LatchkeyBrandHeader.swift`.
+
+## 2026-09-20 — Commit directly to `main`; no topic branches
+
+**Decision:** all work is committed straight to the main line: `main` in
+`app/`, `master` in the parent (its only branch). No topic branches, pull
+requests or merges of our own. Supersedes PLAN §4.2's
+`git checkout -b latchkey` and the two mentions of a `latchkey` branch
+earlier in this log.
+
+**Why:** Olof's instruction, 2026-09-20: this is a single-developer repository
+with no outside contributors, so branch-and-merge ceremony buys nothing. If
+that changes, the approach changes with it.
+
+**Applied:** in `app/`, local `main` was fast-forwarded to the tip of the old
+`latchkey` branch (a straight line on top of the fork point, so no merge was
+involved) and `latchkey` was deleted. No history was rewritten. `main` no
+longer tracks `upstream/main`, so pulling cannot silently bring upstream in and
+pushing does not aim at tailscale/aperture-plus. Upstream merges stay
+deliberate: fetch `upstream`, then merge `upstream/main`. `scripts/bootstrap.sh`
+and the "Git workflow" section of `app/AGENTS.md` now say the same thing.
+
+PLAN.md itself is not edited in place. A separate revisions document for it is
+on its way, and this log is where divergences from the plan are recorded.
