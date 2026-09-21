@@ -53,6 +53,24 @@ non-goals, not omissions.
   `../scripts/bootstrap.sh`. See `../docs/DECISIONS.md` for why `url = .` does
   not survive renaming `origin` to `upstream`.
 
+## Git workflow
+
+Single-developer repositories with no outside contributors, so:
+
+- **Commit directly to `main`** — here in `app/`, and in the parent repo
+  (whose one branch is `master`). No topic branches, no pull requests, no
+  merge commits of our own. If that changes, this section changes with it.
+- `app/` and the parent are **two separate git repositories** (the parent
+  gitignores `app/`). A milestone usually touches both: code here, docs and
+  the offline harness there. Commit each one.
+- `upstream` is tailscale/aperture-plus. Local `main` deliberately does not
+  track it, so a bare `git pull` cannot drag in upstream changes and a bare
+  `git push` does not try to write to Tailscale's repository. Bring upstream
+  in on purpose with `git fetch upstream && git merge upstream/main`, and
+  expect to rerun the `scripts/strip-*.py` surgery afterwards.
+- Keep deletions and additions in separate commits where practical, so that
+  merge has the best chance (PLAN §4.2).
+
 ## Adding source files (do NOT hand-edit project.pbxproj for new files)
 
 `App/` and `UITests/` are Xcode **synchronized folder groups**
