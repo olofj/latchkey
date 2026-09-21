@@ -93,6 +93,12 @@ struct SettingsView: View {
                         }
                     Text("The name of this node on your Tailnet")
                         .font(Font.caption2)
+                    // R6: KiroCrew pins identity-bound sessions to login plus
+                    // node name, so a rename signs the dashboard out.
+                    Text("Renaming it after you have signed in to the dashboard signs the dashboard out: KiroCrew ties sessions to your login and this name.")
+                        .font(Font.caption2)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("hostname-rename-warning")
                 }
 
                 Section(header: Text("Home Page")) {
@@ -151,7 +157,7 @@ struct SettingsView: View {
     }
 
     private var logoutAlertMessage: some View {
-        Text("This will delete this session, including its tailnet identity, saved page and website data.")
+        Text("This will delete this session, including its tailnet identity and website data.")
     }
 
     // MARK: - Routing (split tunnel) diagnostic

@@ -33,6 +33,9 @@
 
 import Foundation
 import TailscaleKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// The last-known Tailscale identity for a workspace, persisted so the
 /// workspace identifier can render immediately on the next launch (before the
@@ -63,19 +66,41 @@ struct WorkspaceDefinition: Codable, Identifiable {
     var lastKnownIdentity: WorkspaceIdentity?
 
     /// The single workspace created on first launch (or when the list is
-    /// empty): a generated tailnet hostname, the default gateway, the default
+    /// empty): a deliberate tailnet hostname, the default gateway, the default
     /// control URL, and the launch-arg ephemeral flag.
     static func makeDefault() -> WorkspaceDefinition {
         WorkspaceDefinition(
             id: UUID(),
             displayName: "Latchkey",
-            hostname: TSNetManager.generateDefaultHostName(),
+            hostname: defaultHostName,
             homePageURL: HomePage.defaultURL,
             controlURL: kDefaultControlURL,
             ephemeral: TSNetManager.launchEphemeral(),
             dataStoreUUID: UUID(),
             lastKnownIdentity: nil
         )
+    }
+
+    /// The tailnet node's name, fixed before it first signs in (revision R6).
+    ///
+    /// Upstream used a random `aperture-NNNNNN`. The name matters more than it
+    /// looks: KiroCrew pins identity-bound sessions to `login|node name`
+    /// (`ts:node:<login>|<Name>`), so renaming the node after the first
+    /// dashboard sign-in signs the app out. It is also what an admin sees
+    /// when moving the node out of the purgatory pool (§C O3b). So it is
+    /// recognisable and set from the start. `latchkey-iphone` was proposed in
+    /// R6 and put to Olof; the iPad variant keeps the same shape.
+    ///
+    /// If a node with this name already exists in the tailnet — say, from an
+    /// earlier install whose node was never logged out — control assigns the
+    /// new one a suffixed MagicDNS name (`latchkey-iphone-1`). R32's "reset
+    /// app" logs the node out so reinstalls do not accumulate.
+    static var defaultHostName: String {
+#if canImport(UIKit)
+        UIDevice.current.userInterfaceIdiom == .pad ? "latchkey-ipad" : "latchkey-iphone"
+#else
+        "latchkey"
+#endif
     }
 }
 
