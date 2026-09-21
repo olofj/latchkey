@@ -94,8 +94,7 @@ struct TabbedBrowserView: View {
                             // Logout explicitly deletes the session. Merely closing
                             // a native Mac window never calls this path.
                             workspaceManager.deleteWorkspace(id: ws.id)
-                        },
-                        vmManager: workspaceManager.vmManager
+                        }
                     ),
                     dismissAction: { showingSettings = false }
                 )

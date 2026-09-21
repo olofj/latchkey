@@ -38,9 +38,6 @@ final class WorkspaceManager: ObservableObject {
     /// into the persisted `activeWorkspace` on each focus. In-memory only; on
     /// relaunch it falls back to the persisted active workspace.
     private(set) var lastFocusedWorkspaceID: UUID?
-    /// Native macOS installs a supervisor here. It is nil on iOS and keeps
-    /// workspace deletion independent of any VM console window.
-    weak var vmManager: (any WorkspaceVMManaging)?
     /// Shared launch-only auth key used by automation. Never persisted.
     private let authKey: String?
 
@@ -279,7 +276,6 @@ final class WorkspaceManager: ObservableObject {
         // erase the old session away from the button action. The Workspace is
         // retained by this task until its node and stores are no longer in use.
         Task {
-            await vmManager?.deleteVMAndWait(for: removed)
             await removed.deleteSessionData()
         }
     }

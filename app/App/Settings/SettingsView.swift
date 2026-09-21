@@ -84,11 +84,6 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var settingsSections: some View {
-                if let vmManager = viewModel.vmManager {
-                    WorkspaceVMSettingsSection(workspace: viewModel.workspaceForSettings,
-                                               manager: vmManager)
-                }
-
                 Section(header: Text("Name")) {
                     TextField("Tailnet HostName", text: $viewModel.tailnetHostName)
 #if canImport(UIKit)

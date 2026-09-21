@@ -192,40 +192,6 @@ enum WorkspaceStore {
         try? FileManager.default.removeItem(at: tabsURL(workspaceID))
     }
 
-    // MARK: - Workspace appliance paths
-
-    static func vmDir(_ id: UUID) -> URL {
-        workspaceDir(id).appending(path: "VM", directoryHint: .isDirectory)
-    }
-
-    static func vmMetadataURL(_ id: UUID) -> URL {
-        vmDir(id).appending(path: "metadata.json")
-    }
-
-    static func vmDiskURL(_ id: UUID) -> URL {
-        vmDir(id).appending(path: "disk.raw")
-    }
-
-    static func vmArtifactDirectory(_ id: UUID) -> URL {
-        vmDir(id).appending(path: "Artifacts", directoryHint: .isDirectory)
-    }
-
-    static func loadVMMetadata(_ id: UUID) -> WorkspaceVMMetadata? {
-        guard let data = try? Data(contentsOf: vmMetadataURL(id)) else { return nil }
-        return try? JSONDecoder.workspaceVM.decode(WorkspaceVMMetadata.self, from: data)
-    }
-
-    static func saveVMMetadata(_ metadata: WorkspaceVMMetadata, workspaceID: UUID) {
-        guard let data = try? JSONEncoder.workspaceVM.encode(metadata) else { return }
-        let dir = vmDir(workspaceID)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? data.write(to: vmMetadataURL(workspaceID), options: .atomic)
-    }
-
-    static func removeVM(_ workspaceID: UUID) {
-        try? FileManager.default.removeItem(at: vmDir(workspaceID))
-    }
-
     // MARK: - Load / save
 
     /// On-disk envelope for `workspaces.json`.
@@ -256,19 +222,4 @@ enum WorkspaceStore {
     }
 }
 
-private extension JSONEncoder {
-    static var workspaceVM: JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return encoder
-    }
-}
 
-private extension JSONDecoder {
-    static var workspaceVM: JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }
-}

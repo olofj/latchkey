@@ -93,17 +93,14 @@ final class SettingsViewModel: ObservableObject {
 
     private let workspace: Workspace
     private let deleteSession: () -> Void
-    let vmManager: (any WorkspaceVMManaging)?
     var workspaceForSettings: Workspace { workspace }
     private var observers: Set<AnyCancellable> = []
     private var homePageNormalizationTask: Task<Void, Never>?
 
     init(workspace: Workspace,
-         deleteSession: @escaping () -> Void,
-         vmManager: (any WorkspaceVMManaging)? = nil) {
+         deleteSession: @escaping () -> Void) {
         self.workspace = workspace
         self.deleteSession = deleteSession
-        self.vmManager = vmManager
         // Seed from the workspace's persisted definition + home page.
         self.tailnetHostName = workspace.definition.hostname
         self.homePage = workspace.homePage.url
