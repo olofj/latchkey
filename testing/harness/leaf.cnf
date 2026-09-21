@@ -2,6 +2,14 @@
 distinguished_name=dn
 [dn]
 [ext]
-subjectAltName=DNS:dash.tail-scale.ts.net,DNS:localhost,IP:127.0.0.1
+# dash.tail-scale.ts.net  the fixture tailnet's gateway, reached through the stub
+#                         proxy (NXDOMAIN in public DNS, so it can only work
+#                         proxied)
+# dash.localtest.me       a PUBLIC name that resolves to 127.0.0.1 and ::1. The
+#                         anti-leak test's origin (R10): unlike a .ts.net name, a
+#                         leaked direct connection to it would SUCCEED, so the
+#                         test can actually detect one
+# localhost, 127.0.0.1, ::1  the control plane of the tests themselves
+subjectAltName=DNS:dash.tail-scale.ts.net,DNS:dash.localtest.me,DNS:localhost,IP:127.0.0.1,IP:::1
 extendedKeyUsage=serverAuth
 basicConstraints=CA:FALSE
