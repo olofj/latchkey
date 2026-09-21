@@ -60,6 +60,17 @@ enum TestHooks {
 #endif
     }
 
+    /// True when any launch argument starts with `prefix`, in a test build:
+    /// for telling "absent" from "present but malformed" (`-Name=value`,
+    /// `-Name` with no value).
+    nonisolated static func anyArgument(hasPrefix prefix: String) -> Bool {
+#if LATCHKEY_TEST_HOOKS
+        ProcessInfo.processInfo.arguments.dropFirst().contains { $0.hasPrefix(prefix) }
+#else
+        false
+#endif
+    }
+
     /// The environment variable `name`, in a test build. Empty counts as
     /// absent.
     nonisolated static func environment(_ name: String) -> String? {

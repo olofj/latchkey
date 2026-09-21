@@ -15,10 +15,11 @@ func check(_ cond: Bool, _ what: String) {
 }
 
 print("TestControlPlane.isLoopback")
-for h in ["127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST", "::1", "[::1]"] {
+for h in ["127.0.0.1", "localhost", "LOCALHOST", "::1", "[::1]"] {
     check(TestControlPlane.isLoopback(h), "\(h) is loopback")
 }
 for h in ["128.0.0.1", "127.0.0.1.example.com", "127.0.0", "127.0.0.256", "127..0.1",
+          "127.0.0.01", "127.+0.+0.+1", "127.-0.0.1", "127.1.2.3", "0:0:0:0:0:0:0:1",
           "example.com", "controlplane.tailscale.com", "100.64.0.1", "::2", "", "localhost.evil.com"] {
     check(!TestControlPlane.isLoopback(h), "\(h.isEmpty ? "<empty>" : h) is not loopback")
 }

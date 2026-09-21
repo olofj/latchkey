@@ -30,12 +30,19 @@ enum TestControlPlane {
     /// real control plane would send a test node to Tailscale.
     static func controlURLOverride() -> String? {
 #if LATCHKEY_TEST_HOOKS
-        guard let raw = TestHooks.value("-TestControlURL") else { return nil }
+        guard let raw = TestHooks.value("-TestControlURL") else {
+            // Named but unusable (empty, last on the line, or `-X=value`):
+            // the same fall-back to the real control plane (M3 review).
+            if TestHooks.anyArgument(hasPrefix: "-TestControlURL") {
+                fatalError("-TestControlURL needs a value: -TestControlURL http://127.0.0.1:8490")
+            }
+            return nil
+        }
         guard let url = URL(string: raw),
               let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = url.host(percentEncoded: false), isLoopback(host)
         else {
-            fatalError("-TestControlURL must be an http(s) URL on loopback (127.0.0.1, ::1, localhost); got \(raw)")
+            fatalError("-TestControlURL must be an http(s) URL on 127.0.0.1, [::1] or localhost; got \(raw)")
         }
         return raw
 #else
@@ -43,10 +50,10 @@ enum TestControlPlane {
 #endif
     }
 
+    /// An exact allowlist, not a parser. Spellings Swift accepts as numbers
+    /// but Go does not parse as an address (`127.0.0.01`, `127.+0.0.1`) would
+    /// send the node to DNS and then to Tailscale's own resolvers (M3 review).
     static func isLoopback(_ host: String) -> Bool {
-        let h = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if h == "localhost" || h == "::1" { return true }
-        let octets = h.split(separator: ".", omittingEmptySubsequences: false)
-        return octets.count == 4 && octets[0] == "127" && octets.allSatisfy { UInt8($0) != nil }
+        ["127.0.0.1", "::1", "[::1]", "localhost"].contains(host.lowercased())
     }
 }

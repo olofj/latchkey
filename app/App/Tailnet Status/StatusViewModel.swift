@@ -100,7 +100,12 @@ final class StatusViewModel:  ObservableObject {
 
                 running = state == .Running
                 tsnetState = state
-                if state == .Running {
+                // NeedsMachineAuth ends "connecting" too: after a web login
+                // the node waits there for an admin, possibly for days, and
+                // "Logged in. Connecting…" would hide the approval gate (M3
+                // review). View and mapState also check it first, because
+                // LoginFinished can land after this state.
+                if state == .Running || state == .NeedsMachineAuth {
                     loggedInConnecting = false
                 }
             }
@@ -146,7 +151,7 @@ final class StatusViewModel:  ObservableObject {
     }
 
     private func mapState(_ state: Ipn.State?, _ name: String?, loggedInConnecting: Bool) -> (text: String, icon: String) {
-        if loggedInConnecting && state != .Running {
+        if loggedInConnecting && state != .Running && state != .NeedsMachineAuth {
             return ("Logged in. Connecting…", "arrow.trianglehead.2.clockwise.rotate.90.icloud")
         }
         switch state {

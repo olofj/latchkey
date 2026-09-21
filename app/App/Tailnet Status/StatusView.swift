@@ -45,7 +45,17 @@ struct StatusView: View {
                 Spacer()
             }
 
-            if viewModel.loggedInConnecting {
+            if viewModel.needsMachineAuth {
+                // First, ahead of loggedInConnecting: a web login ends here
+                // when the tailnet requires approval (M3 review). No button:
+                // approval happens in the tailnet's admin console, and the
+                // node continues by itself once approved.
+                Text("This device is logged in but waiting for a tailnet admin to approve it. Approve it in the Tailscale admin console under Machines. Latchkey connects by itself once it is approved.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("needs-machine-auth")
+            } else if viewModel.loggedInConnecting {
                 HStack(spacing: 10) {
                     ProgressView()
                     Text("Finishing the tailnet connection…")
@@ -53,14 +63,6 @@ struct StatusView: View {
                         .foregroundStyle(.secondary)
                 }
                 .accessibilityIdentifier("logged-in-connecting")
-            } else if viewModel.needsMachineAuth {
-                // No button: approval happens in the tailnet's admin console,
-                // not here, and the node continues by itself once approved.
-                Text("This device is logged in but waiting for a tailnet admin to approve it. Approve it in the Tailscale admin console under Machines. Latchkey connects by itself once it is approved.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("needs-machine-auth")
             } else if viewModel.needsAuth {
                 StatusButton(text: "Login",
                              action: {

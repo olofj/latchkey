@@ -63,6 +63,7 @@ final class TailnetHarnessTests: XCTestCase {
 
         let report = try await waitForReport(timeout: Self.joinTimeout) {
             $0["ws"] as? String == "ws:open" && ($0["echo"] as? String)?.hasPrefix("echo:") == true
+                && ($0["sse"] as? String)?.hasPrefix("sse:tick-") == true
         }
         XCTAssertEqual(report["title"] as? String, "FAKE DASHBOARD")
 
@@ -76,7 +77,10 @@ final class TailnetHarnessTests: XCTestCase {
 
     /// RequireAuth: the node stops at NeedsLogin, the gate offers Login, and
     /// the harness's login page (reached through the app's real
-    /// ASWebAuthenticationSession) completes it. Nothing loads before that.
+    /// ASWebAuthenticationSession) completes it. (The "nothing loads" check
+    /// here is weak by construction: before login there is no netmap, so the
+    /// gateway name cannot even resolve. The approval tests are where it has
+    /// teeth — there the node HAS its peers.)
     func testRequireAuthLoginCompletesThroughTheLoginPage() async throws {
         try await resetHarness(auth: true)
         let app = launch()
@@ -114,6 +118,37 @@ final class TailnetHarnessTests: XCTestCase {
         let approved = try await Self.post("\(Self.harnessAPI)/approve?hostname=\(node.hostname)")
         XCTAssertEqual((try JSONSerialization.jsonObject(with: approved) as? [String: Any])?["approved"] as? Int, 1)
 
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        try await assertJournaled(from: try await appNode())
+    }
+
+    /// Login and then approval, as on a tailnet that requires both: the web
+    /// login ends in NeedsMachineAuth, and the gate must say so rather than
+    /// "Logged in. Connecting…" — LoginFinished used to hide it there until
+    /// the next launch (M3 review). The approval-only test above cannot catch
+    /// that: without a login there is no LoginFinished.
+    func testLoginThenApprovalShowsTheApprovalGate() async throws {
+        try await resetHarness(auth: true, machine: true)
+        let app = launch()
+        defer { app.terminate() }
+
+        let login = app.buttons["login-button"]
+        XCTAssertTrue(login.waitForExistence(timeout: Self.joinTimeout), "the gate offers Login at NeedsLogin")
+        login.tap()
+        acceptSignInPromptIfShown()
+
+        let gate = app.descendants(matching: .any).matching(identifier: "needs-machine-auth").firstMatch
+        XCTAssertTrue(gate.waitForExistence(timeout: Self.joinTimeout),
+                      "after the login, the gate explains the pending approval")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "logged-in-connecting").firstMatch.exists,
+                       "not 'Logged in. Connecting…': nothing is connecting until an admin approves")
+        let logins = try await harnessState()["logins"] as? [[String: Any]] ?? []
+        XCTAssertTrue(logins.contains { $0["completed"] as? Bool == true }, "the login completed; got \(logins)")
+        try await assertNoDashboardLoad(for: 3, "nothing may load before approval")
+
+        let node = try await appNode()
+        XCTAssertFalse(node.machineAuthorized)
+        _ = try await Self.post("\(Self.harnessAPI)/approve?hostname=\(node.hostname)")
         _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
         try await assertJournaled(from: try await appNode())
     }
@@ -209,6 +244,12 @@ final class TailnetHarnessTests: XCTestCase {
             with: try await Self.get("\(Self.dashboardControl)/__state")) as? [String: Any] ?? [:]
         let requests = state["requests"] as? [String: Int] ?? [:]
         XCTAssertEqual(requests[Self.gatewayHost] ?? 0, 0, "\(message); saw \(requests)", file: file, line: line)
+        // The dash peer journals every tailnet connection, including one that
+        // fails TLS or never sends a request the dashboard would count.
+        let journal = try await harnessState()["journal"] as? [[String: Any]] ?? []
+        let dash = journal.filter { $0["peer"] as? String == "dash" }
+        XCTAssertTrue(dash.isEmpty, "\(message): the dash peer saw tailnet connections \(dash)",
+                      file: file, line: line)
     }
 
     private func waitForReport(timeout: TimeInterval,
