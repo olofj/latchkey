@@ -18,7 +18,6 @@
 
 import Combine
 import SwiftUI
-import SwiftData
 import WebKit
 import TailscaleKit
 
@@ -43,8 +42,6 @@ final class Workspace: ObservableObject, Identifiable {
     /// Per-workspace web data store (isolated cookies/cache/service workers +
     /// the SOCKS5 proxy is applied here, in place, on reconnect).
     let dataStore: WKWebsiteDataStore
-    /// Per-workspace SwiftData container for bookmarks.
-    let modelContainer: ModelContainer
 
     /// Browser/session state is lazy so its first WKWebView is still created
     /// from `WorkspaceRoot.init`, after a window exists. Unlike a view-local
@@ -86,19 +83,6 @@ final class Workspace: ObservableObject, Identifiable {
 
         self.homePage = HomePage(url: definition.homePageURL)
         self.dataStore = WKWebsiteDataStore(forIdentifier: definition.dataStoreUUID)
-
-        // Per-workspace bookmarks store. Falls back to an in-memory container
-        // only if the on-disk file can't be opened (shouldn't happen in
-        // practice — the workspace dir is created in `WorkspaceStore`).
-        let url = WorkspaceStore.bookmarksURL(definition.id)
-        if let container = try? ModelContainer(
-            for: Bookmark.self,
-            configurations: ModelConfiguration(url: url)) {
-            self.modelContainer = container
-        } else {
-            logger.log("Workspace: failed to open bookmarks store at \(url.path); using in-memory")
-            self.modelContainer = Self.fallbackContainer
-        }
 
         // Persist home-page edits back into the definition.
         homePage.$url
@@ -149,10 +133,6 @@ final class Workspace: ObservableObject, Identifiable {
 
     func setHomePage(_ url: String) {
         homePage.url = url   // observer persists into the definition
-    }
-
-    func setExitNodeEnabled(_ enabled: Bool) async throws -> Ipn.Prefs {
-        try await manager.setExitNodeEnabled(enabled)
     }
 
     /// Stops this workspace and removes all session-owned data. The manager
@@ -237,17 +217,4 @@ final class Workspace: ObservableObject, Identifiable {
         onChange?(definition)
     }
 
-    // MARK: - Fallbacks
-
-    /// A last-resort in-memory bookmarks container, used only if a workspace's
-    /// on-disk store can't be opened. In-memory containers essentially never
-    /// fail to create.
-    private static let fallbackContainer: ModelContainer = {
-        do {
-            return try ModelContainer(for: Bookmark.self,
-                                      configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-        } catch {
-            fatalError("Could not create fallback ModelContainer: \(error)")
-        }
-    }()
 }

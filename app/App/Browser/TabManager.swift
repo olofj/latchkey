@@ -5,9 +5,14 @@
 //  TabManager.swift
 //  Aperture
 //
-//  Owns one workspace's lightweight persisted tab list. At most ten tabs are
-//  retained. Only the selected tab is allowed to retain a WKWebView; restored
-//  and hidden tabs remain URL/title records until selected.
+//  Owns one workspace's persisted page record. Latchkey has no tabs
+//  (PLAN §1.4), so the cap is 1 — but the type survives the tab removal
+//  because it owns something the app genuinely wants: the persistence that
+//  restores the page you were last looking at, which is exactly the behaviour
+//  a phone app needs after iOS jetsams it.
+//
+//  Collapsing this to a bare `BrowserTab` would mean reimplementing that, and
+//  would make a future merge from upstream much harder for no gain.
 //
 
 import Combine
@@ -17,7 +22,7 @@ import TailscaleKit
 
 @MainActor
 final class TabManager: ObservableObject {
-    static let maximumTabCount = 10
+    static let maximumTabCount = 1
 
     @Published private(set) var tabs: [BrowserTab] = []
     @Published private(set) var selectedIndex: Int = 0

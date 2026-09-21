@@ -574,24 +574,31 @@ final class TSNetManager {
 
     /// Whether ALL traffic (not just tailnet) should go through the proxy.
     ///
-    /// True when an **exit node is enabled** — the only legitimate reason to send
-    /// public traffic through the tailnet, since that's how it egresses. This is
-    /// why the Exit Node toggle doubles as the routing control: with no exit
-    /// node, proxied public traffic simply fails.
+    /// Upstream also returned true when an exit node was enabled, since that is
+    /// how public traffic egresses. Latchkey removed the exit-node feature
+    /// (PLAN §1.8/§7.4 — it is broken under tsnet), so the ONLY remaining
+    /// trigger is the `-ProxyEverything` launch override, which exists to
+    /// demonstrate the `-1000` bug the split tunnel fixes.
     ///
-    /// Also true for the `-ProxyEverything` launch override (simulator/CI only;
-    /// launch args can't be set on a physical device — use the toggle there).
+    /// Deliberately NOT reading `prefs.ExitNodeID` any more. With no UI left to
+    /// clear it, a stray `ExitNodeID` arriving from restored prefs or a tailnet
+    /// policy would silently switch every public request onto a proxy with
+    /// nothing carrying it, and the user would have no way to turn that off. It
+    /// is logged instead, so the condition is visible rather than fatal.
     @MainActor
     func proxyEverythingRequested() -> Bool {
-        if Self.proxyEverythingOverride() { return true }
-        return !(model.prefs?.ExitNodeID ?? "").isEmpty
+        if let id = model.prefs?.ExitNodeID, !id.isEmpty {
+            logger.log("prefs carry ExitNodeID '\(id)' but exit nodes are not supported; ignoring for routing")
+        }
+        return Self.proxyEverythingOverride()
     }
 
     /// Debug/diagnostic escape hatch: `-ProxyEverything` (launch arg) or
     /// `APERTURE_PROXY_EVERYTHING=1` restores the pre-fix behaviour of routing
     /// every request through the tsnet proxy. Used to demonstrate the -1000 bug
     /// and to verify the split tunnel is what fixes it. Not settable on a real
-    /// device — the Exit Node toggle is the on-device equivalent.
+    /// device, and with the exit-node toggle removed there is no longer an
+    /// on-device equivalent — Settings → Routing is the on-device diagnostic.
     nonisolated static func proxyEverythingOverride() -> Bool {
         if ProcessInfo.processInfo.environment["APERTURE_PROXY_EVERYTHING"] == "1" {
             return true
@@ -679,32 +686,6 @@ final class TSNetManager {
         } catch {
             logger.log("Immediate status refresh failed: \(error)")
         }
-    }
-
-    func setExitNodeEnabled(_ enabled: Bool) async throws -> Ipn.Prefs {
-        // Prefer a concrete advertised peer. `auto:any` is useful as a managed
-        // policy placeholder, but patching it directly into ordinary prefs can
-        // remain unresolved even when status already knows usable exit nodes,
-        // leaving public traffic on the local egress. Stable sorting keeps the
-        // choice deterministic across status dictionary iterations.
-        let availableExitNodes = model.localStatus?.Peer?.values
-            .filter { $0.ExitNodeOption && $0.Online }
-            .sorted {
-                if $0.Online != $1.Online { return $0.Online && !$1.Online }
-                return $0.ID < $1.ID
-            } ?? []
-        let id = enabled ? (availableExitNodes.first?.ID ?? "auto:any") : ""
-        let mask = Ipn.MaskedPrefs().exitNodeID(id)
-        guard let client = localAPIClient else {
-            throw LocalAPIError.localAPIURLRequestError
-        }
-        let prefs = try await client.editPrefs(mask: mask)
-        // PATCH returns the authoritative prefs. Publish them directly: the
-        // IPN watcher is allowed to coalesce prefs notifications.
-        model.prefs = prefs
-        refreshProxyPolicyIfNeeded()
-        logger.log("Set exit node Id to \(id)")
-        return prefs
     }
 
     func setHostName(_ newHostName: String) {

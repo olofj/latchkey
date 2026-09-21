@@ -11,7 +11,6 @@ struct SettingsView: View {
     var dismissAction: () -> Void
 
     @State private var showLogoutAlert: Bool = false
-    @State private var togglingExitNode: Bool = false
     @State private var routeTestHost: String = ""
 
     var body: some View {
@@ -26,11 +25,6 @@ struct SettingsView: View {
 #if canImport(UIKit)
         .presentationDetents([.medium, .large])
 #endif
-        .onAppear {
-            // Seed the exit-node diagnostic (availability + egress IP) so the
-            // banner is populated when Settings opens, not only after a toggle.
-            viewModel.runExitNodeDiagnostic()
-        }
     }
 
     @ViewBuilder
@@ -112,38 +106,6 @@ struct SettingsView: View {
                         }
                 }
 
-                Section(header: Text("Exit Node")) {
-                    Toggle(isOn: Binding(
-                        get: { viewModel.exitNodeEnabled },
-                        set: { viewModel.applyExitNodeEnabled($0) }
-                    )) {
-                        HStack {
-                            Text("Enable Auto Exit Node")
-                            if togglingExitNode {
-                                Spacer()
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .accessibilityIdentifier("exit-node-toggle")
-                    // Never let "auto:any" blackhole public traffic when the
-                    // current netmap has no exit-node-capable peer. Keep an
-                    // already-enabled toggle usable so the user can turn it off
-                    // if the selected peer disappears.
-                    .disabled(!viewModel.exitNodeEnabled && viewModel.availableExitNodeCount == 0)
-                    HStack {
-                        Text("Current Exit Node")
-                        Spacer()
-                        Text(viewModel.exitNodeDisplayName)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    if let diag = viewModel.exitNodeDiagnostic {
-                        exitNodeDiagnosticBanner(diag)
-                    }
-                }
-
                 Section {
                     StatusButton(text: "Logout",
                                  action: { showLogoutAlert = true },
@@ -177,7 +139,7 @@ struct SettingsView: View {
     private var routingSection: some View {
         Section(header: Text("Routing")) {
             if viewModel.proxyEverything {
-                Text("⚠️ ALL traffic is going through the tailnet (Exit Node is on). Public sites only work if the exit node is actually working — otherwise they fail with “invalid URL”. Turn Exit Node off to browse the internet directly.")
+                Text("⚠️ ALL traffic is going through the tailnet (-ProxyEverything override). Public sites only work if something is carrying them out of the tailnet — otherwise they fail with “invalid URL”.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .accessibilityIdentifier("routing-proxy-everything-warning")
@@ -227,49 +189,4 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Exit node diagnostic banner
-
-    /// The banner shown inside the Exit Node section: availability + egress IP
-    /// (or error). Color-coded: orange when there are no exit nodes (toggling
-    /// would blackhole internet), green when the fetch succeeded, red on fetch
-    /// error.
-    @ViewBuilder
-    private func exitNodeDiagnosticBanner(_ diag: ExitNodeDiagnostic) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Availability line.
-            if diag.availableExitNodeCount == 0 {
-                Text("⚠️ No exit nodes in your tailnet — enabling will blackhole internet through tsnet.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .accessibilityIdentifier("exit-node-none-available")
-            } else {
-                Text("\(diag.availableExitNodeCount) exit node(s) available")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("exit-node-available-count")
-            }
-
-            // Egress IP / error line.
-            if diag.fetching {
-                Text("Checking tsnet egress IP…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("exit-node-fetching")
-            } else if let ip = diag.fetchedIP {
-                Text("tsnet egress IP: \(ip)")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-                    .accessibilityIdentifier("exit-node-egress-ip")
-            } else if let err = diag.fetchError {
-                Text("tsnet fetch failed: \(err)")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .accessibilityIdentifier("exit-node-fetch-error")
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 2)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("exit-node-diagnostic-banner")
-    }
 }

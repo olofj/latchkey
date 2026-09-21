@@ -26,7 +26,12 @@ enum HomePageInitialLoadDecision {
 }
 
 enum HomePageAvailabilityChecker {
-    static let onboardingURL = URL(string: "https://aperture.tailscale.com")!
+    /// Where the first load goes when the configured gateway is not in this
+    /// tailnet. Upstream sent the user to the Aperture signup site; Latchkey
+    /// has no such place, and loading anything public would be a lie about
+    /// what went wrong. `about:blank` leaves the page empty so the
+    /// `GatewayUnreachableBanner` above it is the only thing on screen.
+    static let unreachableFallbackURL = URL(string: "about:blank")!
 
     /// Checks whether the configured hostname names one of the nodes in the
     /// current tailnet. Bare names go through the exact same qualification
@@ -79,10 +84,10 @@ enum HomePageAvailabilityChecker {
         case .checking:
             return .wait
         case .available:
-            guard let url = URL(string: urlString) else { return .load(onboardingURL) }
+            guard let url = URL(string: urlString) else { return .load(unreachableFallbackURL) }
             return .load(url)
         case .unavailable:
-            return .load(onboardingURL)
+            return .load(unreachableFallbackURL)
         }
     }
 

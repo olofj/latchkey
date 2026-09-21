@@ -18,7 +18,6 @@
 
 import Combine
 import SwiftUI
-import SwiftData
 import TailscaleKit
 
 @MainActor
@@ -310,15 +309,4 @@ final class WorkspaceManager: ObservableObject {
         WorkspaceStore.save(workspaces.map { $0.definition }, activeId: activeId)
     }
 
-    /// An in-memory bookmarks container used by the view tree when there is no
-    /// active workspace (shouldn't happen — there's always at least one) so
-    /// `.modelContainer` always has a valid container.
-    static let fallbackModelContainer: ModelContainer = {
-        do {
-            return try ModelContainer(for: Bookmark.self,
-                                      configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-        } catch {
-            fatalError("Could not create fallback ModelContainer: \(error)")
-        }
-    }()
 }

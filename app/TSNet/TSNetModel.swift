@@ -35,13 +35,6 @@ final class TSNetModel: ObservableObject {
     /// Test-only state for the TCP-shutdown chaos recovery XCUITest.
     @Published var tcpChaosTestStatus: String?
 
-    var exitNodeId: String? {
-        if let prefs = prefs {
-            return prefs.ExitNodeID
-        }
-        return nil
-    }
-
     var wantRunning: Bool {
         if let prefs = prefs {
             return prefs.WantRunning

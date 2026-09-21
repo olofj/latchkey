@@ -9,7 +9,6 @@
 //
 
 import SwiftUI
-import SwiftData
 import AppIntents
 import TailscaleKit
 
@@ -36,7 +35,7 @@ struct ApertureApp: App {
             } else if ProcessInfo.processInfo.arguments.contains("-UITestProxyBounceHarness") {
                 ProxyBounceTestHarnessView()
             } else if let workspaceManager {
-                TabbedBrowserView(workspaceManager: workspaceManager)
+                DashboardRootView(workspaceManager: workspaceManager)
             } else {
                 ProgressView()
             }

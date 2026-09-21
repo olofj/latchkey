@@ -169,10 +169,6 @@ enum WorkspaceStore {
         return dir
     }
 
-    /// `<workspaceDir>/Bookmarks.store` — this workspace's SwiftData file.
-    static func bookmarksURL(_ id: UUID) -> URL {
-        workspaceDir(id).appending(path: "Bookmarks.store")
-    }
 
     static func tabsURL(_ id: UUID) -> URL {
         workspaceDir(id).appending(path: "tabs.json")
