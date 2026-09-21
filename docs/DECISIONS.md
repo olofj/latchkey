@@ -1483,3 +1483,120 @@ path now has its own deterministic test: a 4000-s session puts the scheduler
 ~400 s away, so the page's 30-s poll must hit the 403 first. The session
 suite now passes 13/13 in 330 s.
 
+## 2026-09-21 — M5 review
+
+Two adversarial reviews: discovery logic and routing, and tests and harness.
+**All findings fixed.**
+
+**Routing and privacy:**
+1. **(medium) Probes followed redirects.** A same-owner server answering
+   `302` to an SSO host would have had the redirected probe sent **direct**,
+   off the tailnet. The probe session now refuses every redirect, and a 3xx
+   is not a gateway. (The `async` delegate method crashed Swift 6.4's SILGen,
+   so it uses the completion-handler form.)
+2. **(medium) R27 sent shared-in nodes direct.**
+   - A node shared in from another tailnet keeps that tailnet's name
+     (`tailcfg.go:562-584`), outside our suffix. Upstream's policy listed it;
+     `StableProxyPolicy` did not.
+   - Fix: it now lists every peer FQDN outside the suffix. That list changes
+     only when a share does. With no suffix known, it returns upstream's
+     policy unchanged.
+   - Host-tested, including "own-tailnet churn still does not change it".
+   - Backstop: discovery never probes a host the published policy would not
+     proxy.
+3. **(medium) Manual entry accepted public hosts**, which would load direct
+   and become the sign-in origin. The picker now refuses any host the
+   tailnet does not carry, and says why.
+4. **(medium) "Proxy unhealthy" was guessed from error codes.** -1000 is
+   every SOCKS failure reply, including "connection refused", and the SocksLog
+   relay masks -1004. Now, when no probe got an answer, discovery asks the
+   node's loopback directly (`refreshStatusNow()` returns whether it
+   answered). That listener serves both SOCKS5 and LocalAPI (R18), so a
+   silent loopback means the proxy is down.
+
+**Behaviour:**
+5. **(medium) Find showed stale results.** The discovery object outlives the
+   picker, so it swept once per process. Find and Settings' picker now sweep
+   on every appearance.
+6. **(low-medium) Clearing the Settings field swapped in the first-run
+   picker.** Every keystroke was written through, so an empty field meant
+   "no gateway".
+   - The field is now **Gateway** and commits only on Return or when Settings
+     closes. An empty or unusable entry keeps the current gateway.
+   - It normalizes like the picker: a bare name is qualified, and the scheme
+     is always https. The old URL-bar normalization produced `http://`,
+     which ATS now blocks (R28).
+   - Settings also gained **Find gateways…** (gateway switching; R32 builds
+     on it).
+7. **(low-medium) Find's picker and the new gateway's token sheet could
+   collide.** The choice is now applied from the sheet's `onDismiss`, the
+   same rule as Settings in M4.
+8. **(low) A cancelled sweep could overwrite a newer one's state.** Sweeps
+   carry a generation, and the picker cancels its sweep when it disappears.
+9. **(low) Tagged servers were filtered out.** They report the
+   tagged-devices user, so the owner check excluded them. Tagged peers now
+   pass it. The `ShareeNode` comment was wrong about its meaning and is
+   corrected.
+10. **(low) Stale session state across a gateway switch.** `selectGateway`
+    now resets the session.
+11. **(low) Layout.**
+    - The first-run picker was nested inside the dashboard's
+      hidden-toolbar navigation stack. It now has its own.
+    - "Search again" moved from the toolbar corner the settings gear covers
+      into the list.
+    - A test screenshot also showed the gear **covering the banner's
+      "Change" button**. The banner now leaves room for it.
+12. **(medium, found by a new test) The relaunch race.** On relaunch, the
+    first status can arrive before the netmap's peers, so "your gateway is
+    not in this tailnet" was decided on an empty peer list and the blank
+    fallback loaded. Recovery then fired only on an observed *transition*
+    to available, which could happen before the dashboard view existed,
+    leaving it blank for good. Two fixes:
+    - A peerless status now means "still checking".
+    - Recovery is state-based (it also runs when the dashboard appears).
+
+**Tests and harness:**
+- **(high) The persistence test could not fail**: a relaunch that had lost
+  the gateway would re-discover and auto-choose it. It now requires that no
+  sweep ran: the web-page peer was not probed, and the gateway's first
+  request is the page load (`GET /`), not a probe. The page's own
+  `/manifest.json` fetch is why "no manifest request" was the wrong test.
+- **(medium) The timing check could not fail by construction.**
+  `test-discovery.sh` now checks each sweep's exact signature from the
+  app's log: `probing 4 of 4 → 1 gateway, 2 answered, 2 failed`, or
+  `3 of 3 → 0, 1, 2`.
+  - A sweep must also take at least 1.5 s, which proves the slow peer was
+    waited for, and must end within 10 s.
+  - The first gateway must appear within 5 s **of the picker appearing**,
+    now logged, so the wait for the node's status counts.
+  - Only this run's log window is read.
+  - The slow peer journals its accepts, and a test asserts it was probed.
+- **(medium) "Unknown" arrives as `""` and `0`, not `nil`**: ipnstate has no
+  omitempty. It was tested with `nil`. The fields are now treated as unknown
+  in the code, and the host tests use them.
+- **(medium) The harness self-test never ran the new peers.** `make check`
+  now runs them. `gw` forwards and is journaled; `slow` stalls a TLS
+  ClientHello for 2 s, with the accept journaled; `?gw=0` leaves `gw` out.
+- **(low)**
+  - The fingerprint probe's order is asserted: manifest, then auth, first.
+  - Fake resets are asserted.
+  - The auth-event counter must be present (`>= 1`).
+  - `HARNESS_ARGS` can no longer leak in from the environment.
+  - The script header is fixed, and it fails clearly when no tests are found.
+- New tests:
+  - `testFindFromTheUnreachableBannerSwitchesGateway` (Find, a fresh
+    sweep, the choice applied after dismissal, and the token sheet
+    appearing);
+  - "Search again" re-probing;
+  - a public host refused in manual entry.
+- `HomePage` banner accessibility: an identifier on the container swallowed
+  the Find button's. It now uses `.accessibilityElement(children: .contain)`.
+
+**After the fixes:**
+- `test-discovery.sh` passes 4/4. Every sweep matches its signature; picker
+  to first gateway is 262–857 ms, and each sweep takes about 1.5 s.
+- `make test-policy` is green, including 30 proxy-config checks and 36
+  candidate checks.
+- L1 9/9, L2 4/4, M4 13/13 (R1 clean), and the three connection-independent
+  inherited tests.
+

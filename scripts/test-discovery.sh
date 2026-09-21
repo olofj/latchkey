@@ -20,7 +20,7 @@
 # reused (scripts/test-offline.sh --build makes the same one).
 #
 # On failure: a screenshot, the harness logs and the xcresult are left under
-# app/build/tailnet-logs/<timestamp>/.
+# app/build/discovery-logs/<timestamp>/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -53,7 +53,8 @@ elif [[ $PRE_RC -ge 2 ]]; then
     echo "error: the preflight could not read a file it checks (renamed or missing?)" >&2
     exit 1
 fi
-EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/DiscoveryTests.swift")
+EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/DiscoveryTests.swift" || true)
+[[ "$EXPECTED" -gt 0 ]] || { echo "error: no tests found in DiscoveryTests.swift" >&2; exit 1; }
 
 # ------------------------------------------------------------------ harness --
 teardown() {
@@ -94,6 +95,9 @@ fi
 
 # -------------------------------------------------------------------- tests --
 say "DiscoveryTests"
+# The log window starts HERE, so sweeps from an earlier run or suite can
+# never be counted (M5 review).
+LOG_START=$(date '+%Y-%m-%d %H:%M:%S')
 set +e
 (cd "$APP" && xcodebuild test-without-building -project Latchkey.xcodeproj -scheme Latchkey \
     -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \
@@ -124,33 +128,53 @@ if [[ $TEST_RC -ne 0 ]]; then
     say "FAILED in ${ELAPSED}s — logs, screenshot and xcresult in $LOG_DIR"
     exit 1
 fi
-# R26's instrument: the app logs each sweep's timings. Every sweep must end
-# inside 10 s and find its first gateway inside 5 s; at least one sweep must
-# have found a gateway, or the check measured nothing.
-say "R26 timing, from the app's own log"
-xcrun simctl spawn "$UDID" log show --last "$(( $(date +%s) - START + 30 ))s" \
+# R26's instrument: the app logs each sweep's timings, and what it probed.
+# Every sweep must match one of the two peer sets this suite runs --
+#   gw present:  probing 4 of 4 -> 1 gateway, 2 answered (gw, dash), 2 failed
+#   gw=0:        probing 3 of 3 -> 0 gateways, 1 answered (dash), 2 failed
+# (plain refuses, slow stalls) -- and take at least 1.5 s, the slow peer's
+# timeout, which proves it was waited for. The first gateway must appear
+# within 5 s of the picker appearing (the wait for the node's status
+# included), and a sweep must end within 10 s. At least one sweep must have
+# found the gateway, or this measured nothing.
+say "R26 sweeps, from the app's own log"
+xcrun simctl spawn "$UDID" log show --start "$LOG_START" \
     --predicate 'subsystem == "net.lixom.latchkey"' --style compact 2>/dev/null \
-    | grep "Discovery: [0-9]* gateway" > "$LOG_DIR/sweeps.log" || true
+    | grep -E "Discovery: (probing|[0-9]+ gateway)" > "$LOG_DIR/sweeps.log" || true
 if ! python3 - "$LOG_DIR/sweeps.log" <<'PY'
 import re, sys
 lines = open(sys.argv[1]).read().splitlines()
-bad, found = [], 0
+expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2)}
+bad, found, probing = [], 0, None
 for l in lines:
-    m = re.search(r"Discovery: (\d+) gateway\(s\); first after (\S+?)(?: ms)?, sweep (\d+) ms", l)
+    m = re.search(r"Discovery: probing (\d+) of (\d+) peer", l)
+    if m:
+        probing = (int(m.group(1)), int(m.group(2)))
+        continue
+    m = re.search(r"Discovery: (\d+) gateway\(s\); first after (\S+?)(?: ms)?, sweep (\d+) ms; "
+                  r"(\d+) answered, (\d+) failed; shown to first (\S+?)(?: ms)?$", l)
     if not m:
         continue
-    n, first, sweep = int(m.group(1)), m.group(2), int(m.group(3))
-    print("    %d gateway(s), first %s, sweep %d ms" % (n, first + (" ms" if first != "—" else ""), sweep))
-    if sweep > 10000 or (n and first != "—" and int(first) > 5000):
-        bad.append(l)
+    n, sweep, answered, failed = int(m.group(1)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+    shown = m.group(6)
+    sig = (probing or (0, 0)) + (n, answered, failed)
+    print("    probed %s of %s: %d gateway(s), %d answered, %d failed; sweep %d ms; picker to first %s"
+          % (sig[0], sig[1], n, answered, failed, sweep, shown + (" ms" if shown != "—" else "")))
+    if sig not in expected:
+        bad.append("unexpected sweep %s: %s" % (sig, l))
+    if sweep < 1500 or sweep > 10000:
+        bad.append("sweep %d ms outside 1.5-10 s: %s" % (sweep, l))
+    if n and (shown == "—" or int(shown) > 5000):
+        bad.append("first gateway %s after the picker appeared (budget 5 s): %s" % (shown, l))
     found += n > 0
-if not lines or not found:
-    print("error: no sweep that found a gateway was logged; the timing check measured nothing")
+    probing = None
+if not found:
+    print("error: no sweep that found a gateway was logged; this measured nothing")
     sys.exit(1)
 if bad:
-    print("error: over R26's budget (first <= 5 s, sweep <= 10 s):")
-    for l in bad:
-        print("  " + l)
+    print("error:")
+    for b in bad:
+        print("  " + b)
     sys.exit(1)
 PY
 then

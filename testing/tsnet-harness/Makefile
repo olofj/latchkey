@@ -17,8 +17,9 @@ API_PORT     ?= 8491
 DASH_PORT    ?= 8443
 RUN_DIR      ?= .run
 # Extra harness flags, e.g. HARNESS_ARGS="-gateway 127.0.0.1:8444 -slow-peer"
-# for the discovery suite (M5).
-HARNESS_ARGS ?=
+# for the discovery suite (M5). Plain `=`: only the make command line can set
+# it, never an exported environment variable (M5 review).
+HARNESS_ARGS =
 BIN          := $(RUN_DIR)/tsnet-harness
 PID          := $(RUN_DIR)/tsnet-harness.pid
 LOG          := $(RUN_DIR)/tsnet-harness.log
@@ -105,7 +106,8 @@ check: build  ## Host-side self-test (needs the fake dashboard; starts and stops
 	@$(MAKE) -C ../harness --no-print-directory harness-up
 	@status=0; \
 	$(BIN) -selftest -ca ../harness/ca.pem -control 127.0.0.1:$(CONTROL_PORT) \
-	    -api 127.0.0.1:$(API_PORT) -dashboard 127.0.0.1:$(DASH_PORT) -state $(CHECK_STATE) || status=$$?; \
+	    -api 127.0.0.1:$(API_PORT) -dashboard 127.0.0.1:$(DASH_PORT) -state $(CHECK_STATE) \
+	    -gateway 127.0.0.1:$(DASH_PORT) -slow-peer || status=$$?; \
 	$(MAKE) -C ../harness --no-print-directory harness-down >/dev/null; \
 	rm -rf $(CHECK_STATE); \
 	exit $$status

@@ -341,7 +341,7 @@ func (h *harness) reset(m Mode) error {
 		// connected node. testcontrol's default leaves Online unset, and
 		// discovery (R26) skips offline peers -- it found nothing (M5).
 		AllOnline: true,
-		Logf:             h.logf("control"),
+		Logf:      h.logf("control"),
 	}
 	h.mu.Lock()
 	h.ctl = ctl
@@ -411,7 +411,7 @@ func (h *harness) startPeer(ctx context.Context, ctl *testcontrol.Server, gen in
 			return nil, err
 		}
 		if forward == "hold" {
-			go hold(ln)
+			go h.hold(gen, name, ln)
 		} else {
 			go h.forward(gen, name, ln, forward)
 		}
@@ -420,13 +420,19 @@ func (h *harness) startPeer(ctx context.Context, ctl *testcontrol.Server, gen in
 }
 
 // hold accepts connections and never answers: a peer that stalls every
-// probe until the prober gives up.
-func hold(ln net.Listener) {
+// probe until the prober gives up. Each accept is journaled, so a test can
+// prove the peer was probed (M5 review).
+func (h *harness) hold(gen int, name string, ln net.Listener) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
+		h.mu.Lock()
+		if gen == h.gen {
+			h.journal = append(h.journal, connEvent{Gen: gen, Peer: name, From: c.RemoteAddr().String(), At: time.Now()})
+		}
+		h.mu.Unlock()
 		go func() {
 			io.Copy(io.Discard, c)
 			c.Close()

@@ -203,6 +203,12 @@ func runSelftest(h *harness, caFile string) error {
 	}
 	ok("Running after /approve")
 
+	if h.opts.gatewayAddr != "" || h.opts.slowPeer {
+		if err := selftestExtraPeers(ctx, h, api, caFile); err != nil {
+			return err
+		}
+	}
+
 	step("a reset isolates earlier nodes (one is still running)")
 	if _, err := apiPost(api + "/reset"); err != nil {
 		return err
@@ -341,3 +347,73 @@ func keys(m map[string]bool) []string {
 
 func step(format string, a ...any) { fmt.Fprintf(os.Stdout, "==> "+format+"\n", a...) }
 func ok(format string, a ...any)   { fmt.Fprintf(os.Stdout, "    ok: "+format+"\n", a...) }
+
+// selftestExtraPeers covers the discovery peers (M5), when the harness runs
+// with them: gw forwards and is journaled, slow accepts and never answers,
+// and ?gw=0 leaves gw out.
+func selftestExtraPeers(ctx context.Context, h *harness, api, caFile string) error {
+	if _, err := apiPost(api + "/reset"); err != nil {
+		return err
+	}
+	probe, st, err := h.probe(ctx, "probe-extra", "Running")
+	if err != nil {
+		return err
+	}
+	defer probe.Close()
+	addr, cred, _, err := probe.Loopback()
+	if err != nil {
+		return err
+	}
+	probeIP := st.TailscaleIPs[0].String()
+	if h.opts.gatewayAddr != "" {
+		step("gw peer: forwards tailnet :443 to %s, and is journaled", h.opts.gatewayAddr)
+		// -k: whatever serves -gateway here need not hold a cert for gw's name;
+		// what is under test is the forward and its journal entry.
+		if out, err := curl("-k", "--proxy", "socks5h://tsnet:"+cred+"@"+addr, "https://gw."+MagicDNSSuffix+"/"); err != nil {
+			return fmt.Errorf("gw forward: %w\n%s", err, out)
+		}
+		if !journalHas(h, "gw", probeIP) {
+			return fmt.Errorf("the gw peer did not journal the connection from %s", probeIP)
+		}
+		ok("forwarded and journaled")
+	}
+	if h.opts.slowPeer {
+		step("slow peer: accepts, and never answers a TLS ClientHello")
+		start := time.Now()
+		out, err := curl("-k", "-m", "2", "--proxy", "socks5h://tsnet:"+cred+"@"+addr, "https://slow."+MagicDNSSuffix+"/")
+		if err == nil {
+			return fmt.Errorf("the slow peer answered: %.100q", out)
+		}
+		if time.Since(start) < 1500*time.Millisecond {
+			return fmt.Errorf("the slow peer failed fast (%v), not by stalling: %.100q", time.Since(start), out)
+		}
+		if !journalHas2(h, "slow", probeIP) {
+			return fmt.Errorf("the slow peer did not journal the accept from %s", probeIP)
+		}
+		ok("stalled until the client gave up (%v), and journaled the accept", time.Since(start).Round(100*time.Millisecond))
+	}
+	if h.opts.gatewayAddr != "" {
+		step("?gw=0 leaves the gw peer out of that generation")
+		if _, err := apiPost(api + "/reset?gw=0"); err != nil {
+			return err
+		}
+		for _, n := range h.snapshot().Nodes {
+			if n.Hostname == "gw" {
+				return fmt.Errorf("gw is present after /reset?gw=0")
+			}
+		}
+		ok("gw absent")
+	}
+	return nil
+}
+
+// journalHas2 matches any journal entry for peer from fromIP, errors
+// included (a held connection records no error field either way).
+func journalHas2(h *harness, peer, fromIP string) bool {
+	for _, ev := range h.snapshot().Journal {
+		if ev.Peer == peer && strings.HasPrefix(ev.From, fromIP+":") {
+			return true
+		}
+	}
+	return false
+}
