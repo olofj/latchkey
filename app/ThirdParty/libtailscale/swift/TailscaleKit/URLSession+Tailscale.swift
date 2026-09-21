@@ -34,7 +34,12 @@ public extension URLSessionConfiguration {
     }
 
     static func tailscaleSession(_ node: TailscaleNode) async throws -> (URLSessionConfiguration, TailscaleNode.LoopbackConfig) {
-        let session  = URLSessionConfiguration.default
+        // Latchkey (R29 review): ephemeral, not .default. .default's URL
+        // cache is on disk, so every LocalAPI response -- the status JSON
+        // with a pending login link in AuthURL among them -- was written to
+        // Library/Caches/<bundle>/Cache.db. LocalAPI traffic never needs a
+        // disk cache, cookies or stored credentials.
+        let session  = URLSessionConfiguration.ephemeral
         let config = try await session.proxyVia(node)
         return (session, config)
     }
