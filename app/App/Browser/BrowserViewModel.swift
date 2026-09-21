@@ -49,6 +49,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
     private let openExternally: (URL) -> Void
     private var webView: WKWebView?
 
+    /// The only origin the main frame may show (revision R3). Set from the
+    /// app's own resolved loads in `loadResolved`, never from page-initiated
+    /// navigations, so a page cannot widen it. Taken from the resolved URL
+    /// rather than the configured gateway because a bare configured name is
+    /// expanded to its FQDN before loading.
+    private var allowedOrigin: String?
+
     private(set) var didLoadInitial = false
     private var pendingLoadURL: URL?
     /// The backend can publish Running a moment before its first SOCKS dial is
@@ -239,6 +246,33 @@ final class BrowserViewModel: NSObject, ObservableObject {
         load(url: url, isAutomaticStartupLoad: false)
     }
 
+    /// Opens a link the user chose (the context menu), under the same rule as
+    /// every page-initiated navigation (R3). `load(url:)` is for the app's own
+    /// loads and would make the link's origin the trusted one.
+    func openLink(_ url: URL) {
+        switch NavigationPolicy.decide(url: url, isMainFrame: true, allowedOrigin: allowedOrigin) {
+        case .allow:
+            load(url: url)
+        case .openExternally:
+            openExternally(url)
+        case .cancel:
+            logger.log("Link refused by navigation policy: \(url.redactedForLog)")
+        }
+    }
+
+    /// Applies `NavigationPolicy`, plus the one case the pure policy cannot
+    /// see: a scheme this web view has its own `WKURLSchemeHandler` for is the
+    /// app's own content (the proxy-bounce test harness serves `bounce-test:`).
+    private func navigationDecision(for url: URL?, isMainFrame: Bool,
+                                    in webView: WKWebView) -> NavigationDecision {
+        if let scheme = url?.scheme,
+           webView.configuration.urlSchemeHandler(forURLScheme: scheme) != nil {
+            return .allow
+        }
+        return NavigationPolicy.decide(url: url, isMainFrame: isMainFrame,
+                                       allowedOrigin: allowedOrigin)
+    }
+
     private func load(url requestedURL: URL, isAutomaticStartupLoad: Bool) {
         if !isAutomaticStartupLoad {
             startupRetryTask?.cancel()
@@ -264,6 +298,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     private func loadResolved(_ url: URL) {
+        // App-initiated loads define what the main frame may show (R3). An
+        // about:blank fallback leaves the previous origin in place, so the
+        // gateway stays loadable after it.
+        if let origin = GatewayAddress.origin(of: url.absoluteString) {
+            allowedOrigin = origin
+        }
         // Be deliberately patient with slow private services. This does not
         // delay explicit connection failures; it only extends how long an
         // otherwise-silent request may remain pending.
@@ -519,7 +559,7 @@ extension BrowserViewModel: WKUIDelegate {
             previewProvider: nil
         ) { [weak self] _ in
             let open = UIAction(title: "Open", image: UIImage(systemName: "arrow.up.right.square")) { _ in
-                Task { @MainActor [weak self] in self?.load(url: url) }
+                Task { @MainActor [weak self] in self?.openLink(url) }
             }
             // `openExternally` hands the URL to the system browser now that there
             // are no tabs (PLAN §1.4); the label has to say so, or the menu
@@ -538,9 +578,11 @@ extension BrowserViewModel: WKUIDelegate {
 
     /// WebKit asks its UI delegate to create a view for target=_blank,
     /// window.open(), and links whose target requests another browsing
-    /// context. Latchkey has exactly one browsing context (PLAN §1.4), so
-    /// the request goes to the system browser rather than opening a second
-    /// tab here. Returning nil tells WebKit not to create a view.
+    /// context. Latchkey has exactly one browsing context (PLAN §1.4), so no
+    /// view is ever created (nil). The request is decided like a main-frame
+    /// navigation (R3): the gateway's own pages load here, in place —
+    /// KiroCrew's "pop out chat" opens a same-origin window — and anything
+    /// else goes to the system.
     func webView(_ webView: WKWebView,
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
@@ -548,7 +590,14 @@ extension BrowserViewModel: WKUIDelegate {
         guard navigationAction.targetFrame == nil,
               let url = navigationAction.request.url
         else { return nil }
-        openExternally(url)
+        switch navigationDecision(for: url, isMainFrame: true, in: webView) {
+        case .allow:
+            webView.load(navigationAction.request)
+        case .openExternally:
+            openExternally(url)
+        case .cancel:
+            logger.log("New-window request refused by navigation policy: \(url.redactedForLog)")
+        }
         return nil
     }
 }
@@ -573,7 +622,23 @@ extension BrowserViewModel: WKNavigationDelegate {
         if ProcessInfo.processInfo.arguments.contains("-UITestLogResponses") {
             logger.log("RESP-LOG action: \(navigationAction.request.url?.redactedForLog ?? "(nil)") type=\(navigationAction.navigationType.rawValue)")
         }
-        decisionHandler(.allow)
+        // Exactly one destination (R3). A nil targetFrame is a new-window
+        // request, which would be a top-level document too.
+        let url = navigationAction.request.url
+        let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        switch navigationDecision(for: url, isMainFrame: isMainFrame, in: webView) {
+        case .allow:
+            decisionHandler(.allow)
+        case .openExternally:
+            decisionHandler(.cancel)
+            if let url {
+                logger.log("Navigation leaves the app: \(url.redactedForLog)")
+                openExternally(url)
+            }
+        case .cancel:
+            decisionHandler(.cancel)
+            logger.log("Navigation refused by policy: \(url?.redactedForLog ?? "(nil)")")
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
