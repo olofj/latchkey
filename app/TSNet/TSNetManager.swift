@@ -60,6 +60,14 @@ final class TSNetManager {
     /// be attached to a Mac. See `SocksLogProxy`.
     @MainActor private var socksLogProxy: SocksLogProxy?
     @MainActor private var socksLogProxyPort: UInt16?
+
+    /// The SOCKS5 endpoint WebKit talks to — the logging relay's port when
+    /// the relay is on, tsnet's loopback listener otherwise — and tsnet's
+    /// per-launch credential. Kept so a policy change can build a FRESH
+    /// ProxyConfiguration (R12): copying and editing the installed one would
+    /// rewrite it in place, because ProxyConfiguration has reference
+    /// semantics under its struct face (see ProxyConfigurationFactory).
+    @MainActor private var proxyEndpoint: (host: String, port: Int, credential: String)?
     @MainActor private var didRunTCPChaosTest = false
 
     /// Creates a per-workspace tsnet controller. `config.path` is the
@@ -433,6 +441,17 @@ final class TSNetManager {
         guard let ip = loopbackConfig.ip, let port = loopbackConfig.port else {
             return nil
         }
+        return proxyConfig(upstreamHost: ip, upstreamPort: port,
+                           credential: loopbackConfig.proxyCredential)
+    }
+
+    /// The same, from plain values: tsnet's loopback listener in production,
+    /// or the stub proxy in the offline test harness (R11). Starts the
+    /// logging relay in front of it when enabled, records the endpoint for
+    /// later rescoping, and builds the configuration through
+    /// `ProxyConfigurationFactory`.
+    func proxyConfig(upstreamHost ip: String, upstreamPort port: Int,
+                     credential: String) -> ProxyConfiguration? {
 
         // Route WebKit through the logging relay (Settings → Logs) so every
         // connection attempt that reaches the tailnet proxy is recorded with
@@ -456,23 +475,22 @@ final class TSNetManager {
             }
         }
 
-        let proxy = NWEndpoint.hostPort(host: NWEndpoint.Host(proxyHost),
-                                        port: NWEndpoint.Port("\(proxyPort)")!)
-
-        var proxyConfig = ProxyConfiguration(socksv5Proxy: proxy)
-        proxyConfig.applyCredential(username: "tsnet",
-                                    password: loopbackConfig.proxyCredential)
-
+        proxyEndpoint = (proxyHost, proxyPort, credential)
         let policy = TailnetProxyPolicy.make(from: model.localStatus,
                                              exitNodeEnabled: proxyEverythingRequested())
-        if policy.proxiesEverything {
-            model.proxyPolicy = policy
-            logger.log("proxyConfig: proxying ALL hosts (exit node on, or -ProxyEverything). Public traffic egresses via the exit node; with no working exit node it will fail.")
-            return proxyConfig
+        guard let proxyConfig = ProxyConfigurationFactory.make(
+            proxyHost: proxyHost, proxyPort: proxyPort,
+            credential: credential, policy: policy)
+        else {
+            logger.log("proxyConfig: invalid proxy endpoint port \(proxyPort); not publishing")
+            return nil
         }
-        proxyConfig.matchDomains = policy.matchDomains
         model.proxyPolicy = policy
-        logger.log("proxyConfig: split tunnel, proxying \(policy.matchDomains.count) rule(s): \(policy.matchDomains.joined(separator: ", "))")
+        if policy.proxiesEverything {
+            logger.log("proxyConfig: proxying ALL hosts (-ProxyEverything test hook). Public traffic only works if something carries it out of the tailnet.")
+        } else {
+            logger.log("proxyConfig: split tunnel, proxying \(policy.matchDomains.count) rule(s): \(policy.matchDomains.joined(separator: ", "))")
+        }
         if !policy.shortNamesWithheldAsPublicTLD.isEmpty {
             logger.log("proxyConfig: short names withheld (public-TLD collision), reachable via FQDN: \(policy.shortNamesWithheldAsPublicTLD.joined(separator: ", "))")
         }
@@ -493,8 +511,15 @@ final class TSNetManager {
         let policy = TailnetProxyPolicy.make(from: model.localStatus,
                                              exitNodeEnabled: proxyEverythingRequested())
         guard policy != model.proxyPolicy else { return }
-        guard var updated = model.proxyConfiguration else { return }
-        updated.matchDomains = policy.matchDomains
+        // Build a fresh configuration rather than editing the published one:
+        // ProxyConfiguration's copies share storage, so upstream's
+        // `var updated = model.proxyConfiguration; updated.matchDomains = …`
+        // rewrote the object already installed in WebKit's data store (R12).
+        guard let endpoint = proxyEndpoint,
+              let updated = ProxyConfigurationFactory.make(
+                proxyHost: endpoint.host, proxyPort: endpoint.port,
+                credential: endpoint.credential, policy: policy)
+        else { return }
         model.proxyPolicy = policy
         model.proxyConfiguration = updated
         logger.log("proxyConfig: policy updated — \(policy.matchDomains.joined(separator: ", "))")
@@ -591,6 +616,7 @@ final class TSNetManager {
         socksLogProxyPort = nil
         localAPIClient = nil
         model.proxyConfiguration = nil
+        proxyEndpoint = nil
         model.proxyPolicy = nil
 
         guard let node else { return }
