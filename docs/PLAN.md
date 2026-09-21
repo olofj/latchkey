@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | In implementation. M0–M4 done (the M1 device check awaits owner actions O1–O3); revisions from `docs/PLAN-REVISIONS.md` being applied — where they disagree with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
+| Status | In implementation. M0–M5 done (the M1 device check awaits owner actions O1–O3); revisions from `docs/PLAN-REVISIONS.md` being applied — where they disagree with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
 | Author | Drafted 2026-09-20 from three parallel research passes |
 | Repo | `~/src/latchkey` |
 | Base | Fork of [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) @ `dba0555` (2026-08-24), BSD-3-Clause |
@@ -258,14 +258,16 @@ and has more preconditions than the paragraph above lists (see M7.5).
 ### 3.4 Discovery design
 
 1. Take the peers from `tsnetModel.localStatus`, which the app already polls through `LocalAPIClient.backendStatus()` — the same data `TailnetProxyPolicy.make(from:)` uses. **(R18:** this step originally said to prefer `TailscaleNode.statusJSON()`. That API and `tailscale_status_json` exist only in libtailscale `main`, which lacks `restartLoopback`; the vendored revision has neither, and the header text quoted here was from `main`.)
-2. Extract peer `DNSName`s. `TailnetProxyPolicy` already parses exactly this data — reuse its parsing rather than writing a second JSON path.
-3. For each peer, probe `GET https://<dnsname>/manifest.json` through the tsnet dialer with a short timeout (2 s) and bounded concurrency (4 at a time).
-4. A gateway is a match when the response is JSON with `"name": "Kiro Crew"`.
-5. Cache results with a timestamp; re-probe on manual refresh and on first run only. Persist the chosen gateway.
+2. **(R26)** Filter to candidates: `Online`, not `Expired`, not a `ShareeNode`, `OS` in {linux, macOS, windows}, owned by the same user. The saved gateway is always probed, and first. (`OS`/`UserID` needed a post-import decode in the vendored TailscaleKit.)
+3. Probe each over **HTTPS only**, through an ephemeral `URLSession` built from `tsnetModel.proxyConfiguration`: 12 at a time, 1.5 s per request, 5 s for the whole sweep, results streamed to the picker as they arrive.
+4. A gateway is a match when `GET /manifest.json` is JSON named `"Kiro Crew"` **and** an unauthenticated `GET /api/auth/me` answers 403 with `X-Auth-Required: true`.
+5. If every probe fails with -1000/-1004, report "proxy unhealthy" (not "no gateways") and refresh the node's status.
+6. Re-probe on first run, on manual refresh, and from the "gateway unreachable" banner. Persist the chosen gateway.
 
-Fallback: let the user type a hostname, and also probe `http://<host>:5476` for
-gateways not fronted by `tailscale serve` (that is how `chonk` is reachable
-today; `byskebox` answers on 443).
+~~Fallback: also probe `http://<host>:5476`.~~ **Dropped (R26):** chonk's
+dashboard listens on 127.0.0.1 only, a plain-http origin fails KiroCrew's
+`/api/ws` origin check, and HSTS (`includeSubDomains`) upgrades it after any
+https visit anyway. chonk is out of v1 (D4). Manual entry stays, https only.
 
 ### 3.5 Lifecycle
 
@@ -512,21 +514,24 @@ tasks.
 
 ### M5 — Gateway discovery (5–8 h)
 
+**Status:** done 2026-09-21 on the L2 harness: `scripts/test-discovery.sh` passes 3/3; first gateway < 0.5 s, sweep ~1.5 s. The real-tailnet check waits for M7. `docs/DECISIONS.md` "M5" has the detail.
+
 **Goal:** find KiroCrew gateways on the tailnet instead of hardcoding a hostname.
 
 | # | Task | Detail |
 |---|---|---|
-| 5.1 | `GatewayDiscovery` | New type. Enumerate peers from `tsnetModel.localStatus` (R18; §3.4). Reuse `TailnetProxyPolicy`'s existing peer parsing. |
-| 5.2 | Probe | `GET https://<dnsname>/manifest.json` through the tsnet dialer; 2 s timeout; max 4 concurrent. Match on `"name": "Kiro Crew"`. Also try `http://<dnsname>:5476/manifest.json` for gateways not behind `tailscale serve`. |
-| 5.3 | Picker UI | List discovered gateways with hostname and reachability. Manual entry as a fallback. Persist the choice; skip the picker when only one is found and it already has a session. |
-| 5.4 | Wire into the start URL | Replace the M1 hardcoded URL: `HomePage.defaultURL` becomes the selected gateway. Keep `HomePageAvailability` (`App/Browser/HomePageAvailability.swift`) — it already checks whether a host exists in the tailnet before loading, which is exactly right here. |
-| 5.5 | Re-probe policy | On first run, on manual refresh, and when the selected gateway has been unreachable for N attempts. Never on every launch — it costs seconds. |
-| 5.6 | Tests | Against the M3 fake control plane with two fake nodes, one serving `manifest.json` and one not: assert exactly one gateway is discovered. Assert probes are concurrency-bounded and that a slow peer cannot stall discovery past its timeout. |
+| 5.1 | `GatewayDiscovery` | Peers from `tsnetModel.localStatus` (R18), filtered by R26: online, not expired, not shared in, a server OS, same owner; the saved gateway first. The filter and fingerprint are pure code (`GatewayCandidates`), host-tested. |
+| 5.2 | Probe (R26) | HTTPS only, through an ephemeral `URLSession` on the node's proxy configuration; 12 concurrent, 1.5 s per request, 5 s per sweep; streamed. Fingerprint: `manifest.json` named "Kiro Crew" **and** `/api/auth/me` → 403 + `X-Auth-Required`. All probes failing with -1000/-1004 → "proxy unhealthy" + `refreshStatusNow()`. ~~`http://<host>:5476`~~ dropped. |
+| 5.3 | Picker UI | Shown instead of the dashboard until a gateway is chosen; results stream in; Refresh; manual entry (a bare name is qualified with the MagicDNS suffix; always https). A single gateway found on the first run is chosen without asking (the "already has a session" condition cannot be known before loading it, and would not change what to load). |
+| 5.4 | Wire into the start URL | `HomePage.defaultURL` is empty — no gateway — instead of the M1 hardcoded byskebox. Choosing one sets the home page and reopens the dashboard tab on it. `HomePageAvailability` stays. |
+| 5.5 | Re-probe policy | First run, manual refresh, and the "gateway unreachable" banner's Find. Never on every launch. |
+| 5.6 | Tests | L2 (`scripts/test-discovery.sh`): the tsnet harness with peers `gw` (the fake KiroCrew gateway), `dash` (a web page, not KiroCrew), `plain` (nothing listening) and `slow` (accepts, never answers). Discovery must find exactly `gw` within the deadline, choose it and load it over the tailnet; manual entry when nothing is found; the choice persists across relaunch. |
 
-**AC:**
-- On a tailnet with two nodes where one runs KiroCrew, discovery finds exactly that one, in under 5 seconds.
+**AC (rewritten by R26, measured by app-logged timestamps):**
+- On the harness tailnet, discovery finds exactly the one gateway; the first gateway appears within 5 s and the sweep completes within 10 s even with a peer that never answers.
 - Manual entry works when discovery finds nothing.
 - The selected gateway persists across app restarts.
+- **To verify in M7 (R26):** under the purgatory policy (D5) a promoted `kiro-clients` node's netmap should hold only byskebox, chonk and air; a node still in purgatory sees no gateway at all.
 
 ---
 
@@ -564,13 +569,13 @@ likely to make the app feel unreliable in daily use.
 | 7.3 | Node login | Interactive login through `ASWebAuthenticationSession` (`TSNet/AuthManager.swift:16-44`). The new node appears in the tailnet under `owner@example.com`, **not** tagged. Confirm in the Tailscale admin console. **R6:** it is already named `latchkey-iphone` by `WorkspaceDefinition.makeDefault()` — renaming it after the first dashboard sign-in would sign the app out, since KiroCrew pins sessions to `login|node name`. **R8:** this login now happens during the M1 device check, not here. |
 | 7.4 | System VPN off | Turn the Tailscale app's VPN off and confirm the dashboard still loads. This is the headline feature — verify it explicitly. |
 | 7.5 | Durable QR sessions — **optional, QR users only (R24)** | CLI-link sessions already survive restarts, so this matters only if QR sign-in is used. `dashboard.qr_session_persist_across_restart` needs **all of:** `trust_identity` on with a non-empty `allowed_logins` (including `owner@example.com`), `qr_session_until_restart` still true, **and** the QR generated from an unbounded desktop session. Keep `pin_scope: node`, and name the node first (R6). Depends on §C O4; needs Olof's consent (§C O6) and a rollback note. |
-| 7.6 | Both gateways | Test against `byskebox` (443 via serve) and `chonk`. Confirm discovery finds both and switching works. |
+| 7.6 | Discovery on the real tailnet | Confirm discovery finds `byskebox` (443 via serve) and nothing else, within R26's budget. ~~`chonk`~~: out of v1 (D4, R26) — its dashboard listens on loopback only. Gateway switching itself is R32's task. |
 | 7.7 | Weekly re-sign | Document the 7-day rebuild ritual in `README.md`. If it grates, the $99 program makes profiles last a year. |
 
 **AC:**
 - App reaches a live session with the system VPN off, on cellular as well as Wi-Fi.
 - Survives a gateway restart without a token re-entry — for CLI-link sessions always; for QR sessions only if 7.5 is enabled.
-- Both gateways are discoverable and switchable.
+- byskebox is discovered on the real tailnet within R26's budget.
 
 ---
 

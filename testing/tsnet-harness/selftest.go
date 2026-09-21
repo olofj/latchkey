@@ -64,6 +64,16 @@ func runSelftest(h *harness, caFile string) error {
 			return fmt.Errorf("peer %s missing; peers: %v", want, keys(seen))
 		}
 	}
+	// Discovery (R26) skips offline peers and filters by OS: the harness
+	// must report its peers as a real control plane would.
+	for _, p := range full.Peer {
+		if !p.Online {
+			return fmt.Errorf("peer %s is reported offline; discovery would skip it", p.HostName)
+		}
+		if p.OS == "" {
+			return fmt.Errorf("peer %s reports no OS", p.HostName)
+		}
+	}
 	ok("peers %v", keys(seen))
 
 	step("the dashboard loads by MagicDNS name through the node's loopback SOCKS5")
@@ -214,8 +224,13 @@ func runSelftest(h *harness, caFile string) error {
 		peers4 = append(peers4, p.HostName)
 	}
 	sort.Strings(peers4)
-	if strings.Join(peers4, ",") != "dash,plain" {
-		return fmt.Errorf("after a reset a new node sees peers %v, want exactly [dash plain]", peers4)
+	var want []string
+	for _, p := range h.peerSpecs(Mode{}) {
+		want = append(want, p.name)
+	}
+	sort.Strings(want)
+	if strings.Join(peers4, ",") != strings.Join(want, ",") {
+		return fmt.Errorf("after a reset a new node sees peers %v, want exactly %v", peers4, want)
 	}
 	ok("a new node sees exactly %v, not the still-running probe-machine", peers4)
 	return nil

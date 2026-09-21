@@ -16,6 +16,9 @@ CONTROL_PORT ?= 8490
 API_PORT     ?= 8491
 DASH_PORT    ?= 8443
 RUN_DIR      ?= .run
+# Extra harness flags, e.g. HARNESS_ARGS="-gateway 127.0.0.1:8444 -slow-peer"
+# for the discovery suite (M5).
+HARNESS_ARGS ?=
 BIN          := $(RUN_DIR)/tsnet-harness
 PID          := $(RUN_DIR)/tsnet-harness.pid
 LOG          := $(RUN_DIR)/tsnet-harness.log
@@ -40,7 +43,7 @@ up: build down  ## Start the fake dashboard and the harness
 	done
 	@rm -rf $(STATE)
 	@$(BIN) -control 127.0.0.1:$(CONTROL_PORT) -api 127.0.0.1:$(API_PORT) \
-	    -dashboard 127.0.0.1:$(DASH_PORT) -state $(STATE) > $(LOG) 2>&1 & echo $$! > $(PID)
+	    -dashboard 127.0.0.1:$(DASH_PORT) -state $(STATE) $(HARNESS_ARGS) > $(LOG) 2>&1 & echo $$! > $(PID)
 	@# Ready means OUR process answers /healthz: the first reset (peers up)
 	@# has completed. A port probe alone would accept a stray (see ../harness).
 	@pid=$$(cat $(PID)); ok=0; \

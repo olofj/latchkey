@@ -18,11 +18,15 @@
 //
 //   - DERP and STUN on 127.0.0.1.
 //
-//   - Two peers. "dash" forwards tailnet :443 to the fake dashboard
+//   - Peers. "dash" forwards tailnet :443 to the fake dashboard
 //     (dashboard.py, which terminates TLS with the test CA's leaf for
 //     dash.tail-scale.ts.net), and journals every connection with its tailnet
 //     source address -- the proof a load went through the tailnet. "plain"
-//     serves nothing: a second peer that is not a gateway.
+//     serves nothing: a second peer that is not a gateway. Optional, for
+//     gateway discovery (M5): "gw" (-gateway) forwards to the fake KiroCrew
+//     gateway -- a peer that IS one -- and "slow" (-slow-peer) accepts
+//     connections and never answers, to prove a probe cannot stall the
+//     sweep.
 //
 //   - The login page testcontrol lacks. With RequireAuth the node's
 //     BrowseToURL is <control>/auth/<id>; visiting it completes that login,
@@ -31,7 +35,8 @@
 //   - A plain-HTTP API for the tests (default 127.0.0.1:8491):
 //
 //     GET  /state     control URL, mode, nodes, logins, journal
-//     POST /reset     ?auth=1 (RequireAuth) &machine=1 (RequireMachineAuth):
+//     POST /reset     ?auth=1 (RequireAuth) &machine=1 (RequireMachineAuth)
+//     &gw=0 (leave the gw peer out of this generation):
 //     a fresh control plane and fresh peers, returning once the
 //     peers are Running. Each test starts from one, so nodes from
 //     an earlier test never appear as peers.
@@ -104,14 +109,17 @@ type options struct {
 	controlAddr   string
 	apiAddr       string
 	dashboardAddr string
+	gatewayAddr   string // the fake KiroCrew gateway; empty: no gw peer
+	slowPeer      bool
 	stateDir      string
 	verbose       bool
 }
 
-// Mode is the control plane's login policy, set per reset.
+// Mode is the control plane's login policy and peer set, set per reset.
 type Mode struct {
 	RequireAuth        bool `json:"requireAuth"`
 	RequireMachineAuth bool `json:"requireMachineAuth"`
+	NoGateway          bool `json:"noGateway"`
 }
 
 type loginEvent struct {
@@ -160,6 +168,8 @@ func main() {
 	flag.StringVar(&o.controlAddr, "control", "127.0.0.1:8490", "control plane listen address (loopback)")
 	flag.StringVar(&o.apiAddr, "api", "127.0.0.1:8491", "test API listen address (loopback)")
 	flag.StringVar(&o.dashboardAddr, "dashboard", "127.0.0.1:8443", "where the dash peer forwards tailnet :443")
+	flag.StringVar(&o.gatewayAddr, "gateway", "", "add a gw peer forwarding tailnet :443 here (the fake KiroCrew gateway)")
+	flag.BoolVar(&o.slowPeer, "slow-peer", false, "add a peer that accepts on :443 and never answers")
 	flag.StringVar(&o.stateDir, "state", "", "tsnet state root; each run gets a fresh subdirectory (default: the system temp dir)")
 	flag.BoolVar(&o.verbose, "v", false, "log tsnet and control-plane output")
 	flag.BoolVar(&selftest, "selftest", false, "run the host-side self-test and exit")
@@ -179,7 +189,11 @@ func main() {
 		log.Fatal(err)
 	}
 	o.stateDir = d
-	for _, a := range []string{o.controlAddr, o.apiAddr, o.dashboardAddr} {
+	addrs := []string{o.controlAddr, o.apiAddr, o.dashboardAddr}
+	if o.gatewayAddr != "" {
+		addrs = append(addrs, o.gatewayAddr)
+	}
+	for _, a := range addrs {
 		if !isLoopback(a) {
 			log.Fatalf("%s is not a loopback address; the control plane, the API and the dashboard target are loopback only", a)
 		}
@@ -323,6 +337,10 @@ func (h *harness) reset(m Mode) error {
 		// One owner for every node, as on a personal tailnet: discovery
 		// (M5, R26) filters peers by owner.
 		AllNodesSameUser: true,
+		// Peers are reported Online, as the real control plane reports a
+		// connected node. testcontrol's default leaves Online unset, and
+		// discovery (R26) skips offline peers -- it found nothing (M5).
+		AllOnline: true,
 		Logf:             h.logf("control"),
 	}
 	h.mu.Lock()
@@ -332,10 +350,7 @@ func (h *harness) reset(m Mode) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	var peers []*peer
-	for _, spec := range []struct{ name, forward string }{
-		{"dash", h.opts.dashboardAddr},
-		{"plain", ""},
-	} {
+	for _, spec := range h.peerSpecs(m) {
 		p, err := h.startPeer(ctx, ctl, gen, spec.name, spec.forward)
 		if err != nil {
 			for _, q := range peers {
@@ -350,6 +365,23 @@ func (h *harness) reset(m Mode) error {
 	h.mu.Unlock()
 	log.Printf("reset: generation %d, requireAuth=%v requireMachineAuth=%v", gen, m.RequireAuth, m.RequireMachineAuth)
 	return nil
+}
+
+type peerSpec struct {
+	name    string
+	forward string // relay tailnet :443 here; "hold" accepts and never answers; "" nothing
+}
+
+// peerSpecs lists this generation's peers.
+func (h *harness) peerSpecs(m Mode) []peerSpec {
+	specs := []peerSpec{{"dash", h.opts.dashboardAddr}, {"plain", ""}}
+	if h.opts.gatewayAddr != "" && !m.NoGateway {
+		specs = append(specs, peerSpec{"gw", h.opts.gatewayAddr})
+	}
+	if h.opts.slowPeer {
+		specs = append(specs, peerSpec{"slow", "hold"})
+	}
+	return specs
 }
 
 // startPeer brings a harness-owned node to Running, doing its own login and
@@ -378,9 +410,28 @@ func (h *harness) startPeer(ctx context.Context, ctl *testcontrol.Server, gen in
 			s.Close()
 			return nil, err
 		}
-		go h.forward(gen, name, ln, forward)
+		if forward == "hold" {
+			go hold(ln)
+		} else {
+			go h.forward(gen, name, ln, forward)
+		}
 	}
 	return p, nil
+}
+
+// hold accepts connections and never answers: a peer that stalls every
+// probe until the prober gives up.
+func hold(ln net.Listener) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			io.Copy(io.Discard, c)
+			c.Close()
+		}()
+	}
 }
 
 // forward relays each tailnet connection to target, journaling its source
@@ -524,6 +575,7 @@ func (h *harness) apiMux() *http.ServeMux {
 		m := Mode{
 			RequireAuth:        r.URL.Query().Get("auth") == "1",
 			RequireMachineAuth: r.URL.Query().Get("machine") == "1",
+			NoGateway:          r.URL.Query().Get("gw") == "0",
 		}
 		if err := h.reset(m); err != nil {
 			reply(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})

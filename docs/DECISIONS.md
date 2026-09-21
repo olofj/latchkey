@@ -1406,3 +1406,80 @@ LocalAPI and SOCKS traffic needs no exception: L2 passes 4/4 with the node's
 LocalAPI on loopback HTTP. L1 passes 9/9 and M4 12/12, both over HTTPS with
 the test CA trusted in the simulator. AGENTS.md now says not to add the keys
 back for a plain-HTTP gateway (chonk is out of v1, D4).
+
+## 2026-09-21 — M5: gateway discovery (R26)
+
+**Built (`app/`):**
+- `GatewayCandidates` is pure, host-tested (31 checks) code for three things:
+  - R26's filters: online, not expired, not shared in, a server OS, the
+    same owner. The saved gateway always comes first. An unknown OS or
+    owner does not exclude a peer, because a missing field is not evidence
+    of a phone.
+  - The fingerprint: `manifest.json` named "Kiro Crew" **and**
+    `/api/auth/me` answering 403 + `X-Auth-Required`.
+  - Manual-entry normalization: a bare name is qualified with the MagicDNS
+    suffix, and the result is always https.
+- `GatewayDiscovery` probes over HTTPS only, through an ephemeral
+  `URLSession` built from the node's proxy configuration: 12 at a time,
+  1.5 s per request, a 5-s sweep deadline, with results streamed.
+  - If every probe fails with -1000/-1004 it reports "proxy unhealthy" and
+    refreshes the status.
+  - No candidates: it finishes at once. A first version sat out the 5-s
+    deadline with nothing to probe.
+- **The picker** replaces the dashboard until a gateway is chosen.
+  - A single gateway found on the first run is chosen automatically. M5.3's
+    "and it already has a session" is dropped: it cannot be known before
+    loading, and would not change what to load.
+  - The "gateway unreachable" banner gained **Find**, which opens the picker
+    (M5.5).
+  - Choosing a gateway sets the home page and reopens the dashboard tab.
+- **`HomePage.defaultURL` is empty** (no gateway). The M1 hardcoded byskebox
+  is gone. No migration is needed: the app has never been installed on the
+  phone (O1–O3 are pending). The inherited tailnet tests now set their
+  gateway explicitly, as their comment always said they would at M5.
+- The vendored TailscaleKit now decodes `PeerStatus.OS` and `UserID`, as its
+  own commit (R16).
+
+**Found on the way, and fixed:**
+1. **testcontrol reports every peer offline** unless `AllOnline` is set, so
+   R26's filter skipped every harness peer. The first discovery run probed
+   0 of 4, and **the manual-entry test passed anyway**, because it expected
+   zero gateways. Fixes:
+   - The harness sets `AllOnline`, as a real control plane marks connected
+     peers.
+   - Its self-test now fails if a peer is reported offline or without an OS.
+   - The manual-entry test now requires that the web-page peer was actually
+     probed and rejected.
+2. **Test data could land in the real data directory.** `WorkspaceStore`
+   chose the UI-test directory only for `-UITest*` arguments, so a relaunch
+   carrying only `-TestControlURL` read and wrote the REAL directory. The
+   persistence test caught it: its relaunch found no gateway. `-Test*`
+   hooks now count as test runs too.
+3. **The picker is up only for the ~1.5-s sweep**, too briefly for XCUITest
+   to catch reliably. The first-run test now proves its result by what
+   follows: the app chooses by itself only when exactly one gateway was
+   found. The timing is R26's own instrument, the app-logged timestamps.
+   `test-discovery.sh` parses them and fails on a sweep over 10 s or a first
+   gateway over 5 s. It also fails if no sweep found anything. Validated
+   against a slow first result, a slow sweep and an empty log.
+
+**The AC, measured:**
+- `scripts/test-discovery.sh` passes 3/3. The four harness peers are `gw`
+  (the fake KiroCrew gateway), `dash` (a web page), `plain` (nothing
+  listening) and `slow` (accepts, never answers).
+- Exactly `gw` is found; the first gateway appears at 446–477 ms and each
+  sweep finishes in 1.5–1.6 s.
+- Manual entry works when nothing is found, and the choice survives a
+  relaunch.
+- The real-tailnet part of the AC (R26's purgatory-netmap expectation, and
+  byskebox found within budget) waits for the device check and M7.
+
+**Regression pass:** host tests, L1 9/9, L2 4/4, and the three
+connection-independent inherited tests all pass. The session suite showed one
+more **race in a test of my own design**. In the 6-s-session test, the
+page's scheduler usually cured a forced expiry before any wrapped API call
+could hit the 403, so "the interceptor path ran" was luck. The interceptor
+path now has its own deterministic test: a 4000-s session puts the scheduler
+~400 s away, so the page's 30-s poll must hit the 403 first. The session
+suite now passes 13/13 in 330 s.
+
