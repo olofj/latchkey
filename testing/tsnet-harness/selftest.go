@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -543,8 +544,7 @@ func selftestRehearsal(ctx context.Context, h *harness, api, caFile string) erro
 
 	step("/move puts the running node in the clients range: it takes the address, and reaches dash from it")
 	to := "100.99.1.5"
-	if out, err := apiPost(api + "/move?hostname=probe-purgatory&to=" + to); err != nil ||
-		!strings.Contains(string(out), `"moved": 1`) || !strings.Contains(string(out), `"pushed": true`) {
+	if out, err := apiPost(api + "/move?hostname=probe-purgatory&to=" + to); err != nil || !strings.Contains(string(out), `"moved": 1`) {
 		return fmt.Errorf("move: %v %s", err, out)
 	}
 	// The node itself, not just control, holds the new address.
@@ -577,13 +577,79 @@ func selftestRehearsal(ctx context.Context, h *harness, api, caFile string) erro
 	}
 	ok("addresses %v, released, and dash journaled the connection from %s", ips, to)
 
-	step("/move refuses an address that is not a tailnet IPv4, or one in use")
-	for _, bad := range []string{"100.100.100.100", "10.0.0.1", "fd7a:115c:a1e0::1", to} {
-		if _, err := apiPost(api + "/move?hostname=dash&to=" + bad); err == nil {
-			return fmt.Errorf("move to %s was accepted", bad)
+	step("a moved node still hears of later control changes: a node that joins after the move")
+	// Could fail: the harness once pushed a moved node its netmap by hand,
+	// which made testcontrol suppress every automatic one after it, so a
+	// later join never reached the moved node. Listed is not enough -- the
+	// moved node dials the newcomer by its address, so its data plane, not
+	// just its status, holds the new peer.
+	late, lateSt, err := h.probe(ctx, "probe-late", "Running")
+	if err != nil {
+		return err
+	}
+	defer late.Close()
+	lateIP := lateSt.TailscaleIPs[0].String()
+	ln, err := late.Listen("tcp", ":7443")
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			io.WriteString(c, "late\n")
+			c.Close()
+		}
+	}()
+	listed := false
+	for end := time.Now().Add(15 * time.Second); time.Now().Before(end) && !listed; time.Sleep(200 * time.Millisecond) {
+		if st, err := lc.Status(ctx); err == nil {
+			for _, p := range st.Peer {
+				listed = listed || p.HostName == "probe-late"
+			}
 		}
 	}
-	ok("refused")
+	if !listed {
+		return fmt.Errorf("the moved node never listed probe-late among its peers")
+	}
+	dialCtx, cancelDial := context.WithTimeout(ctx, 15*time.Second)
+	c, err := probe.Dial(dialCtx, "tcp", net.JoinHostPort(lateIP, "7443"))
+	cancelDial()
+	if err != nil {
+		return fmt.Errorf("the moved node could not reach probe-late at %s: %w", lateIP, err)
+	}
+	greeting, _ := io.ReadAll(c)
+	c.Close()
+	if strings.TrimSpace(string(greeting)) != "late" {
+		return fmt.Errorf("probe-late answered %q", greeting)
+	}
+	ok("probe-late (%s) listed by the moved node, and reached from it", lateIP)
+
+	step("/move refuses what the admin console would not do, and an unknown name is a 404")
+	for _, bad := range []struct{ query, want string }{
+		{"hostname=dash&to=100.99.1.6", "is a harness peer"},
+		{"hostname=probe-purgatory&to=100.100.100.100", "not a tailnet IPv4 address"},
+		{"hostname=probe-purgatory&to=10.0.0.1", "not a tailnet IPv4 address"},
+		{"hostname=probe-purgatory&to=fd7a:115c:a1e0::1", "not a tailnet IPv4 address"},
+		{"hostname=probe-purgatory&to=100.64.0.9", "testcontrol's own pool"},
+		{"hostname=probe-purgatory&to=" + to, "already has " + to},
+		{"hostname=probe-late&to=" + to, "already probe-purgatory's address"},
+	} {
+		_, err := apiPost(api + "/move?" + bad.query)
+		if err == nil {
+			return fmt.Errorf("move accepted %s", bad.query)
+		}
+		if !strings.Contains(err.Error(), bad.want) {
+			return fmt.Errorf("move refused %s for the wrong reason: %v (want %q)", bad.query, err, bad.want)
+		}
+	}
+	if code := apiStatus(api + "/move?hostname=nobody&to=100.99.1.6"); code != http.StatusNotFound {
+		return fmt.Errorf("move of an unknown hostname: %d, want 404", code)
+	}
+	ok("refused, each for its reason; unknown hostname 404")
 
 	step("purgatory off: a new node reaches dash from where it lands")
 	if out, err := apiPost(api + "/purgatory?on=0"); err != nil || !strings.Contains(string(out), `"purgatory": false`) {
@@ -605,7 +671,50 @@ func selftestRehearsal(ctx context.Context, h *harness, api, caFile string) erro
 		return fmt.Errorf("the dash peer did not journal the connection from %s", st2.TailscaleIPs[0])
 	}
 	ok("reached from %s", st2.TailscaleIPs[0])
+
+	step("/purgatory?on=1 mid-generation: a node already present outside the range is jailed; the moved node is not")
+	// Could fail: a switch that reached only nodes joining afterwards would
+	// leave probe-released talking to dash.
+	if out, err := apiPost(api + "/purgatory?on=1"); err != nil || !strings.Contains(string(out), `"purgatory": true`) {
+		return fmt.Errorf("purgatory on: %v %s", err, out)
+	}
+	if err := waitNode(h, "probe-released", func(n nodeInfo) bool { return n.Jailed }); err != nil {
+		return fmt.Errorf("probe-released was not jailed: %w", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	releasedIP := st2.TailscaleIPs[0].String()
+	accepted := journalCount(h, "dash", releasedIP)
+	start = time.Now()
+	out, err = curl("--cacert", caFile, "-m", "3", "--proxy", "socks5h://tsnet:"+cred2+"@"+addr2, "https://dash."+MagicDNSSuffix+"/healthz")
+	if err == nil {
+		return fmt.Errorf("dash answered probe-released after purgatory came on: %.100q", out)
+	}
+	if time.Since(start) < 2*time.Second {
+		return fmt.Errorf("probe-released failed fast (%v), not by a dropped SYN: %.100q", time.Since(start), out)
+	}
+	if journalCount(h, "dash", releasedIP) != accepted {
+		return fmt.Errorf("dash accepted a connection from the jailed probe-released")
+	}
+	// The moved node, inside the range, is left alone -- and the switch's
+	// netmap push reached it like any other control change.
+	if err := waitNode(h, "probe-purgatory", func(n nodeInfo) bool { return !n.Jailed }); err != nil {
+		return fmt.Errorf("the moved node was jailed by the switch: %w", err)
+	}
+	if out, err := curl("--cacert", caFile, "--proxy", proxy, "https://dash."+MagicDNSSuffix+"/healthz"); err != nil {
+		return fmt.Errorf("dash from the moved node with purgatory back on: %w\n%s", err, out)
+	}
+	ok("probe-released timed out (%v) with nothing accepted; the moved node still reaches dash", time.Since(start).Round(100*time.Millisecond))
 	return nil
+}
+
+// apiStatus is a POST's status code (apiPost folds a non-200 into an error).
+func apiStatus(url string) int {
+	resp, err := http.Post(url, "", nil)
+	if err != nil {
+		return 0
+	}
+	resp.Body.Close()
+	return resp.StatusCode
 }
 
 // dashKey is the status key of the dash peer, or a zero key if absent.

@@ -2323,10 +2323,8 @@ nothing. A Fable agent built the rehearsal, harness-side only.
 - `/purgatory` jails the app's node at every harness peer unless its IPv4
   is in the fixture clients range `100.99.1.0/24` (fixture ranges only, not
   the real policy's). The peers stay visible, and every SYN is dropped.
-- `/move` changes the running node's IPv4. testcontrol derives a node's own
-  address from its ID, so the node is also pushed a full netmap. After such
-  a push, testcontrol sends it no automatic netmaps, so the harness re-pushes
-  after its own changes.
+- `/move` changes the running node's IPv4. (As first built it also pushed
+  the node a raw netmap; the review below replaced that.)
 - The self-test grew four steps.
 
 **`DiscoveryTests.testDeviceCheckRehearsalPurgatoryThenAddressMove`:**
@@ -2351,3 +2349,37 @@ once more before calling it a fault.
 
 Results: harness self-test ×3, discovery 5/5 ×4, L2 9/9 with the login-link
 scan, host tests all green.
+
+**Review (Fable, adversarial):** three medium and five low findings, all in
+the harness. None affects the app, and no current suite hit them. They would
+have made the next test built on `/move` flaky with no clue why.
+
+*Fixed:*
+- **(medium) A moved node went deaf, and a re-login split its address.** The
+  raw netmap push made testcontrol stop all automatic updates to that node:
+  peers joining later, endpoint changes, a restarted map poll. A re-login
+  then left its own address and its peers' view of it apart for good.
+  *Decision:* a minimal patch to the vendored testcontrol, its own commit
+  (R16), as R32's was. A node's own addresses come from its stored entry,
+  and are derived from its ID only when the entry has none. Every entry
+  `serveRegister` makes holds exactly that derived pair, so no other node
+  changes. `/move` is now just `UpdateNode`, and the push machinery is gone.
+  The patch is to a test-only package, not in the app, but its `.go` source
+  makes the framework stamp stale, so one rebuild follows.
+- **(medium) The first-join jail race.** The peers could learn of the app
+  unjailed a moment before the jail landed. The jail is now applied from
+  testcontrol's `HoldMapRequest`, before the request that wakes the peers.
+- *(low)*
+  - `/move` refuses an unknown host (404), an ambiguous one (409), a harness
+    peer, testcontrol's own pool, and a no-op move;
+  - purgatory updates are serialized;
+  - the discovery log check requires exactly one all-failed purgatory sweep;
+  - the UI test taps Search again once more if the first search comes up
+    empty, as the runbook tells Olof to;
+  - two new self-test steps: a moved node sees a peer that joins after the
+    move and reaches it, and purgatory switched on mid-run jails a node
+    already present. Run against the reviewed harness, the first one fails,
+    so it can fail.
+
+Rerun: harness self-test green, discovery 5/5 twice (the framework rebuilt
+first), L2 9/9, lifecycle 5/5.

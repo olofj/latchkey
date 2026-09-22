@@ -143,7 +143,9 @@ fi
 # timeout (in purgatory, every probe's), which proves it was waited for. The
 # first gateway must appear within 5 s of the picker appearing (the wait for
 # the node's status included), and a sweep must end within 10 s. At least
-# one sweep must have found the gateway, or this measured nothing.
+# one sweep must have found the gateway, or this measured nothing; and the
+# purgatory sweep happens exactly once (the rehearsal's first run), so a
+# sweep in which every peer failed for some other reason cannot pass as it.
 say "R26 sweeps, from the app's own log"
 xcrun simctl spawn "$UDID" log show --start "$LOG_START" \
     --predicate 'subsystem == "net.lixom.latchkey"' --style compact 2>/dev/null \
@@ -151,8 +153,9 @@ xcrun simctl spawn "$UDID" log show --start "$LOG_START" \
 if ! python3 - "$LOG_DIR/sweeps.log" <<'PY'
 import re, sys
 lines = open(sys.argv[1]).read().splitlines()
-expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2), (4, 4, 0, 0, 4)}
-bad, found, probing = [], 0, None
+purgatory_sig = (4, 4, 0, 0, 4)
+expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2), purgatory_sig}
+bad, found, probing, purgatory = [], 0, None, 0
 for l in lines:
     m = re.search(r"Discovery: probing (\d+) of (\d+) peer", l)
     if m:
@@ -174,9 +177,13 @@ for l in lines:
     if n and (shown == "—" or int(shown) > 5000):
         bad.append("first gateway %s after the picker appeared (budget 5 s): %s" % (shown, l))
     found += n > 0
+    purgatory += sig == purgatory_sig
     probing = None
 if not found:
     print("error: no sweep that found a gateway was logged; this measured nothing")
+    sys.exit(1)
+if purgatory != 1:
+    print("error: %d sweeps in which every peer failed; the rehearsal's purgatory sweep is exactly one" % purgatory)
     sys.exit(1)
 if bad:
     print("error:")

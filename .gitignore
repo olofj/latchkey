@@ -15,6 +15,8 @@ app/
 testing/harness/.run/
 # L2 tsnet harness: its binary, pidfile, log and node state.
 testing/tsnet-harness/.run/
+# ...and the binary a plain `go build` there leaves beside the sources.
+testing/tsnet-harness/tsnet-harness
 __pycache__/
 
 # Xcode / build
