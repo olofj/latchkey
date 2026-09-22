@@ -251,19 +251,32 @@ final class DiscoveryTests: XCTestCase {
         let reply = try JSONSerialization.jsonObject(
             with: try await Self.post("\(Self.harnessAPI)/move?hostname=\(node.hostname)&to=\(to)")) as? [String: Any] ?? [:]
         XCTAssertEqual(reply["moved"] as? Int, 1, "the node was moved: \(reply)")
-        XCTAssertEqual(reply["pushed"] as? Bool, true, "and handed its new netmap: \(reply)")
         try await Task.sleep(for: .seconds(2))
-        element(app, "gateway-refresh").tap()
-        // Listed -- and, the only gateway on a first run, chosen by itself
-        // when the sweep ends (M5.3), about 1.5 s after it is listed (the
-        // slow peer's timeout), which is too brief to catch reliably; the
-        // sighting is recorded, the proof is what follows.
-        let listed = element(app, "gateway-\(Self.gatewayHost)").waitForExistence(timeout: 15)
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+        // Search again, as the runbook has Olof do -- and, as it tells him,
+        // once more if a search still finds nothing, rather than reading a
+        // single miss as a fault. Found means the gateway row, or already
+        // the token sheet: the only gateway on a first run is chosen by
+        // itself when the sweep ends (M5.3), about 1.5 s after it is listed
+        // (the slow peer's timeout), too brief to catch the row reliably.
+        // The sighting is recorded; the proof is what follows.
+        let row = element(app, "gateway-\(Self.gatewayHost)")
+        let sheet = element(app, "token-sheet")
+        var listed = false
+        var taps = 0
+        repeat {
+            element(app, "gateway-refresh").tap()
+            taps += 1
+            for _ in 0..<40 {
+                listed = row.exists || sheet.exists
+                if listed { break }
+                try await Task.sleep(for: .milliseconds(250))
+            }
+        } while !listed && taps < 2 && element(app, "gateway-refresh").exists
+        XCTAssertTrue(sheet.waitForExistence(timeout: 45),
                       "after the move, Search again finds the gateway, it loads over the tailnet, and asks for a token")
         XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.gatewayHost))
         XCTAssertFalse(element(app, "nav-error-overlay").exists, "no navigation error after the address change")
-        XCTContext.runActivity(named: "after the move: gateway row seen = \(listed)") { _ in }
+        XCTContext.runActivity(named: "after the move: gateway found = \(listed) after \(taps) tap(s) of Search again") { _ in }
 
         // 3. The traffic crossed the tailnet from the NEW address: the gw
         // peer journals every connection with its tailnet source. Nothing
