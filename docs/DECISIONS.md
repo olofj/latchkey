@@ -2245,3 +2245,46 @@ recovery runs). The reviewer showed it against the real file.
 reaper. Its sessions end when a peer closes or errors. That is bounded by
 the cap it had before the recovery, and the connections outlived the relay
 before this fix anyway.
+
+## 2026-09-21 — Owner actions O1 and O3 done; the install step without Xcode's UI
+
+**O1:** the Apple ID is in Xcode as a free personal team, "Olof Johansson
+(Personal Team)", Team ID `DX33PQ7J4A` (read from Xcode's settings). It is
+kept in `app/.dev-team`, which is gitignored. `DEVELOPMENT_TEAM` stays blank
+in the project, as DEVICE-CHECK.md intends.
+
+**O3:** the "admin purgatory" policy is applied (D5).
+
+**O2 is waiting for Olof to be at chonk with the phone.** A free team
+installs only through Xcode, from a Mac the phone is paired with. There is
+no TestFlight or ad-hoc build without the paid Developer Program. Pairing
+needs the phone at the Mac, and the Developer Mode switch appears only after
+it has been connected to one. The runbook now says so.
+
+**Decision:** `make device` (`app/scripts/device-run.sh`) builds Release,
+signs with the team in `.dev-team` (`-allowProvisioningUpdates`, which also
+makes the certificate and 7-day profile and registers the phone), installs
+with `devicectl` and launches. A session can do the install once the phone
+is paired, and it is a Release build, what would ship, rather than Xcode
+Run's Debug.
+
+The runbook's later steps were stale since M4 and M5: the app picks the
+gateway itself, finding none until O3b, and signs in through its own Sign in
+sheet, not the page's banner. Updated.
+
+**Free-team limits to keep in mind:**
+- the profile lasts 7 days. After that the app will not launch until it is
+  reinstalled from chonk; its data survives;
+- at most 3 sideloaded apps per phone.
+Neither blocks M1, M6.6 or M7. Overnight timings fit well inside a week.
+
+**Checked before the first install:**
+- the Release app compiles for a real iPhone (arm64, unsigned, `generic/platform=iOS`);
+- none of the test hooks is in the Release binary (R15). The same probe finds them in the
+  Testing build's `Latchkey.debug.dylib`, so it can see them. The one
+  `UITest` symbol left is `WorkspaceStore.isUITestProcess`, which is meant
+  to be in every build: it only moves a test run's data aside.
+
+Full tier on the relay review fixes (app `62dfae1ad`, parent `f44cad0`):
+host, vendored Go, L1, L2, session, discovery, lifecycle 5/5 and inherited,
+all green.

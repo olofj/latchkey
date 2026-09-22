@@ -19,19 +19,32 @@ agent cannot do.
 
 | # | Who | Step | Done |
 |---|---|---|---|
-| O1 | Olof | Xcode → Settings → Accounts → add your Apple ID (a free personal team is fine). Note the **Team ID** it shows and give it to the session. | ☐ |
-| O2 | Olof | iPhone: Settings → Privacy & Security → **Developer Mode** on (the phone restarts). Connect it to chonk and tap *Trust*. Note the **iOS version** (Settings → General → About). | ☐ |
-| O3 | Olof | Apply the "admin purgatory" tailnet policy (decision D5) through the infra workspace. Afterwards a new admin-owned device lands in `100.81.0.0/24` with **no grants**, and `kiro-clients` (`100.82.1.0/24`) is allowed to reach `byskebox:443` only. | ☐ |
+| O1 | Olof | Xcode → Settings → Accounts → add your Apple ID (a free personal team is fine). Note the **Team ID** it shows and give it to the session. | ☑ 2026-09-21: "Olof Johansson (Personal Team)", `DX33PQ7J4A`, kept in `app/.dev-team` (gitignored) |
+| O2 | Olof | **At chonk, with the phone.** Connect the iPhone to chonk with a cable and tap *Trust*. Then Settings → Privacy & Security → **Developer Mode** on (the phone restarts). The Developer Mode switch appears only after the phone has been connected to a Mac with Xcode. Note the **iOS version** (Settings → General → About). | ☐ |
+| O3 | Olof | Apply the "admin purgatory" tailnet policy (decision D5) through the infra workspace. Afterwards a new admin-owned device lands in `100.81.0.0/24` with **no grants**, and `kiro-clients` (`100.82.1.0/24`) is allowed to reach `byskebox:443` only. | ☑ 2026-09-21 |
+
+**Why O2 needs you at the Mac.** A free personal team can only install by
+Xcode, from a Mac the phone is paired with: no TestFlight and no ad-hoc
+builds, which need the paid Developer Program. Pairing needs the phone at
+chonk, on the cable (or, on recent iOS, the same Wi-Fi). Each install needs
+the phone on the cable or on chonk's local network. A remote link such as
+Tailscale is not enough. Once the app is installed, nothing else in this
+check needs the Mac, and M6.6's timings are meant to be run untethered.
 
 ## 2. Install
 
-1. Open `app/Latchkey.xcodeproj` in Xcode.
-2. `Latchkey` target → Signing & Capabilities → Team: your personal team.
-   (`DEVELOPMENT_TEAM` is blank in the project on purpose, so Xcode asks.)
-3. Select the iPhone as the run destination and press **Run**. The first run
-   builds TailscaleKit into the app, which takes a few minutes.
-4. On the phone: Settings → General → VPN & Device Management → trust your
-   developer profile. Launch Latchkey.
+With the phone paired and on the cable (or on chonk's network):
+
+1. `make -C app device`: a Release build signed with the team in
+   `app/.dev-team`, installed and launched on the paired iPhone. A session can
+   run this for you. The first build creates the signing certificate and a
+   7-day profile, and registers the phone.
+   *Or in Xcode:* open `app/Latchkey.xcodeproj`, set `Latchkey` → Signing &
+   Capabilities → Team to your personal team (`DEVELOPMENT_TEAM` is blank in
+   the project on purpose), pick the iPhone and press **Run**. That installs
+   a Debug build.
+2. The first time only, on the phone: Settings → General → VPN & Device
+   Management → trust your developer profile. Then open Latchkey.
 
 ## 3. Tailnet login
 
@@ -43,14 +56,16 @@ agent cannot do.
    you, **untagged**, with an address in the purgatory pool (`100.81.0.x`).
    Check all three.
 
-At this point the app shows the dashboard view, but **the dashboard will not
-load** — the node has no grants yet. That is expected, not a bug.
+At this point the app is connected but finds no gateway: *Choose a gateway*
+says no computer could be a gateway, because the node has no grants yet.
+That is expected, not a bug.
 
 ## 4. Out of purgatory — O3b (Olof)
 
 Move the node's address into the next free `kiro-clients` address
 (`100.82.1.x`) via the admin console or the API. Record the address here:
-`100.82.1.___`.
+`100.82.1.___`. Then tap **Search again** in Latchkey: byskebox should be
+listed. Pick it.
 
 Reinstalling the app creates a *new* node, which lands back in purgatory and
 must be moved again.
@@ -59,9 +74,9 @@ must be moved again.
 
 1. On byskebox, mint a token: `kirocrew token` (the CLI prints up to three
    URLs; any one of them works), or use the dashboard's *Phone access* QR.
-2. Within **5 minutes**, in Latchkey, paste it into the **dashboard's own red
-   banner**. It accepts the whole URL or the bare token. (The app's native
-   token sheet is M4 and does not exist yet; the banner is the page's own UI.)
+2. Within **5 minutes**, in Latchkey's **Sign in** sheet, tap Paste (it
+   accepts the whole URL or the bare token), or Scan the QR code. The sheet
+   (M4) opens by itself when the dashboard has no session.
 
 CLI links carry no boot binding, so their sessions and 30-day refresh chains
 survive gateway restarts. QR sessions end at a restart by default (R24).
