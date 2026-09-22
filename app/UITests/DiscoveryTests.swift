@@ -17,6 +17,10 @@
 //  All four are online, owned by the same user and report macOS, so all pass
 //  R26's filters; the fingerprint alone decides.
 //
+//  The device-check rehearsal (DEVICE-CHECK.md §3-4) adds the harness's
+//  purgatory: every peer drops the app node's traffic until the harness
+//  moves its address into the fixture clients range, while it runs.
+//
 //  No -UITestHomePage: the app starts with no gateway, as a first run does.
 //  Needs scripts/test-discovery.sh (parent repo).
 //
@@ -195,6 +199,94 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.gatewayHost))
     }
 
+    /// The device-check rehearsal (DEVICE-CHECK.md §3-4). On the real tailnet
+    /// a new node lands in a purgatory range with no grants: it connects but
+    /// reaches nothing. Olof then moves its address into the kiro-clients
+    /// range WHILE IT RUNS (O3b) and taps Search again. Two things had never
+    /// been seen before this test: what the picker shows while the node
+    /// reaches nothing, and whether the app, its relay and tsnet keep working
+    /// after the control plane changes the running node's own address. The
+    /// harness's purgatory jails the app's node at every peer (the peers stay
+    /// visible; every SYN is dropped), and /move gives it 100.99.1.7.
+    func testDeviceCheckRehearsalPurgatoryThenAddressMove() async throws {
+        try await resetHarness(purgatory: true)
+        let app = launch()
+        defer { app.terminate() }
+
+        // 1. In purgatory: the sweep ends, in bounded time, with nothing.
+        // The wait here spans the node's start-up too; the sweep's own
+        // timing is R26's app-logged instrument, which the script enforces.
+        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60), "the first-run picker")
+        let shown = ContinuousClock.now
+        let none = element(app, "gateway-none")
+        XCTAssertTrue(none.waitForExistence(timeout: 20),
+                      "the sweep finishes with no gateway; it must not hang on dropped SYNs")
+        let waited = ContinuousClock.now - shown
+        let message = none.label
+        // The peers are visible (as admin devices plausibly are on the real
+        // tailnet), so it is the "answered among N" form, not "No computers
+        // on your tailnet could be a gateway", which needs an empty list.
+        XCTAssertTrue(message.hasPrefix("No Kiro Crew gateway answered among 4 computer(s)"),
+                      "in purgatory the picker says: \(message)")
+        XCTAssertEqual(element(app, "gateway-sweep-done").label, "sweep-done:0")
+        XCTAssertFalse(element(app, "gateway-proxy-unhealthy").exists,
+                       "the node's loopback is fine; it is the tailnet that drops the traffic")
+        let node = try await appNode()
+        XCTAssertTrue(node.jailed, "the harness jails the app's node: \(node)")
+        XCTAssertFalse(node.addresses.contains { $0.hasPrefix("100.99.1.") },
+                       "a new node lands outside the clients range: \(node.addresses)")
+        // Not vacuous: the probes went out and nothing accepted them -- no
+        // peer journaled a connection from the app (a dropped SYN is never
+        // accepted; a refusal would not be journaled either, but the sweep
+        // log's timing tells those apart).
+        let before = try await harnessState()["journal"] as? [[String: Any]] ?? []
+        XCTAssertFalse(before.contains { Self.isFrom(node.addresses, $0) },
+                       "no peer accepted a connection from the jailed node: \(before)")
+        XCTContext.runActivity(named: "purgatory: picker showed \(message) after \(waited)") { _ in }
+
+        // 2. O3b: the admin moves the running node into the clients range.
+        // The netmap lands within a moment on loopback; Olof's tap comes
+        // seconds after the console.
+        let to = "100.99.1.7"
+        let reply = try JSONSerialization.jsonObject(
+            with: try await Self.post("\(Self.harnessAPI)/move?hostname=\(node.hostname)&to=\(to)")) as? [String: Any] ?? [:]
+        XCTAssertEqual(reply["moved"] as? Int, 1, "the node was moved: \(reply)")
+        XCTAssertEqual(reply["pushed"] as? Bool, true, "and handed its new netmap: \(reply)")
+        try await Task.sleep(for: .seconds(2))
+        element(app, "gateway-refresh").tap()
+        // Listed -- and, the only gateway on a first run, chosen by itself
+        // when the sweep ends (M5.3), about 1.5 s after it is listed (the
+        // slow peer's timeout), which is too brief to catch reliably; the
+        // sighting is recorded, the proof is what follows.
+        let listed = element(app, "gateway-\(Self.gatewayHost)").waitForExistence(timeout: 15)
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+                      "after the move, Search again finds the gateway, it loads over the tailnet, and asks for a token")
+        XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.gatewayHost))
+        XCTAssertFalse(element(app, "nav-error-overlay").exists, "no navigation error after the address change")
+        XCTContext.runActivity(named: "after the move: gateway row seen = \(listed)") { _ in }
+
+        // 3. The traffic crossed the tailnet from the NEW address: the gw
+        // peer journals every connection with its tailnet source. Nothing
+        // ever came from the purgatory address (the IPv6 address stays).
+        let oldV4 = node.addresses.filter { $0.contains(".") }
+        let journal = try await harnessState()["journal"] as? [[String: Any]] ?? []
+        XCTAssertTrue(journal.contains { $0["peer"] as? String == "gw" && $0["error"] == nil && Self.isFrom([to], $0) },
+                      "gw journaled the app from \(to): \(journal.suffix(6))")
+        XCTAssertFalse(journal.contains { Self.isFrom(oldV4, $0) },
+                       "nothing came from the purgatory address \(oldV4): \(journal)")
+        let after = try await appNode()
+        XCTAssertFalse(after.jailed, "released: \(after)")
+        XCTAssertTrue(after.addresses.contains(to), "control holds the new address: \(after.addresses)")
+
+        // 4. The app's own view agrees: Status shows the moved address, not
+        // the old one (the 5 s status poll has long since run).
+        element(app, "token-sheet-close").tap()
+        let list = app.openStatus()
+        let addresses = app.statusRow("diag-addresses", in: list)
+        XCTAssertTrue(addresses.contains(to), "Status shows the moved address: \(addresses)")
+        XCTAssertFalse(oldV4.contains { addresses.contains($0) }, "and not the old one: \(addresses)")
+    }
+
     // MARK: - Helpers
 
     private func launch() -> XCUIApplication {
@@ -208,14 +300,49 @@ final class DiscoveryTests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
-    private func resetHarness(withGateway: Bool = true) async throws {
-        let data = try await Self.post("\(Self.harnessAPI)/reset\(withGateway ? "" : "?gw=0")", timeout: 90)
+    private func resetHarness(withGateway: Bool = true, purgatory: Bool = false) async throws {
+        var query: [String] = []
+        if !withGateway { query.append("gw=0") }
+        if purgatory { query.append("purgatory=1") }
+        let suffix = query.isEmpty ? "" : "?" + query.joined(separator: "&")
+        let data = try await Self.post("\(Self.harnessAPI)/reset\(suffix)", timeout: 90)
         let state = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         XCTAssertNotNil(state["generation"], "reset failed: \(String(decoding: data, as: UTF8.self))")
     }
 
     private func harnessState() async throws -> [String: Any] {
         try JSONSerialization.jsonObject(with: try await Self.get("\(Self.harnessAPI)/state")) as? [String: Any] ?? [:]
+    }
+
+    private struct Node {
+        let hostname: String
+        let addresses: [String]
+        let jailed: Bool
+    }
+
+    /// The one node that is not the harness's own: the app's. Waits for it
+    /// to register.
+    private func appNode() async throws -> Node {
+        var last: [[String: Any]] = []
+        for _ in 0..<60 {
+            last = try await harnessState()["nodes"] as? [[String: Any]] ?? []
+            let apps = last.filter { $0["harnessPeer"] as? Bool == false }
+            XCTAssertLessThanOrEqual(apps.count, 1, "expected one app node, found \(apps.count): \(apps)")
+            if let n = apps.first {
+                return Node(hostname: n["hostname"] as? String ?? "",
+                            addresses: n["addresses"] as? [String] ?? [],
+                            jailed: n["jailed"] as? Bool ?? false)
+            }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        XCTFail("the app's node never registered with the harness; nodes: \(last)")
+        return Node(hostname: "", addresses: [], jailed: false)
+    }
+
+    /// Whether a journal entry's tailnet source is one of `addresses`.
+    private static func isFrom(_ addresses: [String], _ entry: [String: Any]) -> Bool {
+        let from = entry["from"] as? String ?? ""
+        return addresses.contains { from.hasPrefix("\($0):") || from.hasPrefix("[\($0)]:") }
     }
 
     private func gatewayState() async throws -> [String: Any] {
