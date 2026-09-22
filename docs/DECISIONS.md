@@ -2116,7 +2116,7 @@ account. They were built by a Fable agent.
 
 `page_check.js` pins the backoff in Node.
 
-**Tests, 6/6:**
+**Tests, 5/5** (recorded as 6/6 at first; the suite has always had five):
 - A defunct loopback listener is replaced reactively, and the page
   reconnects through the replacement: damage to recovered in 1.6 s, the page
   back 1.2 s later.
@@ -2181,4 +2181,42 @@ findings.** It confirmed each of the following against the code:
 - *(low)* The freezer reads the pid from the log line. If the log format
   changes, it fails loudly rather than passing.
 
-Rerun after the fixes: lifecycle 6/6, session 16/16 with R1 clean.
+Rerun after the fixes: lifecycle 5/5, session 16/16 with R1 clean.
+
+## 2026-09-21 — A replaced relay stalled its surviving sessions
+
+A final end-to-end lifecycle run failed once: the defunct-loopback test's
+page reconnected, but its refetch never reached the dashboard. **An app bug,
+not a flaky test.** WebKit's network log showed the `GET /healthz` put on a
+pooled keep-alive connection through the OLD relay. It went out, got no
+reply, and the socket was never closed; a page `fetch` has no timeout.
+
+**Cause:** loopback recovery `stop()`s the relay and drops the manager's
+only reference to it. Its pumps captured `[weak self]`, so after the release
+each surviving session relayed one more chunk each way and then stopped
+re-arming: no relaying, no close. Earlier runs passed only because WebKit
+happened to open a new connection for the refetch. The restart-failure path
+in `restartSocksRelay` dropped the relay the same way.
+
+**Decision:** the pumps hold the relay strongly. A stopped or replaced relay
+carries its sessions to their end (tsnet's accepted connections survive a
+closed listener, which is what the test always assumed), and each session's
+end releases it. `stop()` closes only the listener. Cutting the sessions
+instead would also have worked, but would drop working connections for no
+gain.
+
+**Tests, both shown to fail on the old code:**
+- Host: a relay stopped and released still relays five separate chunks
+  both ways, stays alive while its session lives, and is freed when the
+  session ends. Old code: 1 of 5, then nothing. Relay checks 97/97.
+- L2: after recovery, the fake dashboard pushes two frames down the page's
+  surviving WebSocket (`POST /__ws_push`, new), and the page must show the
+  second. Old code: `survivor-1` arrived, `survivor-2` never did. This used
+  to depend on WebKit's pooling; now it is deterministic.
+
+**Also fixed, in the freezer:** the continue stamp was taken after SIGCONT
+by starting a python (about 30 ms). A report the resumed app flushed at once
+was stamped 25 ms "before" the continue, and failed the nothing-while-frozen
+check. Both stamps are now taken inside the freeze.
+
+Lifecycle 5/5 after both fixes.

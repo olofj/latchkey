@@ -26,6 +26,10 @@ Control routes (plain HTTP, 127.0.0.1:<control-port>):
   POST /__reset     clear all of the above
   POST /__drop_ws   close every open WebSocket server-side, as a gateway
                     restart does; the page must reconnect by itself (M6.4)
+  POST /__ws_push?text=T  send T as a text frame down every open WebSocket;
+                    the page shows it as "echo:T" and reports. Two in a row
+                    prove a surviving connection still carries traffic, not
+                    just one last chunk (M6 review)
 
 The page reconnects its WebSocket the way KiroCrew's does (PLAN M6.4): on
 close, after 1 s, doubling, capped at 10 s, reset to 1 s when a connection
@@ -50,11 +54,13 @@ import argparse
 import base64
 import hashlib
 import json
+import re
 import socket
 import ssl
 import struct
 import threading
 import time
+import urllib.parse
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -255,6 +261,8 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")
         self.send_header("Sec-WebSocket-Accept", acc)
+        # Frames are written by this thread (echoes) and by /__ws_push's.
+        self.ws_write_lock = threading.Lock()
         # Registered before the 101 goes out, so a client that sees the
         # upgrade can count on /__state's ws_open including it.
         with STATE_LOCK:
@@ -286,6 +294,14 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         except OSError:
             pass
 
+    def push(self, text):
+        """Send a text frame from another thread. False if the socket is gone."""
+        try:
+            self.ws_write(0x1, text.encode())
+            return True
+        except (OSError, ssl.SSLError):
+            return False
+
     def ws_read(self):
         b1, b2 = self.rfile.read(2)
         op, masked, ln = b1 & 0x0F, b2 & 0x80, b2 & 0x7F
@@ -308,8 +324,9 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             h += bytes([126]) + struct.pack("!H", n)
         else:
             h += bytes([127]) + struct.pack("!Q", n)
-        self.wfile.write(h + payload)
-        self.wfile.flush()
+        with self.ws_write_lock:
+            self.wfile.write(h + payload)
+            self.wfile.flush()
 
 
 class Control(BaseHTTPRequestHandler):
@@ -346,6 +363,15 @@ class Control(BaseHTTPRequestHandler):
             for h in open_now:
                 h.drop()
             return self.reply({"ok": True, "dropped": len(open_now)})
+        path, _, query = self.path.partition("?")
+        if path == "/__ws_push":
+            text = urllib.parse.parse_qs(query).get("text", [""])[0]
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,32}", text):
+                return self.reply({"error": "text must be 1-32 of [A-Za-z0-9-]"}, 400)
+            with STATE_LOCK:
+                open_now = list(WS_OPEN)
+            pushed = sum(1 for h in open_now if h.push(text))
+            return self.reply({"ok": True, "pushed": pushed})
         return self.reply({"error": "not found"}, 404)
 
 
@@ -354,8 +380,9 @@ class V6Server(ThreadingHTTPServer):
 
 
 def ws_drop_probe(port, control_port, ca):
-    """Self-test (make check): an open WebSocket is counted by /__state and cut
-    by POST /__drop_ws within 3 s. Exits non-zero otherwise."""
+    """Self-test (make check): an open WebSocket is counted by /__state, gets
+    what POST /__ws_push sends, twice, and is cut by POST /__drop_ws within
+    3 s. Exits non-zero otherwise."""
     import os
     import urllib.request
     ctx = ssl.create_default_context(cafile=ca)
@@ -376,10 +403,22 @@ def ws_drop_probe(port, control_port, ca):
     state = json.load(urllib.request.urlopen(ctl + "/__state", timeout=5))
     if state.get("ws_open", 0) < 1:
         raise SystemExit("ws_drop_probe: /__state does not count the open socket: %r" % state.get("ws_open"))
+    s.settimeout(3)
+    for text in ("probe-1", "probe-2"):
+        req = urllib.request.Request(ctl + "/__ws_push?text=" + text, method="POST")
+        pushed = json.load(urllib.request.urlopen(req, timeout=5)).get("pushed", 0)
+        frame = b""
+        want = bytes([0x81, len(text)]) + text.encode()
+        while len(frame) < len(want):
+            chunk = s.recv(len(want) - len(frame))
+            if not chunk:
+                break
+            frame += chunk
+        if pushed < 1 or frame != want:
+            raise SystemExit("ws_drop_probe: /__ws_push %s: pushed %r, got %r" % (text, pushed, frame))
     reply = json.load(urllib.request.urlopen(urllib.request.Request(ctl + "/__drop_ws", method="POST"), timeout=5))
     if reply.get("dropped", 0) < 1:
         raise SystemExit("ws_drop_probe: /__drop_ws dropped nothing: %r" % reply)
-    s.settimeout(3)
     try:
         data = s.recv(16)
     except (ssl.SSLError, OSError):

@@ -169,11 +169,15 @@ r = json.load(open(sys.argv[1])); print(r["id"], int(r["seconds"]))' "$FREEZER_D
                 continue
             fi
             echo "$pid" > "$FREEZER_DIR/frozen.pid"
+            # Both stamps lie INSIDE the freeze: t0 after the stop, t1 before
+            # the continue. `now` starts a python, some 30 ms, and a t1 taken
+            # after SIGCONT let a report the resumed app flushed at once look
+            # like one received while it was frozen (M6 review).
             t0=$(now)
             echo "$t0 pid $pid stopped for ${seconds}s (request $id)" >> "$FREEZER_LOG"
             sleep "$seconds"
-            kill -CONT "$pid" 2>>"$FREEZER_LOG" || true
             t1=$(now)
+            kill -CONT "$pid" 2>>"$FREEZER_LOG" || true
             rm -f "$FREEZER_DIR/frozen.pid"
             python3 -c 'import json, sys
 json.dump({"id": sys.argv[1], "pid": int(sys.argv[2]), "seconds": int(sys.argv[3]),

@@ -248,7 +248,7 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	    https://dash.localtest.me:$(DASH_PORT)/__report >/dev/null; \
 	curl -s $$DCTL/__state | $(PY) -c "import json, sys, time; r = json.load(sys.stdin)['reports']['dash.localtest.me']; \
 	    assert abs(r['received_at'] - time.time()) < 5 and r['received_seq'] >= 1, r"; echo "    ok"; \
-	echo "==> M6: /__drop_ws cuts an open WebSocket, as a gateway restart does"; \
+	echo "==> M6: /__ws_push reaches an open WebSocket and /__drop_ws cuts it, as a gateway restart does"; \
 	$(PY) -c "from dashboard import ws_drop_probe; ws_drop_probe($(DASH_PORT), $(DASH_CONTROL_PORT), 'ca.pem')"; echo "    ok"; \
 	echo "==> M6.4: the page reconnects as KiroCrew's does (1 s doubling to 10 s, reset on open, refetch)"; \
 	command -v node >/dev/null || { echo "FAIL: node is needed for page_check.js (brew install node)" >&2; exit 1; }; \
