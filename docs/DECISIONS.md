@@ -2220,3 +2220,28 @@ was stamped 25 ms "before" the continue, and failed the nothing-while-frozen
 check. Both stamps are now taken inside the freeze.
 
 Lifecycle 5/5 after both fixes.
+
+**Review (Fable, adversarial).** One medium finding, and it was right:
+`stop()` itself still captured `[weak self]`. The manager drops its
+reference on the next line, so a relay with no live session was freed
+before the block ran and its listener was never cancelled. The port went on
+accepting connections that nobody served: the same hang, by another route,
+in the real device's shape (iOS has killed every session by the time
+recovery runs). The reviewer showed it against the real file.
+
+**Fixed:**
+- `stop()` holds the relay until the listener is cancelled. New host check:
+  stopped and released with no session, the port refuses a probe and the
+  relay is freed. It fails on the weak capture. Relay checks 100/100.
+- *(low)* Session ids are process-wide, so a replaced relay's `socks[N]`
+  lines cannot be confused with its successor's in Settings → Logs.
+- *(low, older than this fix)* A listener failure is acted on only if the
+  relay that reported it is still the one in use. A replaced relay could
+  otherwise cost its successor a restart from the 2-a-minute budget.
+- *(cosmetic)* The dashboard self-test reports a missing pushed frame as a
+  failure message, not a traceback.
+
+**Not fixed** *(low, older than this fix)*: a stopped relay has no idle
+reaper. Its sessions end when a peer closes or errors. That is bounded by
+the cap it had before the recovery, and the connections outlived the relay
+before this fix anyway.

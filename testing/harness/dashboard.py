@@ -410,7 +410,10 @@ def ws_drop_probe(port, control_port, ca):
         frame = b""
         want = bytes([0x81, len(text)]) + text.encode()
         while len(frame) < len(want):
-            chunk = s.recv(len(want) - len(frame))
+            try:
+                chunk = s.recv(len(want) - len(frame))
+            except OSError:  # a timeout too: reported below, not as a traceback
+                break
             if not chunk:
                 break
             frame += chunk
