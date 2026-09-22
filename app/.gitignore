@@ -15,3 +15,7 @@ Packages/**/.build/
 Packages/**/.swiftpm/
 TODO.md
 TODO.workspaces.md
+
+# The owner's Apple Team ID for `make device` (DEVICE-CHECK.md); the project
+# leaves DEVELOPMENT_TEAM blank on purpose.
+/.dev-team

@@ -2,6 +2,7 @@
 #
 #   make            build everything from scratch (libtailscale + app for sim)
 #   make test       build, then run the UI tests on the simulator
+#   make device     build (Release), install and launch on the paired iPhone
 #   make ipa        archive + export a dev-signed .ipa for a real device
 #   make look       screenshot the booted sim + describe it with a vision sub-pi
 #   make clean      remove app build artifacts (keeps the TailscaleKit xcframework)
@@ -128,15 +129,20 @@ app: framework  ## Build the Latchkey app for the simulator
 		-destination 'platform=iOS Simulator,name=$(SIM_NAME)' \
 		-derivedDataPath $(DERIVED) $(SWIFT_SANDBOX_FLAGS) | $(XCPRETTIFIER)
 
+# ----- device (the M1 device check's install step) -----
+.PHONY: device
+device: framework  ## Build (Release), install and launch on the paired iPhone (team: app/.dev-team)
+	@./scripts/device-run.sh
+
 # ----- device ipa (real device install) -----
 .PHONY: ipa
 ipa: framework  ## Archive + export a dev-signed .ipa for a real iOS device
 	@./scripts/unlock-keychain.sh
 	@echo
 	@echo "::: Archiving Latchkey for generic iOS (Release) :::"
-	@echo "(needs a valid signing identity + provisioning profile for team W5364U7YZB;"
-	@echo " the login keychain must be unlocked — unlock-keychain.sh above prompts"
-	@echo " interactively if it's locked, or aborts if stdin isn't a terminal)"
+	@echo "(needs a valid signing identity + provisioning profile for your team; for the"
+	@echo " M1 device check use make device instead. The login keychain must be unlocked;"
+	@echo " unlock-keychain.sh above prompts, or aborts if stdin is not a terminal)"
 	$(XCB) archive \
 		-project $(PROJECT) -scheme $(SCHEME) \
 		-configuration Release \
