@@ -372,7 +372,10 @@ final class TSNetManager {
                 self.setProcessor(newProcessor)
 
                 // Replace the app-owned relay too: its upstream port and SOCKS
-                // credential changed with the tsnet loopback listener.
+                // credential changed with the tsnet loopback listener. The
+                // old relay's sessions ride tsnet's accepted connections,
+                // which a closed listener leaves open, so they run on to
+                // their end (`SocksLogProxy.stop`); only new ones use this.
                 self.socksLogProxy?.stop()
                 self.socksLogProxy = nil
                 self.socksLogProxyPort = nil

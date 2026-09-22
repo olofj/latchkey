@@ -214,6 +214,8 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
         }
     }
 
+    /// Closes the listener. The sessions it accepted are not cut: they run on
+    /// to their end, and keep this object alive until then (see `pump`).
     func stop() {
         queue.async { [weak self] in
             self?.listener?.cancel()
@@ -417,23 +419,32 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
     }
 
     /// Copies bytes one direction, handing each chunk to `observe` first.
+    ///
+    /// The callbacks hold the relay STRONGLY, so a relay that was stopped or
+    /// replaced still carries its sessions to their end (M6 review). A
+    /// loopback recovery drops the manager's reference while the page's
+    /// keep-alive connections are still open; with a weak capture each one
+    /// relayed one more chunk and then stopped re-arming, neither relaying nor
+    /// closing, and the next request WebKit put on it hung with no timeout.
+    /// The session's own end (either side closing, an error, an eviction)
+    /// releases the relay: nothing re-arms after `finishRelay`.
     private func pump(from: NWConnection,
                       to: NWConnection,
                       id: UInt64,
                       observe: @escaping @Sendable (Data) -> Void) {
         from.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
-            [weak self] data, _, isComplete, error in
+            [self] data, _, isComplete, error in
             if let data, !data.isEmpty {
                 observe(data)
-                to.send(content: data, completion: .contentProcessed { [weak self] sendError in
+                to.send(content: data, completion: .contentProcessed { [self] sendError in
                     guard sendError == nil else {
                         logger.log("socks[\(id)] relay send ended: \(String(describing: sendError))")
                         from.cancel()
                         to.cancel()
-                        self?.finishRelay(id: id, reason: "send error")
+                        finishRelay(id: id, reason: "send error")
                         return
                     }
-                    self?.pump(from: from, to: to, id: id, observe: observe)
+                    pump(from: from, to: to, id: id, observe: observe)
                 })
                 return
             }
@@ -443,7 +454,7 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
                 }
                 from.cancel()
                 to.cancel()
-                self?.finishRelay(id: id, reason: error == nil ? "complete" : "receive error")
+                finishRelay(id: id, reason: error == nil ? "complete" : "receive error")
                 return
             }
 
@@ -455,7 +466,7 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
             logger.log("socks[\(id)] relay receive made no progress; cancelling")
             from.cancel()
             to.cancel()
-            self?.finishRelay(id: id, reason: "no progress")
+            finishRelay(id: id, reason: "no progress")
         }
     }
 

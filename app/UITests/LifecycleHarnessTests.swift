@@ -93,8 +93,9 @@ final class LifecycleHarnessTests: XCTestCase {
     /// while every accepted connection lives on: a retained endpoint that
     /// refuses new connections. The app's next LocalAPI poll fails and the
     /// listener is replaced (status "recovered"). The page's open WebSocket
-    /// survives the damage, so what must be shown is that a NEW connection
-    /// gets through the replacement -- a gateway-restart drop, then reconnect.
+    /// survives the damage and must go on carrying frames through the old
+    /// relay; then what must be shown is that a NEW connection gets through
+    /// the replacement -- a gateway-restart drop, then reconnect.
     func testDefunctLoopbackListenerIsReplacedAndNewConnectionsGetThrough() async throws {
         try await runTCPChaos(hook: "-UITestDefunctLoopback", expectsLoopbackRecovery: true)
     }
@@ -147,6 +148,19 @@ final class LifecycleHarnessTests: XCTestCase {
             XCTAssertEqual(survived["ws"] as? String, "ws:open",
                            "a closed listener does not cut the accepted connections: \(survived)",
                            file: file, line: line)
+            // And the surviving socket still carries traffic, frame after
+            // frame. The replaced relay once relayed ONE more chunk per
+            // session and then hung with the socket open (M6 review): the
+            // first push would pass, the second never arrive.
+            for text in ["survivor-1", "survivor-2"] {
+                let pushReply = try await Self.post("\(Self.dashboardControl)/__ws_push?text=\(text)")
+                let pushed = (try JSONSerialization.jsonObject(with: pushReply) as? [String: Any])?["pushed"] as? Int ?? 0
+                XCTAssertGreaterThanOrEqual(pushed, 1, "the dashboard pushed \(text) down the page's socket",
+                                            file: file, line: line)
+                _ = try await waitForReport(timeout: 10) { r in
+                    r["doc"] as? String == doc && r["echo"] as? String == "echo:\(text)"
+                }
+            }
             let reply = try await Self.post("\(Self.dashboardControl)/__drop_ws")
             let dropped = (try JSONSerialization.jsonObject(with: reply) as? [String: Any])?["dropped"] as? Int ?? 0
             XCTAssertGreaterThanOrEqual(dropped, 1, "the dashboard dropped the page's WebSocket", file: file, line: line)

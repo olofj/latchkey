@@ -153,6 +153,68 @@ nonisolated final class FakeUpstream: @unchecked Sendable {
     }
 }
 
+/// Echoes every chunk back and counts the bytes: an upstream that answers.
+nonisolated final class EchoUpstream: @unchecked Sendable {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "kr-test-echo")
+    private let lock = NSLock()
+    private var held: [NWConnection] = []
+    private var receivedCount = 0
+    private let accepted = DispatchSemaphore(value: 0)
+    private let ready = DispatchSemaphore(value: 0)
+
+    init() throws {
+        let params = NWParameters.tcp
+        params.requiredInterfaceType = .loopback
+        listener = try NWListener(using: params)
+    }
+
+    func start() -> UInt16 {
+        listener.newConnectionHandler = { [self] connection in
+            connection.start(queue: queue)
+            lock.lock()
+            held.append(connection)
+            lock.unlock()
+            echo(connection)
+            accepted.signal()
+        }
+        listener.stateUpdateHandler = { [self] state in
+            if case .ready = state { ready.signal() }
+        }
+        listener.start(queue: queue)
+        _ = ready.wait(timeout: .now() + 5)
+        return listener.port?.rawValue ?? 0
+    }
+
+    private func echo(_ connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [self] data, _, isComplete, error in
+            if let data, !data.isEmpty {
+                lock.lock(); receivedCount += data.count; lock.unlock()
+                connection.send(content: data, completion: .contentProcessed { _ in })
+            }
+            if !isComplete && error == nil { echo(connection) }
+        }
+    }
+
+    var received: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return receivedCount
+    }
+
+    func waitForAccept(_ seconds: TimeInterval = 5) -> Bool {
+        accepted.wait(timeout: .now() + seconds) == .success
+    }
+
+    func stop() {
+        listener.cancel()
+        lock.lock()
+        for c in held { c.cancel() }
+        held.removeAll()
+        lock.unlock()
+    }
+}
+
 /// A client of the relay that reports when the relay closes on it.
 nonisolated final class Client: @unchecked Sendable {
     private let connection: NWConnection
@@ -184,9 +246,20 @@ nonisolated final class Client: @unchecked Sendable {
     }
 
     private func watchForClose() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { [self] _, _, isComplete, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { [self] data, _, isComplete, error in
+            if let data, !data.isEmpty {
+                lock.lock(); receivedCount += data.count; lock.unlock()
+            }
             if isComplete || error != nil { markClosed() } else { watchForClose() }
         }
+    }
+
+    private var receivedCount = 0
+    /// Bytes the relay delivered back to this client.
+    var received: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return receivedCount
     }
 
     private func markClosed() {
@@ -382,6 +455,35 @@ expect(logger.lines.contains { $0.contains("evicting socks[") && $0.contains("si
 busy.stop()
 b1.cancel(); b2.cancel(); b3.cancel()
 upstream.stop()
+
+print("== the relay: stopped and released, it carries its sessions to their end")
+// A loopback recovery stops the relay and drops the manager's reference while
+// the page's keep-alive connections are still open (M6 review). Each one must
+// go on relaying, chunk after chunk, both ways -- not relay one more chunk
+// and then hang with the socket open, which is what WebKit's next request on
+// it did.
+let echo = try! EchoUpstream()
+let echoPort = echo.start()
+expect(echoPort != 0, "the echo upstream listens")
+var released: SocksLogProxy? = SocksLogProxy(upstreamHost: "127.0.0.1", upstreamPort: echoPort)
+let releasedPort = released?.start() ?? 0
+expect(releasedPort != 0, "the fourth relay listens")
+let r1 = Client(port: releasedPort)
+expect(r1.waitReady() && echo.waitForAccept(), "a session through it")
+weak var releasedRelay = released
+released?.stop()
+released = nil
+for byte in UInt8(1)...5 {
+    r1.send(byte)
+    Thread.sleep(forTimeInterval: 0.1)  // one chunk each
+}
+expect(eventually { echo.received == 5 }, "all five chunks reached the upstream after the release: \(echo.received)")
+expect(eventually { r1.received == 5 }, "and all five echoes came back: \(r1.received)")
+expect(!r1.isClosed, "the session is still open")
+expect(releasedRelay != nil, "the live session is what keeps the released relay alive")
+r1.cancel()
+expect(eventually { releasedRelay == nil }, "and the session's end lets it go")
+echo.stop()
 
 print(failures == 0 ? "\(checks)/\(checks) SOCKS relay checks passed" : "\(failures) of \(checks) SOCKS relay checks FAILED")
 exit(failures == 0 ? 0 : 1)
