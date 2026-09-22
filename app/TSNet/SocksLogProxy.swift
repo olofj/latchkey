@@ -84,7 +84,7 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
     /// `.ready` reports `.failed` (R30 review): iOS reporting a defuncted
     /// listener rather than leaving it looking alive. The manager replaces
     /// it, within its restart budget. The listener is already gone by then.
-    private let onListenerFailed: (@Sendable () -> Void)?
+    private let onListenerFailed: (@Sendable (SocksLogProxy) -> Void)?
     private let queue = DispatchQueue(label: "net.lixom.latchkey.sockslog")
     /// Confined to `queue`, as is every other mutable thing here: `start`,
     /// `stop`, `restartListener` and the state handlers all touch it there.
@@ -94,7 +94,18 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
     /// ephemeral port can be handed out twice.
     private var listenerGeneration: UInt64 = 0
     /// Monotonic id so a CONNECT and its reply can be correlated in the log.
-    private var nextID: UInt64 = 1
+    /// Process-wide, not per relay: a replaced relay goes on logging its
+    /// sessions next to its successor's (M6 review), and two `socks[1]`s in
+    /// one log would be ambiguous.
+    nonisolated(unsafe) private static var nextID: UInt64 = 1
+    private static let nextIDLock = NSLock()
+    private static func takeID() -> UInt64 {
+        nextIDLock.lock()
+        defer { nextIDLock.unlock() }
+        let id = nextID
+        nextID &+= 1
+        return id
+    }
     private var activeClients: [UInt64: NWConnection] = [:]
     private var activeUpstreams: [UInt64: NWConnection] = [:]
     /// Parse state and last activity per admitted session (R30).
@@ -108,7 +119,7 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
 
     init(upstreamHost: String, upstreamPort: UInt16,
          capacity: SocksRelayCapacity = SocksRelayCapacity(),
-         onListenerFailed: (@Sendable () -> Void)? = nil) {
+         onListenerFailed: (@Sendable (SocksLogProxy) -> Void)? = nil) {
         self.upstreamHost = upstreamHost
         self.upstreamPort = upstreamPort
         self.capacity = capacity
@@ -185,7 +196,7 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
                     // It is dead; say so to the manager (R30 review).
                     logger.log("sockslog: listener failed after ready: \(error); asking for a replacement")
                     if self.listener === l { self.listener = nil }
-                    self.onListenerFailed?()
+                    self.onListenerFailed?(self)
                 } else if !progress.settled {
                     progress.settled = true
                     logger.log("sockslog: listener failed: \(error); using tsnet proxy directly")
@@ -216,10 +227,14 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
 
     /// Closes the listener. The sessions it accepted are not cut: they run on
     /// to their end, and keep this object alive until then (see `pump`).
+    /// Holds the relay strongly too (M6 review): the manager drops its
+    /// reference right after calling this, and with no session left a weak
+    /// capture found nil, never cancelled the listener, and left a port that
+    /// accepted connections nobody served.
     func stop() {
-        queue.async { [weak self] in
-            self?.listener?.cancel()
-            self?.listener = nil
+        queue.async { [self] in
+            listener?.cancel()
+            listener = nil
         }
     }
 
@@ -374,8 +389,7 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
             return
         }
 
-        let id = nextID
-        nextID += 1
+        let id = Self.takeID()
         activeClients[id] = client
         lastAcceptedAt = now
         lifecycleEvents &+= 1

@@ -483,6 +483,19 @@ expect(!r1.isClosed, "the session is still open")
 expect(releasedRelay != nil, "the live session is what keeps the released relay alive")
 r1.cancel()
 expect(eventually { releasedRelay == nil }, "and the session's end lets it go")
+
+print("== the relay: stopped and released with no session, its port is closed")
+// The real device's shape (M6 review): iOS defuncted every session during the
+// suspension, so nothing holds the relay when the recovery releases it. The
+// listener must still close, not linger accepting connections nobody serves.
+var idle: SocksLogProxy? = SocksLogProxy(upstreamHost: "127.0.0.1", upstreamPort: echoPort)
+let idlePort = idle?.start() ?? 0
+expect(idlePort != 0, "the fifth relay listens")
+weak var idleRelay = idle
+idle?.stop()
+idle = nil
+expect(eventually { probe(idlePort, timeout: 0.5) == .refused }, "its port refuses the probe")
+expect(eventually { idleRelay == nil }, "and the relay is freed")
 echo.stop()
 
 print(failures == 0 ? "\(checks)/\(checks) SOCKS relay checks passed" : "\(failures) of \(checks) SOCKS relay checks FAILED")

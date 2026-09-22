@@ -506,8 +506,8 @@ final class TSNetManager {
             if socksLogProxy == nil,
                let upstreamPort = UInt16(exactly: port) {
                 let relay = SocksLogProxy(upstreamHost: ip, upstreamPort: upstreamPort,
-                                          onListenerFailed: { [weak self] in
-                    Task { @MainActor [weak self] in self?.relayListenerFailed() }
+                                          onListenerFailed: { [weak self] failed in
+                    Task { @MainActor [weak self] in self?.relayListenerFailed(failed) }
                 })
                 if let localPort = relay.start() {
                     socksLogProxy = relay
@@ -677,10 +677,13 @@ final class TSNetManager {
 
     /// The listener told the relay it failed after it had been ready (R30
     /// review): the one case iOS reports a defuncted listener rather than
-    /// leaving it looking alive. Replace it, within the budget.
+    /// leaving it looking alive. Replace it, within the budget -- if it is
+    /// still the relay in use: a relay replaced by a loopback recovery can
+    /// report its listener's failure after the fact (M6 review), and must
+    /// not cost its successor a restart.
     @MainActor
-    private func relayListenerFailed() {
-        guard socksLogProxy != nil else { return }
+    private func relayListenerFailed(_ failed: SocksLogProxy) {
+        guard socksLogProxy === failed else { return }
         restartSocksRelayWithinBudget(reason: "its listener reported failure")
     }
 
