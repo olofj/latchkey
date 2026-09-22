@@ -9,12 +9,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
+	"tailscale.com/types/key"
 )
 
 // runSelftest exercises the harness from the host, through its own API, with
@@ -268,6 +270,9 @@ func runSelftest(h *harness, caFile string) error {
 			return err
 		}
 	}
+	if err := selftestRehearsal(ctx, h, api, caFile); err != nil {
+		return err
+	}
 
 	step("a reset isolates earlier nodes (one is still running)")
 	if _, err := apiPost(api + "/reset"); err != nil {
@@ -484,6 +489,149 @@ func selftestExtraPeers(ctx context.Context, h *harness, api, caFile string) err
 		ok("gw absent")
 	}
 	return nil
+}
+
+// selftestRehearsal covers the device-check rehearsal's endpoints
+// (DEVICE-CHECK.md §3-4): with purgatory on, a node outside the clients
+// range sees the peers but reaches none; /move puts the running node in the
+// range, it takes the address, and it reaches dash from it.
+func selftestRehearsal(ctx context.Context, h *harness, api, caFile string) error {
+	step("purgatory: a node outside %s sees the peers but reaches none", clientsRange)
+	if _, err := apiPost(api + "/reset?purgatory=1"); err != nil {
+		return err
+	}
+	probe, st, err := h.probe(ctx, "probe-purgatory", "Running")
+	if err != nil {
+		return err
+	}
+	defer probe.Close()
+	probeIP := st.TailscaleIPs[0].String()
+	if clientsRange.Contains(st.TailscaleIPs[0]) {
+		return fmt.Errorf("a new node landed inside the clients range (%s); the fixture range must be one testcontrol never assigns", probeIP)
+	}
+	lc, _ := probe.LocalClient()
+	full, err := lc.Status(ctx)
+	if err != nil {
+		return err
+	}
+	if _, ok := full.Peer[dashKey(full)]; !ok {
+		return fmt.Errorf("dash is not visible to the jailed node; peers: %d", len(full.Peer))
+	}
+	// The policy is applied from the node's first map request, asynchronously:
+	// wait for the harness to report it, then for the peers to have the netmap.
+	if err := waitNode(h, "probe-purgatory", func(n nodeInfo) bool { return n.Jailed }); err != nil {
+		return fmt.Errorf("the node was never jailed: %w", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	addr, cred, _, err := probe.Loopback()
+	if err != nil {
+		return err
+	}
+	proxy := "socks5h://tsnet:" + cred + "@" + addr
+	start := time.Now()
+	out, err := curl("--cacert", caFile, "-m", "3", "--proxy", proxy, "https://dash."+MagicDNSSuffix+"/healthz")
+	if err == nil {
+		return fmt.Errorf("dash answered a node outside the clients range: %.100q", out)
+	}
+	if time.Since(start) < 2*time.Second {
+		return fmt.Errorf("the connection failed fast (%v), not by a dropped SYN: %.100q", time.Since(start), out)
+	}
+	if journalHas2(h, "dash", probeIP) {
+		return fmt.Errorf("dash accepted a connection from %s", probeIP)
+	}
+	ok("dash visible, and the connection from %s timed out (%v) with nothing accepted", probeIP, time.Since(start).Round(100*time.Millisecond))
+
+	step("/move puts the running node in the clients range: it takes the address, and reaches dash from it")
+	to := "100.99.1.5"
+	if out, err := apiPost(api + "/move?hostname=probe-purgatory&to=" + to); err != nil ||
+		!strings.Contains(string(out), `"moved": 1`) || !strings.Contains(string(out), `"pushed": true`) {
+		return fmt.Errorf("move: %v %s", err, out)
+	}
+	// The node itself, not just control, holds the new address.
+	var ips []string
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if st, err := lc.StatusWithoutPeers(ctx); err == nil {
+			ips = ips[:0]
+			for _, ip := range st.TailscaleIPs {
+				ips = append(ips, ip.String())
+			}
+			if slices.Contains(ips, to) {
+				break
+			}
+		}
+	}
+	if !slices.Contains(ips, to) {
+		return fmt.Errorf("the node's own addresses are %v, want %s among them", ips, to)
+	}
+	if slices.Contains(ips, probeIP) {
+		return fmt.Errorf("the node kept its old address %s: %v", probeIP, ips)
+	}
+	if err := waitNode(h, "probe-purgatory", func(n nodeInfo) bool { return !n.Jailed }); err != nil {
+		return fmt.Errorf("the moved node is still jailed: %w", err)
+	}
+	if out, err := curl("--cacert", caFile, "--proxy", proxy, "https://dash."+MagicDNSSuffix+"/healthz"); err != nil {
+		return fmt.Errorf("dash after the move: %w\n%s", err, out)
+	}
+	if !journalHas(h, "dash", to) {
+		return fmt.Errorf("the dash peer did not journal a connection from the new address %s", to)
+	}
+	ok("addresses %v, released, and dash journaled the connection from %s", ips, to)
+
+	step("/move refuses an address that is not a tailnet IPv4, or one in use")
+	for _, bad := range []string{"100.100.100.100", "10.0.0.1", "fd7a:115c:a1e0::1", to} {
+		if _, err := apiPost(api + "/move?hostname=dash&to=" + bad); err == nil {
+			return fmt.Errorf("move to %s was accepted", bad)
+		}
+	}
+	ok("refused")
+
+	step("purgatory off: a new node reaches dash from where it lands")
+	if out, err := apiPost(api + "/purgatory?on=0"); err != nil || !strings.Contains(string(out), `"purgatory": false`) {
+		return fmt.Errorf("purgatory off: %v %s", err, out)
+	}
+	p2, st2, err := h.probe(ctx, "probe-released", "Running")
+	if err != nil {
+		return err
+	}
+	defer p2.Close()
+	addr2, cred2, _, err := p2.Loopback()
+	if err != nil {
+		return err
+	}
+	if out, err := curl("--cacert", caFile, "--proxy", "socks5h://tsnet:"+cred2+"@"+addr2, "https://dash."+MagicDNSSuffix+"/healthz"); err != nil {
+		return fmt.Errorf("dash with purgatory off: %w\n%s", err, out)
+	}
+	if !journalHas(h, "dash", st2.TailscaleIPs[0].String()) {
+		return fmt.Errorf("the dash peer did not journal the connection from %s", st2.TailscaleIPs[0])
+	}
+	ok("reached from %s", st2.TailscaleIPs[0])
+	return nil
+}
+
+// dashKey is the status key of the dash peer, or a zero key if absent.
+func dashKey(st *ipnstate.Status) key.NodePublic {
+	for k, p := range st.Peer {
+		if p.HostName == "dash" {
+			return k
+		}
+	}
+	return key.NodePublic{}
+}
+
+// waitNode polls /state until hostname's node satisfies want.
+func waitNode(h *harness, hostname string, want func(nodeInfo) bool) error {
+	var last nodeInfo
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		for _, n := range h.snapshot().Nodes {
+			if n.Hostname == hostname {
+				last = n
+				if want(n) {
+					return nil
+				}
+			}
+		}
+	}
+	return fmt.Errorf("timed out; last %+v", last)
 }
 
 // journalHas2 matches any journal entry for peer from fromIP, errors

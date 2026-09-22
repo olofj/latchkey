@@ -134,14 +134,16 @@ if [[ $TEST_RC -ne 0 ]]; then
     exit 1
 fi
 # R26's instrument: the app logs each sweep's timings, and what it probed.
-# Every sweep must match one of the two peer sets this suite runs --
+# Every sweep must match one of the three peer sets this suite runs --
 #   gw present:  probing 4 of 4 -> 1 gateway, 2 answered (gw, dash), 2 failed
 #   gw=0:        probing 3 of 3 -> 0 gateways, 1 answered (dash), 2 failed
+#   purgatory:   probing 4 of 4 -> 0 gateways, 0 answered, 4 failed (every
+#                peer drops the node's SYNs: the device-check rehearsal)
 # (plain refuses, slow stalls) -- and take at least 1.5 s, the slow peer's
-# timeout, which proves it was waited for. The first gateway must appear
-# within 5 s of the picker appearing (the wait for the node's status
-# included), and a sweep must end within 10 s. At least one sweep must have
-# found the gateway, or this measured nothing.
+# timeout (in purgatory, every probe's), which proves it was waited for. The
+# first gateway must appear within 5 s of the picker appearing (the wait for
+# the node's status included), and a sweep must end within 10 s. At least
+# one sweep must have found the gateway, or this measured nothing.
 say "R26 sweeps, from the app's own log"
 xcrun simctl spawn "$UDID" log show --start "$LOG_START" \
     --predicate 'subsystem == "net.lixom.latchkey"' --style compact 2>/dev/null \
@@ -149,7 +151,7 @@ xcrun simctl spawn "$UDID" log show --start "$LOG_START" \
 if ! python3 - "$LOG_DIR/sweeps.log" <<'PY'
 import re, sys
 lines = open(sys.argv[1]).read().splitlines()
-expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2)}
+expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2), (4, 4, 0, 0, 4)}
 bad, found, probing = [], 0, None
 for l in lines:
     m = re.search(r"Discovery: probing (\d+) of (\d+) peer", l)

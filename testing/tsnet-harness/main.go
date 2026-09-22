@@ -47,6 +47,14 @@
 //     expired key, the admin console's "Expire key" (R31)
 //     POST /deauthorize ?hostname=NAME: revoke that node's device
 //     approval; it waits at NeedsMachineAuth until /approve (R31)
+//     POST /purgatory ?on=1|0 (also /reset?purgatory=1): the device-check
+//     rehearsal's tailnet policy -- the harness's peers drop traffic
+//     from any node whose IPv4 address is outside the fixture
+//     "clients" range (a SYN dropped silently, so every connection
+//     times out; the peers stay visible). A new node lands outside it.
+//     POST /move      ?hostname=NAME&to=IPV4: give that node the address, as
+//     the admin console does to a running node; its peers and the
+//     node itself get the change in their netmaps
 //     GET  /healthz   200 once the first reset has completed
 //
 // The harness sets the same no-log-upload knob as the app (decision D1):
@@ -79,10 +87,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,10 +101,12 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
@@ -101,6 +114,13 @@ import (
 // own Tailscale is up, a real tailnet name would route through the host's VPN
 // and a leak would succeed instead of failing (R10).
 const MagicDNSSuffix = "tail-scale.ts.net"
+
+// clientsRange stands in for the real policy's kiro-clients range in the
+// device-check rehearsal (DEVICE-CHECK.md §3-4): with purgatory on, the
+// harness's peers accept traffic only from nodes inside it, and testcontrol
+// hands every new node a 100.64.0.x address, outside it. A fixture range:
+// never the real policy's 100.81.0.0/24 or 100.82.1.0/24, and never Quad100.
+var clientsRange = netip.MustParsePrefix("100.99.1.0/24")
 
 func init() {
 	// D1: no node in this process uploads logs. Must run before any tsnet
@@ -126,6 +146,9 @@ type Mode struct {
 	RequireAuth        bool `json:"requireAuth"`
 	RequireMachineAuth bool `json:"requireMachineAuth"`
 	NoGateway          bool `json:"noGateway"`
+	// Purgatory: the harness's peers drop traffic from nodes outside
+	// clientsRange (the device-check rehearsal). Set by /purgatory too.
+	Purgatory bool `json:"purgatory"`
 }
 
 type loginEvent struct {
@@ -147,6 +170,7 @@ type peer struct {
 	name string
 	srv  *tsnet.Server
 	ips  []string
+	key  key.NodePublic
 }
 
 type harness struct {
@@ -165,6 +189,12 @@ type harness struct {
 	peers   []*peer
 	logins  []loginEvent
 	journal []connEvent
+	// The device-check rehearsal, per generation. jailed: for each node the
+	// purgatory policy has been applied to, which harness peers drop its
+	// traffic. moved: nodes whose netmaps the harness now pushes itself
+	// (see move).
+	jailed map[key.NodePublic]map[key.NodePublic]bool // node => peer => jailed
+	moved  map[key.NodePublic]bool
 }
 
 func main() {
@@ -340,6 +370,7 @@ func (h *harness) reset(m Mode) error {
 	h.mu.Lock()
 	old := h.peers
 	h.peers, h.ctl, h.logins, h.journal = nil, nil, nil, nil
+	h.jailed, h.moved = map[key.NodePublic]map[key.NodePublic]bool{}, map[key.NodePublic]bool{}
 	h.gen++
 	gen := h.gen
 	h.mode = m
@@ -364,6 +395,10 @@ func (h *harness) reset(m Mode) error {
 		AllOnline: true,
 		Logf:      h.logf("control"),
 	}
+	// The purgatory policy reaches a node that joins later (the app, in the
+	// device-check rehearsal) from its first map request. In a goroutine:
+	// testcontrol calls this under its own lock, which SetJailed takes.
+	ctl.SetOnMapRequest(func(k key.NodePublic) { go h.nodeSeen(gen, k) })
 	h.mu.Lock()
 	h.ctl = ctl
 	h.mu.Unlock()
@@ -384,7 +419,7 @@ func (h *harness) reset(m Mode) error {
 	h.mu.Lock()
 	h.peers = peers
 	h.mu.Unlock()
-	log.Printf("reset: generation %d, requireAuth=%v requireMachineAuth=%v", gen, m.RequireAuth, m.RequireMachineAuth)
+	log.Printf("reset: generation %d, requireAuth=%v requireMachineAuth=%v purgatory=%v", gen, m.RequireAuth, m.RequireMachineAuth, m.Purgatory)
 	return nil
 }
 
@@ -422,6 +457,9 @@ func (h *harness) startPeer(ctx context.Context, ctl *testcontrol.Server, gen in
 		return nil, err
 	}
 	p := &peer{name: name, srv: s}
+	if st.Self != nil {
+		p.key = st.Self.PublicKey
+	}
 	for _, ip := range st.TailscaleIPs {
 		p.ips = append(p.ips, ip.String())
 	}
@@ -502,6 +540,9 @@ type nodeInfo struct {
 	// KeyExpired: the key's expiry has passed -- /expire, or the node
 	// logged out (R32: a real logout expires the key at control).
 	KeyExpired bool `json:"keyExpired"`
+	// Jailed: the harness's peers drop this node's traffic (purgatory, and
+	// its address is outside clientsRange).
+	Jailed bool `json:"jailed"`
 }
 
 type state struct {
@@ -542,6 +583,12 @@ func (h *harness) snapshot() state {
 	for _, p := range h.peers {
 		ours[p.name] = true
 	}
+	jailed := map[key.NodePublic]bool{}
+	for k, at := range h.jailed {
+		for _, j := range at {
+			jailed[k] = jailed[k] || j
+		}
+	}
 	h.mu.Unlock()
 	if ctl != nil {
 		for _, n := range ctl.AllNodes() {
@@ -550,6 +597,7 @@ func (h *harness) snapshot() state {
 				Hostname:          n.Hostinfo.Hostname(),
 				MachineAuthorized: n.MachineAuthorized,
 				KeyExpired:        !n.KeyExpiry.IsZero() && n.KeyExpiry.Before(time.Now()),
+				Jailed:            jailed[n.Key],
 			}
 			ni.HarnessPeer = ours[ni.Hostname]
 			for _, a := range n.Addresses {
@@ -579,6 +627,9 @@ func (h *harness) approve(hostname string) int {
 		if ctl.CompleteDeviceApproval(h.baseURL, h.baseURL+"/admin", &k) {
 			n++
 		}
+	}
+	if n > 0 {
+		h.repushMoved()
 	}
 	return n
 }
@@ -621,7 +672,189 @@ func (h *harness) updateWhere(match func(*tailcfg.Node) bool, change func(*tailc
 		ctl.UpdateNode(node)
 		n++
 	}
+	if n > 0 {
+		h.repushMoved()
+	}
 	return n
+}
+
+// --- The device-check rehearsal (DEVICE-CHECK.md §3-4) ---
+
+// nodeSeen runs on each map request (see reset): with purgatory on, a node
+// the policy has not been applied to yet -- one that just joined -- is
+// jailed at every harness peer before it can reach anything.
+func (h *harness) nodeSeen(gen int, k key.NodePublic) {
+	h.mu.Lock()
+	_, applied := h.jailed[k]
+	ours := slices.ContainsFunc(h.peers, func(p *peer) bool { return p.key == k })
+	skip := h.gen != gen || !h.mode.Purgatory || applied || ours
+	h.mu.Unlock()
+	if skip {
+		return
+	}
+	h.applyPurgatory()
+}
+
+// setPurgatory switches the policy and applies it to every node now known.
+func (h *harness) setPurgatory(on bool) {
+	h.mu.Lock()
+	h.mode.Purgatory = on
+	h.mu.Unlock()
+	h.applyPurgatory()
+}
+
+// applyPurgatory brings every node that is not a harness peer in line with
+// the policy: purgatory on and its IPv4 address outside clientsRange means
+// each harness peer jails it. SetJailed marks the node IsJailed in that
+// peer's netmap, and the peer's data plane then runs the node's packets
+// through a shields-up filter: its SYNs are dropped silently, so the sender
+// times out -- what a packet filter with no grant does on the real tailnet.
+// The peers stay in the node's own netmap, visible. SetJailed pushes netmaps
+// to everyone each call, so it is called only for a change.
+func (h *harness) applyPurgatory() {
+	h.mu.Lock()
+	ctl, peers, on, gen := h.ctl, h.peers, h.mode.Purgatory, h.gen
+	h.mu.Unlock()
+	if ctl == nil {
+		return
+	}
+	ours := map[key.NodePublic]bool{}
+	for _, p := range peers {
+		ours[p.key] = true
+	}
+	for _, n := range ctl.AllNodes() {
+		if ours[n.Key] {
+			continue
+		}
+		want := on && !inClientsRange(n)
+		for _, p := range peers {
+			h.mu.Lock()
+			if h.gen != gen {
+				h.mu.Unlock()
+				return
+			}
+			at := h.jailed[n.Key]
+			if at == nil {
+				at = map[key.NodePublic]bool{}
+				h.jailed[n.Key] = at
+			}
+			have, seen := at[p.key]
+			at[p.key] = want
+			h.mu.Unlock()
+			if (seen && have == want) || (!seen && !want) {
+				continue
+			}
+			ctl.SetJailed(p.key, n.Key, want)
+		}
+	}
+}
+
+func inClientsRange(n *tailcfg.Node) bool {
+	for _, a := range n.Addresses {
+		if a.Addr().Is4() && clientsRange.Contains(a.Addr()) {
+			return true
+		}
+	}
+	return false
+}
+
+// move gives hostname's node the IPv4 address to, as the admin console does
+// to a running node. Its peers learn it through UpdateNode, as they learn
+// every change. The node itself does not: testcontrol derives a node's own
+// address from its ID when it builds that node's netmap, whatever its entry
+// says, so the harness pushes the node a netmap of its own (pushNetmap).
+// From then on testcontrol sends that node no automatic netmaps for the rest
+// of the generation (AddRawMapResponse's contract), so every later change
+// the harness makes re-pushes one (repushMoved). A re-login after a move
+// registers a new node key, which starts over at testcontrol's address.
+// Then the purgatory policy is re-applied: a node moved into clientsRange is
+// released.
+func (h *harness) move(hostname string, to netip.Addr) (moved int, pushed bool, err error) {
+	if !to.Is4() || !tsaddr.CGNATRange().Contains(to) || to == tsaddr.TailscaleServiceIP() {
+		return 0, false, fmt.Errorf("%s is not a tailnet IPv4 address", to)
+	}
+	h.mu.Lock()
+	ctl := h.ctl
+	h.mu.Unlock()
+	if ctl == nil {
+		return 0, false, errors.New("control plane is resetting")
+	}
+	nodes := ctl.AllNodes() // clones
+	for _, n := range nodes {
+		if n.Hostinfo.Hostname() != hostname && slices.ContainsFunc(n.Addresses, func(p netip.Prefix) bool { return p.Addr() == to }) {
+			return 0, false, fmt.Errorf("%s is already %s's address", to, n.Hostinfo.Hostname())
+		}
+	}
+	pushed = true
+	for _, n := range nodes {
+		if n.Hostinfo.Hostname() != hostname {
+			continue
+		}
+		n.Addresses = replaceV4(n.Addresses, to)
+		n.AllowedIPs = replaceV4(n.AllowedIPs, to)
+		ctl.UpdateNode(n)
+		h.mu.Lock()
+		h.moved[n.Key] = true
+		h.mu.Unlock()
+		pushed = h.pushNetmap(n.Key) && pushed
+		moved++
+	}
+	h.applyPurgatory()
+	return moved, pushed, nil
+}
+
+// replaceV4 swaps the first IPv4 /32 in prefixes for to/32 (or adds it).
+// The IPv6 address stays: on the real tailnet a move changes only the IPv4.
+func replaceV4(prefixes []netip.Prefix, to netip.Addr) []netip.Prefix {
+	out := slices.Clone(prefixes)
+	for i, p := range out {
+		if p.Addr().Is4() && p.IsSingleIP() {
+			out[i] = netip.PrefixFrom(to, 32)
+			return out
+		}
+	}
+	return append(out, netip.PrefixFrom(to, 32))
+}
+
+// pushNetmap hands nk a full netmap, built as testcontrol builds them, with
+// the node's own addresses taken from its entry rather than derived from its
+// ID. Delivery needs the node's streaming poll to be registered; a node
+// between polls is retried for a few seconds.
+func (h *harness) pushNetmap(nk key.NodePublic) bool {
+	h.mu.Lock()
+	ctl := h.ctl
+	h.mu.Unlock()
+	if ctl == nil {
+		return false
+	}
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		n := ctl.Node(nk)
+		if n == nil {
+			return false
+		}
+		res, err := ctl.MapResponse(&tailcfg.MapRequest{NodeKey: nk})
+		if err != nil || res == nil {
+			return false
+		}
+		res.Node.Addresses = slices.Clone(n.Addresses)
+		res.Node.AllowedIPs = append(slices.Clone(n.Addresses), res.Node.PrimaryRoutes...)
+		if ctl.AddRawMapResponse(nk, res) {
+			return true
+		}
+		if time.Now().After(end) {
+			return false
+		}
+	}
+}
+
+// repushMoved: a moved node hears of a change only from the harness.
+func (h *harness) repushMoved() {
+	h.mu.Lock()
+	keys := slices.Collect(maps.Keys(h.moved))
+	h.mu.Unlock()
+	for _, k := range keys {
+		h.pushNetmap(k)
+	}
 }
 
 func (h *harness) apiMux() *http.ServeMux {
@@ -648,6 +881,7 @@ func (h *harness) apiMux() *http.ServeMux {
 			RequireAuth:        r.URL.Query().Get("auth") == "1",
 			RequireMachineAuth: r.URL.Query().Get("machine") == "1",
 			NoGateway:          r.URL.Query().Get("gw") == "0",
+			Purgatory:          r.URL.Query().Get("purgatory") == "1",
 		}
 		if err := h.reset(m); err != nil {
 			reply(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -679,6 +913,29 @@ func (h *harness) apiMux() *http.ServeMux {
 			return
 		}
 		reply(w, http.StatusOK, map[string]any{"deauthorized": h.deauthorize(name)})
+	})
+	mux.HandleFunc("POST /purgatory", func(w http.ResponseWriter, r *http.Request) {
+		on := r.URL.Query().Get("on")
+		if on != "1" && on != "0" {
+			reply(w, http.StatusBadRequest, map[string]any{"error": "on=1 or on=0 is required"})
+			return
+		}
+		h.setPurgatory(on == "1")
+		reply(w, http.StatusOK, map[string]any{"purgatory": on == "1"})
+	})
+	mux.HandleFunc("POST /move", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("hostname")
+		to, err := netip.ParseAddr(r.URL.Query().Get("to"))
+		if name == "" || err != nil {
+			reply(w, http.StatusBadRequest, map[string]any{"error": "hostname and to=IPV4 are required"})
+			return
+		}
+		moved, pushed, err := h.move(name, to)
+		if err != nil {
+			reply(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, map[string]any{"moved": moved, "pushed": pushed})
 	})
 	return mux
 }
