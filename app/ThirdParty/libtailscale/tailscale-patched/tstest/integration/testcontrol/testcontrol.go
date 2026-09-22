@@ -1719,12 +1719,18 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	})
 	res.UserProfiles = s.allUserProfiles()
 
-	v4Prefix := netip.PrefixFrom(netaddr.IPv4(100, 64, uint8(node.ID>>8), uint8(node.ID)), 32)
-	v6Prefix := netip.PrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
-
-	res.Node.Addresses = []netip.Prefix{
-		v4Prefix,
-		v6Prefix,
+	// Latchkey: a node's own addresses are the ones its entry holds -- what
+	// its peers are already told -- and are derived from its ID only for an
+	// entry that has none. Upstream derived them from the ID on every
+	// response, so an address changed with UpdateNode (the admin console's
+	// address change, rehearsed for the device check) reached the peers but
+	// never the node itself, and a re-login, which clones the entry onto the
+	// new key, kept the two apart for good. Every entry serveRegister makes
+	// holds exactly the ID-derived pair, so nothing else changes.
+	if len(res.Node.Addresses) == 0 {
+		v4Prefix := netip.PrefixFrom(netaddr.IPv4(100, 64, uint8(node.ID>>8), uint8(node.ID)), 32)
+		v6Prefix := netip.PrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
+		res.Node.Addresses = []netip.Prefix{v4Prefix, v6Prefix}
 	}
 
 	if globalAppCaps != nil {
