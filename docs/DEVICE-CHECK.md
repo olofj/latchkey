@@ -20,7 +20,7 @@ agent cannot do.
 | # | Who | Step | Done |
 |---|---|---|---|
 | O1 | Olof | Xcode → Settings → Accounts → add your Apple ID (a free personal team is fine). Note the **Team ID** it shows and give it to the session. | ☑ 2026-09-21: "Olof Johansson (Personal Team)", `DX33PQ7J4A`, kept in `app/.dev-team` (gitignored) |
-| O2 | Olof | **At chonk, with the phone.** Connect the iPhone to chonk with a cable and tap *Trust*. Then Settings → Privacy & Security → **Developer Mode** on (the phone restarts). The Developer Mode switch appears only after the phone has been connected to a Mac with Xcode. Note the **iOS version** (Settings → General → About). | ☐ |
+| O2 | Olof | **At chonk, with the phone.** Connect the iPhone to chonk with a cable and tap *Trust*. Then Settings → Privacy & Security → **Developer Mode** on (the phone restarts). The Developer Mode switch appears only after the phone has been connected to a Mac with Xcode. `make device` then checks the pairing and Developer Mode itself and prints the **iOS version**, so there is nothing to report. | ☐ |
 | O3 | Olof | Apply the "admin purgatory" tailnet policy (decision D5) through the infra workspace. Afterwards a new admin-owned device lands in `100.81.0.0/24` with **no grants**, and `kiro-clients` (`100.82.1.0/24`) is allowed to reach `byskebox:443` only. | ☑ 2026-09-21 |
 
 **Why O2 needs you at the Mac.** A free personal team can only install by

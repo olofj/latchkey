@@ -2288,3 +2288,26 @@ Neither blocks M1, M6.6 or M7. Overnight timings fit well inside a week.
 Full tier on the relay review fixes (app `62dfae1ad`, parent `f44cad0`):
 host, vendored Go, L1, L2, session, discovery, lifecycle 5/5 and inherited,
 all green.
+
+## 2026-09-21 — While waiting for the phone: upstream, security, device preflight
+
+**Upstream:** `git fetch upstream` on 2026-09-21. aperture-plus `main` is
+still `dba0555` (2026-08-24), the last revision reviewed, so there is
+nothing to cherry-pick.
+
+**Tailscale security bulletins since July:** TS-2026-009 and -010 (Tailscale
+SSH) and TS-2026-011 (4via6 subnet routers). None applies to the vendored
+tailscale 1.103.0 as the app uses it: nothing sets `RunSSH` or advertises
+routes (only the LocalAPI prefs types mention `AdvertiseRoutes`). No
+vendored update needed.
+
+**`make device` checks the phone before building.** From `devicectl`'s
+current `properties` layout, with the deprecated keys as a fallback, it
+stops with a plain reason when:
+- the phone is not paired (tap Trust);
+- Developer Mode is off;
+- the phone is unreachable.
+An idle phone reading "available" is not blocked. It also prints the iOS
+version, so O2 has nothing left to report. It was tried against crafted
+`devicectl` output for each state (a fake `xcrun` on `PATH`), since no phone
+is paired yet.
