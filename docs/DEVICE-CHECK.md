@@ -56,16 +56,33 @@ With the phone paired and on the cable (or on chonk's network):
    you, **untagged**, with an address in the purgatory pool (`100.81.0.x`).
    Check all three.
 
-At this point the app is connected but finds no gateway: *Choose a gateway*
-says no computer could be a gateway, because the node has no grants yet.
-That is expected, not a bug.
+At this point the app is connected but finds no gateway, because the node
+has no grants yet. That is expected, not a bug. *Choose a gateway* says one
+of two things, depending on whether the policy lets the node see its peers:
+- **"No Kiro Crew gateway answered among N computer(s) on your tailnet"**:
+  the peers are visible but drop the node's traffic. The search ends in
+  about 1.5 s. In Settings → Logs, each `socks[n] CONNECT … request reached
+  the tailnet proxy` is followed by `relay finished`, with no OK or FAILED
+  line.
+- **"No computers on your tailnet could be a gateway"**: the node sees no
+  peers at all.
 
 ## 4. Out of purgatory — O3b (Olof)
 
 Move the node's address into the next free `kiro-clients` address
-(`100.82.1.x`) via the admin console or the API. Record the address here:
-`100.82.1.___`. Then tap **Search again** in Latchkey: byskebox should be
-listed. Pick it.
+(`100.82.1.x`) via the admin console or the API, with the app still running.
+Record the address here: `100.82.1.___`.
+
+Give it a few seconds to reach the phone, then tap **Search again** in Kiro
+Roam. byskebox is listed, and as the only gateway it is chosen by itself; the
+Sign in sheet opens (step 5). If the node saw no peers before, the picker
+searches again by itself when they appear. If a search still finds nothing,
+tap Search again once more before reading it as a fault. Settings → Status
+should show the new address under Addresses.
+
+The L2 harness rehearses exactly this step: the running node's address
+changes, and nothing in the app has to restart (`DiscoveryTests.
+testDeviceCheckRehearsalPurgatoryThenAddressMove`, 2026-09-21).
 
 Reinstalling the app creates a *new* node, which lands back in purgatory and
 must be moved again.

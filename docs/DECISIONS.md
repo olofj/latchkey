@@ -2311,3 +2311,43 @@ An idle phone reading "available" is not blocked. It also prints the iOS
 version, so O2 has nothing left to report. It was tried against crafted
 `devicectl` output for each state (a fake `xcrun` on `PATH`), since no phone
 is paired yet.
+
+## 2026-09-21 — The device check's O3b step, rehearsed on L2
+
+In O3b the owner moves the phone's node from purgatory into `kiro-clients`
+while the app is running: **the node's own IP address changes under it**.
+Nothing had exercised that, nor what the picker shows while the node reaches
+nothing. A Fable agent built the rehearsal, harness-side only.
+
+**Harness** (`testing/tsnet-harness`):
+- `/purgatory` jails the app's node at every harness peer unless its IPv4
+  is in the fixture clients range `100.99.1.0/24` (fixture ranges only, not
+  the real policy's). The peers stay visible, and every SYN is dropped.
+- `/move` changes the running node's IPv4. testcontrol derives a node's own
+  address from its ID, so the node is also pushed a full netmap. After such
+  a push, testcontrol sends it no automatic netmaps, so the harness re-pushes
+  after its own changes.
+- The self-test grew four steps.
+
+**`DiscoveryTests.testDeviceCheckRehearsalPurgatoryThenAddressMove`:**
+- *In purgatory:* the picker says "No Kiro Crew gateway answered among 4
+  computer(s)" when the sweep ends, 1.5–1.6 s. Every probe hits its timeout
+  and nothing hangs.
+- *After the move to `100.99.1.7`:* Search again lists the gateway, and it
+  is chosen by itself. The Sign in sheet opens with no navigation error.
+- The gateway journals the app from the new address and never from the old
+  one, and Status shows the new address.
+- The app needed **no change**: its proxy rules are name- and range-based
+  (R27), and only Status reads the node's own address.
+
+**What it cannot model:**
+- a policy under which the purgatory node sees no peers (the picker then
+  says "No computers…" and re-searches by itself when peers appear);
+- DERP-only paths;
+- the real control plane's delivery delay.
+
+The runbook now says what to expect in each case, and to tap Search again
+once more before calling it a fault.
+
+Results: harness self-test ×3, discovery 5/5 ×4, L2 9/9 with the login-link
+scan, host tests all green.
