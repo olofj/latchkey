@@ -50,30 +50,38 @@ in Xcode (O1), Developer Mode on the phone (O2), and the tailnet policy that
 puts a new node in purgatory until it is moved into `kiro-clients` (O3, then
 O3b after the first login). Do them in that order.
 
-`DEVELOPMENT_TEAM` is blank in the project on purpose. Open
-`Latchkey.xcodeproj`, select the `Latchkey` target → Signing & Capabilities,
-and pick your personal team; Xcode manages the profile from there. A free
-team allows three sideloaded apps per device.
+`DEVELOPMENT_TEAM` is blank in the project on purpose. `make device` reads
+the Team ID from `app/.dev-team` (gitignored; one line, the ID Xcode shows
+under Settings → Accounts). In Xcode, pick your personal team under the
+`Latchkey` target → Signing & Capabilities instead. Either way the profile is
+managed automatically. A free team allows three sideloaded apps per device.
 
 ## Installing on the iPhone
 
 1. Plug the phone into the Mac and trust it; Developer Mode must be on
-   (Settings → Privacy & Security → Developer Mode).
-2. In Xcode, choose the phone as the run destination and press Run. This
-   installs the Debug configuration, which carries no test hooks.
+   (Settings → Privacy & Security → Developer Mode). The switch appears only
+   after the phone has been connected to a Mac with Xcode.
+2. `make device`: checks the phone first (paired, reachable, Developer Mode
+   on, and prints its iOS version), then builds Release, signs it with the
+   team in `.dev-team`, installs and launches it. The first build creates the
+   signing certificate and profile and registers the phone. *Or* choose the
+   phone in Xcode and press Run, which installs the Debug configuration.
+   Neither carries test hooks.
 3. The first time, trust the profile on the phone under General → VPN &
    Device Management.
 
 `make ipa` (archive + export a dev-signed `.ipa` under `build/ipa/`) is for
 a paid team only: it needs `teamID` in `ExportOptions.plist` and a profile
-that lasts. With a free team, Run from Xcode is the install path.
+that lasts. With a free team, `make device` or Run from Xcode is the install
+path.
 
 ## The weekly re-sign
 
 A free team's provisioning profile expires **7 days** after the build. The
 app warns **48 hours** ahead — a banner above the dashboard and the
 "Profile expires" row under Settings → Status — and after that it simply
-stops launching. The ritual: plug the phone in, press Run in Xcode, done.
+stops launching. The ritual: plug the phone in, `make device` (or Run in
+Xcode), done.
 Nothing else changes: the app's data (the node identity, the chosen gateway,
 the dashboard session) survives a rebuild over the installed app.
 
@@ -216,7 +224,7 @@ Common failures:
 | `no such module 'TailscaleKit'`, or a missing-framework error | The xcframework is not built: `make framework`. |
 | `STALE: TailscaleKit.xcframework was not built from the current libtailscale sources` | A Go change since the last build, or an interrupted one: `make -B framework`. `make check-framework` asks without building. |
 | `sandbox_apply: Operation not permitted` | Nested sandbox; see First-time setup. |
-| The app does not launch on the phone; last week it did | The 7-day profile expired. Plug in, Run from Xcode. For the 48 hours before, the dashboard and Status said "This build of Latchkey stops launching in …". |
+| The app does not launch on the phone; last week it did | The 7-day profile expired. Plug in, `make device` (or Run from Xcode). For the 48 hours before, the dashboard and Status said "This build of Latchkey stops launching in …". |
 | "Login Required" banner over the dashboard | The node key expired (or an admin expired it). Login signs in again in place; the dashboard stays up. The key warns 14 days ahead; disable key expiry for the device in the admin console to avoid it. |
 | "Waiting for approval" banner | The device was revoked or the tailnet requires approval. Approve it under Machines in the admin console; the banner goes by itself. |
 | "No KiroCrew gateway with this name is in your tailnet" | The saved gateway is not among the node's peers, or discovery is stale. **Find** re-sweeps and opens the picker; **Change** opens Settings → Gateway. A new node that is connected but reaches nothing is still in purgatory: O3b. |

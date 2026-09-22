@@ -116,8 +116,11 @@ breakage and are nothing of the kind — the real error is one
 
 Use the **simulator** for autonomous work: build, `simctl install`/`launch`,
 `simctl io booted screenshot` and XCUITest all work with no permission
-prompts. Device builds need a signing identity; there is none configured on
-this machine.
+prompts. Device installs are `make device` (`scripts/device-run.sh`): the
+owner's free personal team is in the gitignored `.dev-team`, and it needs
+the phone paired with this Mac and connected; it stops with a plain reason
+if the phone is not ready. The signing certificate is made on the first
+device build.
 
 ## Testing
 

@@ -25,21 +25,61 @@ fi
 DEVICES_JSON=$(mktemp)
 trap 'rm -f "$DEVICES_JSON"' EXIT
 xcrun devicectl list devices --json-output "$DEVICES_JSON" >/dev/null 2>&1 || true
-if [[ -z "${DEVICE:-}" ]]; then
-    DEVICE=$(python3 - "$DEVICES_JSON" <<'EOF'
+# Picks the phone (DEVICE, or the one physical device) and checks what the
+# owner would otherwise have to report or discover by a failed build: paired
+# (Trust tapped), reachable now, Developer Mode on. Prints the iOS version,
+# which the device check records. `properties` is devicectl's current layout;
+# the older *Properties keys are read as a fallback.
+DEVICE=$(python3 - "$DEVICES_JSON" "${DEVICE:-}" <<'EOF'
 import json, sys
 try:
     devices = json.load(open(sys.argv[1]))["result"]["devices"]
 except (OSError, ValueError, KeyError):
     devices = []
-phones = [d for d in devices if d.get("hardwareProperties", {}).get("reality") == "physical"]
+wanted = sys.argv[2]
+
+def get(d, new, old):
+    for path in (new, old):
+        v = d
+        for k in path.split("."):
+            v = v.get(k) if isinstance(v, dict) else None
+        if v is not None:
+            return v
+    return None
+
+def udid(d):
+    return get(d, "properties.hardware.udid", "hardwareProperties.udid") or d.get("identifier")
+
+phones = [d for d in devices
+          if get(d, "properties.hardware.reality", "hardwareProperties.reality") == "physical"]
+if wanted:
+    phones = [d for d in phones if wanted in (udid(d), d.get("identifier"))]
 if len(phones) != 1:
-    names = ", ".join(d.get("deviceProperties", {}).get("name", "?") for d in phones) or "none"
-    sys.exit("error: need exactly one paired iPhone, found: %s (pass DEVICE=<udid>)" % names)
-print(phones[0]["hardwareProperties"]["udid"])
+    names = ", ".join(str(get(d, "properties.state.name", "deviceProperties.name")) for d in phones) or "none"
+    sys.exit("error: need exactly one paired iPhone%s, found: %s. Plug it into this Mac, "
+             "unlock it and tap Trust (or pass DEVICE=<udid>)" % (" matching " + wanted if wanted else "", names))
+d = phones[0]
+name = get(d, "properties.state.name", "deviceProperties.name")
+ios = get(d, "properties.software.osVersionNumber.stringValue", "deviceProperties.osVersionNumber")
+pairing = get(d, "properties.connection.pairingState", "connectionProperties.pairingState")
+state = get(d, "properties.connection.state", "connectionProperties.tunnelState")
+transport = get(d, "properties.connection.transportType", "connectionProperties.transportType")
+devmode = get(d, "properties.state.developerModeStatus", "deviceProperties.developerModeStatus")
+print("::: %s: iOS %s, %s, connection %s (%s), Developer Mode %s"
+      % (name, ios, pairing, state, transport, devmode or "not reported"), file=sys.stderr)
+if pairing != "paired":
+    sys.exit("error: %s is not paired with this Mac: unlock it and tap Trust" % name)
+if devmode == "disabled":
+    sys.exit("error: Developer Mode is off on %s: Settings -> Privacy & Security -> "
+             "Developer Mode, then let it restart" % name)
+# Only a definite no: an idle paired phone can read "available", and devicectl
+# brings the tunnel up on demand.
+if state in ("unavailable", "disconnected"):
+    sys.exit("error: %s is paired but not reachable now (%s): plug it in, or put it on "
+             "this Mac's network, and unlock it" % (name, state))
+print(udid(d))
 EOF
 )
-fi
 echo "::: device $DEVICE, team $TEAM"
 
 SANDBOX_FLAGS=()
