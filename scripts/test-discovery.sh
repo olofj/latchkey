@@ -139,10 +139,12 @@ fi
 #   gw=0:        probing 3 of 3 -> 0 gateways, 1 answered (dash), 2 failed
 #   purgatory:   probing 4 of 4 -> 0 gateways, 0 answered, 4 failed (every
 #                peer drops the node's SYNs: the device-check rehearsal)
-# (plain refuses, slow stalls) -- and take at least 1.5 s, the slow peer's
+# (plain refuses, slow stalls) -- and take at least 4 s, the slow peer's
 # timeout (in purgatory, every probe's), which proves it was waited for. The
 # first gateway must appear within 5 s of the picker appearing (the wait for
-# the node's status included), and a sweep must end within 10 s. At least
+# the node's status included), and a sweep must end within 15 s: the sweep
+# deadline is 12 s since the first device run showed 1.5 s losing the race
+# against a relayed intercontinental gateway. At least
 # one sweep must have found the gateway, or this measured nothing; and the
 # purgatory sweep happens exactly once (the rehearsal's first run), so a
 # sweep in which every peer failed for some other reason cannot pass as it.
@@ -172,8 +174,8 @@ for l in lines:
           % (sig[0], sig[1], n, answered, failed, sweep, shown + (" ms" if shown != "—" else "")))
     if sig not in expected:
         bad.append("unexpected sweep %s: %s" % (sig, l))
-    if sweep < 1500 or sweep > 10000:
-        bad.append("sweep %d ms outside 1.5-10 s: %s" % (sweep, l))
+    if sweep < 4000 or sweep > 15000:
+        bad.append("sweep %d ms outside 4-15 s: %s" % (sweep, l))
     if n and (shown == "—" or int(shown) > 5000):
         bad.append("first gateway %s after the picker appeared (budget 5 s): %s" % (shown, l))
     found += n > 0

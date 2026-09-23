@@ -246,6 +246,17 @@ KiroCrew's end-to-end suite (`website/playwright/auth.setup.ts` in kirodotdev/Ki
 - Open question 1 is resolved: `kirocrew token` prints up to three URLs (see R23). Open question 4 is resolved by R22.
 - Stale text: the header's "no code written yet"; §4.1 "versioned alongside"; §4.2's command sequence (replaced by R16); §4.3's two bundle-ID sites (M0 found four); §7.1 still "medium, early" though M0 resolved it; §6.5's nonexistent `scripts/test-policy.sh`; the journal path differs between M2.7 and Appendix C; M2's "clean checkout, < 3 min" (exclude the build via `test-without-building`); test leaf validity must be ≤ 825 days; `tstestcontrol.go:53` is a logging TODO — `log.Fatal` is at `:237-241`.
 
+**R39 — Discovery's budgets were set for a lab, not a tailnet** [device run 2026-09-23]
+- R26's 1.5 s per probe and 5 s per sweep were chosen before anyone had run this on a real tailnet. The first device run had UDP blocked on the phone's network, so every path relayed through DERP over TCP, against a gateway a continent away (190 ms RTT measured direct, more relayed). A probe pays TCP, then TLS, then the request, and may pay the peer's WireGuard handshake inside the same budget.
+- **Now 4 s per request, 12 s per sweep** (`GatewayDiscovery.requestTimeout`, `.deadline`). Concurrency stays 12, so a dead peer still costs one probe's wait, not the sum.
+- The M5/M7.6 AC changes with it: first gateway shown ≤ 5 s stands; **sweep done ≤ 15 s**, and a sweep must take ≥ 4 s when a stalling peer is present (`scripts/test-discovery.sh` enforces both from the app's own log).
+
+**R40 — A gateway carries a port; 8443 is the standard one** [owner, 2026-09-23]
+- `tailscale serve --https=443` takes port 443 **host-wide** on macOS (measured on chonk: `IPNExtension` listening on `*:443`, v4 and v6), so it collides with anything local that wants 443. Serving on another port is supported for tailnet-only serve; only Funnel is restricted to 443/8443/10000.
+- **8443 is the project's standard alternate**: the conventional alt-HTTPS port, allowed by Funnel if that is ever wanted, and not 5476 (which would collide with the dashboard's own loopback listener).
+- The app hardcodes 443 today — `Gateway.url`, both probe URLs, and `GatewayCandidates.manualOrigin`, which parses a typed port and then discards it. A gateway must carry a port: discovery probes 443 **and** 8443 concurrently, manual entry accepts `host:8443`, and the saved gateway keeps it.
+- Operationally: the grant's port list is the **serve** port, not the dashboard's, so moving a gateway to 8443 means `"ip": ["8443"]` or the node is dropped exactly as it was on the first device run.
+
 ---
 
 ## C. Owner actions (Olof)
