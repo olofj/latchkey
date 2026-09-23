@@ -21,7 +21,7 @@ the change, or by breaking it on purpose — and the spec says how.
 |---|---|---|
 | [F1](F1-gateway-port.md) | A gateway carries a port; 8443 is the standard one (R40) | spec |
 | [F2](F2-connecting-state.md) | A visible connecting state for a page load in flight | superseded by F4 |
-| [F3](F3-share-into-a-session.md) | Share a link from another app into a session on a gateway | researching |
+| [F3](F3-share-into-a-session.md) | Share a link from another app into a session on a gateway | designed; needs 3 answers |
 | [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | spec |
 
 ## The shape of a spec

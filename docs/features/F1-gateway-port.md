@@ -110,6 +110,51 @@ change — worth stating because "add the port everywhere" would break it.
 - `make check` gains a step: a host-side client reaches the fake gateway
   through `gw-alt`'s 8443 forward.
 
+## 4a. Blocker found in research: the gateway's Origin allowlist is port-blind
+
+Found while researching F3, before any of this was built. **KiroCrew 0.6.0
+will refuse a dashboard served on any port but 443**, unless the operator
+overrides it:
+
+- `kiro_crew/dashboard/urls.py:419-452` puts only `https://<tailnet_host>` —
+  **no port** — into `allowed_origins`.
+- `kiro_crew/dashboard/tailnet_serve.py:66-73` pins `SERVE_HTTPS_PORT = 443`,
+  with a comment saying another port "would silently stop the origin from
+  matching".
+- Every non-GET request is CSRF-checked against that list
+  (`server.py:653-707` → `origin.check_origin(require=True,
+  fallback_header="Referer")`), and `/api/ws` is refused the same way
+  (`ws.py:513-521`).
+
+A browser at `https://chonk…:8443` sends `Origin: https://chonk…:8443`, which
+is not in the list. GETs still work (the Host check is port-independent,
+`urls.py:486-507`), so **the page would load and then fail**: no WebSocket, and
+every POST — including sign-out and F3's share — 403. That is precisely the
+"looks fine, does nothing" failure this project keeps trying to eliminate.
+
+The session cookie's name also follows the port: `mc_token_8443` rather than
+`mc_token_5476` behind serve on 443 (`token_auth.py:1353-1369`). WebKit handles
+cookies, so the app does not care, but R37's recorded names do.
+
+**What this adds to the feature:**
+- **Owner action, per gateway moved off 443:** allow the ported origin, via
+  `KIROCREW_CORS_ORIGINS` (or whatever the installed version's config key is —
+  confirm on the machine), then restart the gateway.
+- **The app must not hide it.** A gateway that loads but whose WebSocket is
+  refused looks like a working dashboard that never updates. Discovery's
+  fingerprint (`/manifest.json` + `/api/auth/me`) is GET-only and would pass, so
+  it cannot tell. F4's states work is where the symptom surfaces; the honest fix
+  is a probe the app can make cheaply — decide during implementation whether to
+  add a POST-shaped check to discovery or to surface the page's own WebSocket
+  state in Settings → Status.
+- **A test must model it:** `testing/harness/fake_gateway.py` should enforce the
+  same rule (403 a non-GET whose Origin is not the allowed origin), so an 8443
+  gateway without the override fails in the suite rather than on the phone.
+
+Until an 8443 gateway is verified end to end — the page loads, the WebSocket
+connects, a POST succeeds — 443 stays the default everywhere and 8443 is
+opt-in.
+
 ## 5. State and migration
 
 The only persisted value is `HomePage.url` in the workspace definition.
