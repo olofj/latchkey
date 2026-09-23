@@ -84,12 +84,18 @@ if isinstance(devmode, dict):
     devmode = next(iter(devmode), None)
 if isinstance(devmode, str):
     devmode = devmode.lower()
-if devmode is None and ddi is False:
+# `list devices` answers from CoreDevice's cache, and the cache is stale in
+# exactly the case that matters: a phone whose Developer Mode was just
+# switched on still reads "disabled", and a connected phone still reads
+# "disconnected" (measured 2026-09-23 on the first real install). So when the
+# cache says anything short of ready, ask the phone itself -- a few seconds,
+# and it names its own reason when it refuses.
+if devmode != "enabled" or state != "connected":
     import subprocess
     try:
         out = subprocess.run(["xcrun", "devicectl", "device", "info", "details",
                               "--device", udid(d)], capture_output=True, text=True,
-                             timeout=60).stdout
+                             timeout=90).stdout
     except (OSError, subprocess.SubprocessError):
         out = ""
     m = re.search(r"Developer Mode Status: *(\w+)", out)
@@ -98,6 +104,9 @@ if devmode is None and ddi is False:
     m = re.search(r"^\s*Error: *(.+)$", out, re.M)
     if m:
         reason = m.group(1).strip()
+    # It answered and has a tunnel: it is reachable, whatever the cache said.
+    if "Tunnel IP Address" in out:
+        state = "connected"
 print("::: %s: iOS %s, %s, connection %s (%s), Developer Mode %s"
       % (name, ios, pairing, state, transport, devmode or "not reported"), file=sys.stderr)
 if pairing != "paired":
@@ -128,13 +137,32 @@ if ! sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1;
     SANDBOX_FLAGS=("OTHER_SWIFT_FLAGS=\$(inherited) -disable-sandbox")
 fi
 DERIVED=build/DeviceDerivedData
+build() {  # extra xcodebuild arguments
+    xcodebuild build -project Latchkey.xcodeproj -scheme Latchkey -configuration Release \
+        -destination "platform=iOS,id=$DEVICE" -derivedDataPath "$DERIVED" \
+        DEVELOPMENT_TEAM="$TEAM" "${SANDBOX_FLAGS[@]}" "$@" > build/device-build.log 2>&1
+}
 echo "::: build (Release, signed for the device; the first one takes a few minutes)"
-xcodebuild build -project Latchkey.xcodeproj -scheme Latchkey -configuration Release \
-    -destination "platform=iOS,id=$DEVICE" -derivedDataPath "$DERIVED" \
-    -allowProvisioningUpdates DEVELOPMENT_TEAM="$TEAM" "${SANDBOX_FLAGS[@]}" \
-    > build/device-build.log 2>&1 \
-    || { grep -E "error:|Signing|provisioning" build/device-build.log | head -20 >&2
-         echo "error: device build failed; see app/build/device-build.log" >&2; exit 1; }
+# -allowProvisioningUpdates lets Xcode mint the certificate and the profile,
+# which needs the Apple ID to be usable from here. It is not always: an
+# account added in Xcode's UI can leave xcodebuild saying "No Accounts" while
+# Xcode itself is signed in (2026-09-23). A profile Xcode already made is
+# enough on its own, so that case is retried without the flag rather than
+# reported as a signing failure.
+if ! build -allowProvisioningUpdates; then
+    if grep -q "No Accounts" build/device-build.log && build; then
+        echo "::: (built against the profile Xcode already made; this shell has no usable Apple ID)"
+    else
+        grep -E "error:|Signing|provisioning" build/device-build.log | sort -u | head -20 >&2
+        if grep -q "No Accounts" build/device-build.log; then
+            echo "note: no usable Apple ID here and no matching profile yet. Open Xcode," \
+                 "check Settings -> Accounts lists $(cat .dev-team 2>/dev/null), pick the" \
+                 "team under Latchkey -> Signing & Capabilities, and press Run once with" \
+                 "the phone selected. After that this script works on its own." >&2
+        fi
+        echo "error: device build failed; see app/build/device-build.log" >&2; exit 1
+    fi
+fi
 
 APP_PATH="$DERIVED/Build/Products/Release-iphoneos/Latchkey.app"
 echo "::: install"
