@@ -50,11 +50,11 @@ in Xcode (O1), Developer Mode on the phone (O2), and the tailnet policy that
 puts a new node in purgatory until it is moved into `kiro-clients` (O3, then
 O3b after the first login). Do them in that order.
 
-`DEVELOPMENT_TEAM` is blank in the project on purpose. `make device` reads
-the Team ID from `app/.dev-team` (gitignored; one line, the ID Xcode shows
-under Settings → Accounts). In Xcode, pick your personal team under the
-`Latchkey` target → Signing & Capabilities instead. Either way the profile is
-managed automatically. A free team allows three sideloaded apps per device.
+The app target carries the Team ID, which Xcode wrote into the project on the
+first device Run (2026-09-23) and would write again; keeping it saves
+re-picking the team on every Run. `make device` passes the ID from
+`app/.dev-team` (gitignored) regardless, so another team needs no project edit.
+Either way the profile is managed automatically. A free team allows three sideloaded apps per device.
 
 ## Installing on the iPhone
 
