@@ -56,6 +56,23 @@ non-goals, not omissions.
   `git log -- ThirdParty/libtailscale` is the complete delta from upstream.
   Keep it that way: never fold a vendored-tree change into an unrelated
   commit. Provenance and diff recipes are in `ThirdParty/VENDORED.md`.
+- **The old product name survives in three places on purpose. Do not tidy
+  them.** The app was renamed Latchkey → Latchkey on 2026-09-23 but **kept
+  its bundle id**, so anything keyed to that identity had to stay put:
+  - `net.lixom.latchkey` — bundle ids, the os_log subsystem, queue labels;
+  - `<Application Support>/Latchkey/` and its `-UI-Test*` siblings
+    (`App/Workspace/WorkspaceStore.swift`). Same bundle id means the same
+    container, so this directory is **live**: it holds each workspace's tsnet
+    state dir, i.e. the Tailscale node's identity. Renaming it logs the device
+    out and forces tailnet-lock re-signing and new grants, with no crash and
+    no error — the app just quietly starts over;
+  - `latchkey-iphone` / `-ipad`, the node's MagicDNS name, which the admin
+    console and any host-scoped grant refer to.
+
+  The vendored tree keeps its `latchkey_*` file and test names under R16, so
+  `scripts/test-all.sh` still runs `go test -run Latchkey`. Reasoning and the
+  scripted recipe: `scripts/rename-to-latchkey.py`, and the DECISIONS entry
+  of 2026-09-23.
 
 ## How work arrives (from 2026-09-23)
 

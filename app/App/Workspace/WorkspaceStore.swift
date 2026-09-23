@@ -95,6 +95,14 @@ struct WorkspaceDefinition: Codable, Identifiable {
     /// earlier install whose node was never logged out — control assigns the
     /// new one a suffixed MagicDNS name (`latchkey-iphone-1`). R32's "reset
     /// app" logs the node out so reinstalls do not accumulate.
+    /// Kept as `latchkey-*` through the 2026-09-23 rename to Latchkey. This
+    /// is a **tailnet identity**, not a brand string: it is the node's MagicDNS
+    /// name, it is what Olof's admin console and any host-scoped ACL grant
+    /// refer to, and a live install carries its own copy in `workspaces.json`
+    /// regardless of this default. Changing it would rename only future fresh
+    /// installs, producing a node Olof has to re-approve under a name his
+    /// grants may not cover — churn for a cosmetic gain. Rename it only
+    /// together with the grant that admits it.
     static var defaultHostName: String {
 #if canImport(UIKit)
         UIDevice.current.userInterfaceIdiom == .pad ? "latchkey-ipad" : "latchkey-iphone"
@@ -135,6 +143,20 @@ enum WorkspaceStore {
     /// `<Application Support>/Latchkey/`; UI tests use a platform-specific
     /// sibling so iOS and macOS test credentials are isolated from normal
     /// credentials and from each other.
+    ///
+    /// **The directory names below deliberately still spell the OLD product
+    /// name, and must not be "corrected" to match the new one.** The product
+    /// was renamed on 2026-09-23 but
+    /// the bundle id stayed `net.lixom.latchkey`, so this is the *same app
+    /// container* as before, and this directory is live: it holds each
+    /// workspace's tsnet state dir — the node's identity — plus
+    /// `workspaces.json` and the logs. Renaming the literal would point the app
+    /// at an empty directory and silently discard the Tailscale node: new node
+    /// key, fresh login, tailnet-lock re-signing, new grants. Nothing would
+    /// crash; the owner would just find themselves logged out with an
+    /// unapproved device. If it is ever worth renaming, it needs a migration
+    /// that moves the directory first and is tested against a populated one.
+    /// See `scripts/rename-to-latchkey.py` for the full reasoning.
     static var appSupportDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask).first
