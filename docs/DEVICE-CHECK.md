@@ -56,6 +56,22 @@ With the phone paired and on the cable (or on chonk's network):
    you, **untagged**, with an address in the purgatory pool (`100.81.0.x`).
    Check all three.
 
+**If the console shows the node "Locked Out"** (seen on the first real
+install, 2026-09-23): the tailnet has **tailnet lock** on, and a new node's
+key must be signed before any peer will talk to it. It is a device state, not
+a tag, and no address change fixes it. On a signing node, in a terminal (the
+App Store build's CLI does not run from an agent shell):
+
+```bash
+tailscale lock status                    # this node can sign; locked-out nodes listed
+tailscale lock sign nodekey:<the phone's node key>
+```
+
+The node key is on the machine's page in the admin console. Signing happens
+on a signing node because the key never leaves it; the console cannot do it.
+**Every new node needs this**: rebuilding over the installed app keeps the
+node, but deleting the app creates a new one, locked out again.
+
 At this point the app is connected but finds no gateway, because the node
 has no grants yet. That is expected, not a bug. *Choose a gateway* says one
 of two things, depending on whether the policy lets the node see its peers:

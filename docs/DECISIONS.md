@@ -2324,6 +2324,41 @@ same shape, and here the absence of a field was the whole difference.
 Olof's phone is **"Telefone (2)"**, iPhone15,2, iOS **26.6.1** (the version
 #9399 was reported on), UDID `00008120-0000000000000000`.
 
+## 2026-09-23 — The first device install: three things the plan did not have
+
+**1. Developer Mode reads stale.** `devicectl list devices` answers from
+CoreDevice's cache, and the cache was wrong in exactly the case that
+mattered: after the phone had Developer Mode switched on and was connected,
+it still said "disabled" and "disconnected". `devicectl device info details`
+asks the phone, and says why it refuses ("The operation failed because
+Developer Mode is turned off"). `make device` now asks whenever the cache is
+short of ready. It also no longer blames the cable when the phone is on the
+USB bus.
+
+**2. xcodebuild had no usable Apple ID.** Xcode's UI was signed in enough to
+have made a certificate (`Apple Development: Olof Johansson`, team
+`DX33PQ7J4A`), but `com.apple.dt.Xcode`'s account list was empty and
+xcodebuild said "No Accounts", so it could not mint a profile. The first
+install therefore went through Xcode's Run. `make device` now retries without
+`-allowProvisioningUpdates` when a profile already exists, so later installs
+need no account.
+
+**3. Tailnet lock.** The tailnet has tailnet lock on, so the new node showed
+as **"Locked Out"** in the admin console and no peer would talk to it. It has
+to be signed from a signing node (`tailscale lock sign nodekey:…`); the
+console cannot, since the signing key never leaves the node. This is a step
+per NEW node: a rebuild over the installed app keeps the node, deleting the
+app does not. Recorded in DEVICE-CHECK.md §3 and the README's re-sign
+section. It is independent of purgatory (O3b) and of the key expiry warnings
+(R31/R33) — a third way for the app to be up and reach nothing, which
+Diagnostics does not name yet (see the open question below).
+
+**Open question for M1's record:** should the app recognise a locked-out node
+and say so? tsnet's status carries a tailnet-lock field, and "connected but
+reaching nothing" is otherwise indistinguishable from purgatory in the UI.
+Cheap to add to Settings → Status; decide after the device check, when it is
+known whether it ever bites again.
+
 ## 2026-09-21 — The device check's O3b step, rehearsed on L2
 
 In O3b the owner moves the phone's node from purgatory into `kiro-clients`
