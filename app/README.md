@@ -88,8 +88,10 @@ the dashboard session) survives a rebuild over the installed app.
 Two things break that:
 
 - **Deleting the app** deletes its node key and session. The next install is
-  a new node, which lands back in purgatory (O3b again) and needs a new
-  dashboard token.
+  a new node: it lands back in purgatory (O3b again), needs a new dashboard
+  token, and — since the tailnet has tailnet lock on — has to be signed again
+  from a signing node (`tailscale lock sign nodekey:…`), or no peer will talk
+  to it. The admin console shows such a node as "Locked Out".
 - **Moving to a paid team** changes the Team ID, and a different Team ID is
   a different app to iOS: delete and reinstall, with the same consequences
   (PLAN §7.7). Pick a convenient moment.
