@@ -1,11 +1,11 @@
-# F6 — The web view loads the gateway and nothing else
+# F6 — The web view loads the gateway, and four named CDNs, and nothing else
 
 | | |
 |---|---|
-| **Status** | **designed 2026-09-23; ready to build.** §8 carries one consequence for Olof to acknowledge (CDN-backed widgets), not a blocker |
+| **Status** | **designed 2026-09-23; ready to build.** Revised the same day: Olof accepted an allowlisted CDN set, so the promise is "one origin plus four fixed hosts" (§4.1a) rather than "one origin" |
 | **Requested** | 2026-09-23, by Olof: "no URLs or network fetches should be attempted in the built in web browser, they should go to the regular browser on the device. This might already be the case, not sure -- since the whole app is a web surface." |
-| **Revision** | will need one: it tightens a documented invariant (R3's "exactly one destination") from navigations to every request. Number assigned when recorded |
-| **Touches** | `App/Browser` (new `ContentRules.swift`, `BrowserViewModel`, `PageScripts`, `PageScriptSources`), `App/Diagnostics` (two counters), `testing/harness` (`dashboard.py`, `Makefile`), the L1 offline and session suites, two host tests. `NavigationPolicy`, `TSNet/`, the split tunnel: untouched |
+| **Revision** | will need one: it tightens a documented invariant (R3's "exactly one destination") from navigations to every request, **and then names four exceptions to it** (§4.1a) — the revision must state both halves, or it records a promise the code does not keep. Number assigned when recorded |
+| **Touches** | `App/Browser` (new `ContentRules.swift`, `BrowserViewModel`, `PageScripts`, `PageScriptSources`), `App/Settings` (one toggle, §4.1a), `App/Diagnostics` (three counters), `testing/harness` (`dashboard.py`, `Makefile`), the L1 offline and session suites, three host tests. `NavigationPolicy`, `TSNet/`, the split tunnel: untouched |
 
 ## 1. Why, and what already holds
 
@@ -72,13 +72,27 @@ box** the image's size or larger, which VoiceOver reads as "Image not loaded.
 Tap to open in Safari." Tapping it opens the image in Safari (Olof's decision,
 §3). A remote embed (YouTube, Vimeo) shows as an empty box with no marker.
 
-**A cost found in the design pass, for Olof to acknowledge (§8):** a widget or
-MCP app that loads its runtime from a public CDN — the server's CSP names
-`esm.sh`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com` and `cdn.tailwindcss.com`
-for precisely this — **does not render in the app**. Its frame loads (it is
-same-origin), its module imports do not. The same trade as R3's "OAuth flows
-complete in Safari": those are desktop surfaces, and the fix that helps
-everyone is upstream self-hosting, the same fix as KiroCrew#13161.
+**CDN-backed widgets and MCP apps do render** — Olof's decision of 2026-09-23,
+after the design pass surfaced that they would not. Four fixed hosts are
+allowed (`esm.sh`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`,
+`cdn.tailwindcss.com`), so an Excalidraw or PDF MCP app loads its ESM runtime
+and works as it does on the desktop. What that costs, stated plainly because it
+is the one place this feature deliberately leaks: **each of those four hosts
+sees the phone's IP address and the fact that it is loading a KiroCrew
+dashboard**, on the owner's working schedule — the same class of signal as the
+Google Fonts leak this feature exists to close. The difference is that fonts
+are cosmetic (the system's faces render fine) while a widget runtime is
+load-bearing (the widget is blank without it), so the trade is worth making in
+one case and not the other. §4.1a is where that line is drawn and defended.
+
+**The font hosts stay blocked** even though the same CSP names them and the
+allowlist could trivially include them. Blocking them is the evidence this
+feature was built on, the upstream fix is already filed (KiroCrew#13161), and
+nothing breaks without them.
+
+Settings → Diagnostics → Page lists which of the four were actually contacted
+this session, so the leak surface is visible on the device rather than implied
+(§4.1a; it never leaves the device, D1).
 
 Failing:
 
@@ -103,8 +117,11 @@ Failing:
 
 ## 3. Non-goals and the decided trade-off
 
-- Not a content blocker in the general sense: one origin, six fixed rules, no
-  list management, no "allow this origin" affordance anywhere in the UI.
+- Not a content blocker in the general sense: one origin plus four compiled-in
+  CDN hosts, ten fixed rules, **no list management and no "allow this origin"
+  affordance anywhere in the UI**. The allowlist is a constant in the binary,
+  not a setting with a text field — see §4.1a for why that distinction is the
+  whole point.
 - Not a change to sub-frame policy for *same-origin* frames: the dashboard's
   widgets (same-origin `/sandbox-doc/` iframes and `srcdoc` frames) keep
   working.
@@ -115,9 +132,15 @@ Failing:
 
 **Remote images in agent output — decided 2026-09-23: a tappable marker.** A
 blocked image shows a small marker that hands the URL to Safari when tapped, so
-the single-origin promise holds and nothing is more than one tap away. Not
-blocked silently (the owner would not know an image was there), and not allowed
-through (that reopens exactly the tracking-pixel leak this feature closes).
+the promise holds and nothing is more than one tap away. Not blocked silently
+(the owner would not know an image was there), and not allowed through (that
+reopens exactly the tracking-pixel leak this feature closes). Note the page's
+own CSP says `img-src 'self' data: blob: https:` — *any* https image — so the
+rule list, not the CSP, is what stops a tracking pixel here.
+
+**CDN runtimes for widgets — decided 2026-09-23: an allowlist of four fixed
+hosts** (§4.1a). Not a wildcard, not owner-editable, not extended to the font
+hosts.
 
 ## 4. Design
 
@@ -191,6 +214,10 @@ builder takes.
    "action":  {"type": "ignore-previous-rules"}}
 ]
 ```
+
+**Four more `ignore-previous-rules` entries follow rule 1** — the CDN allowlist
+of §4.1a. They are part of the same compiled list and are omitted here only to
+keep the core readable; §4.1a gives them verbatim. Ten rules in total.
 
 Why each rule is there, in order:
 
@@ -280,12 +307,114 @@ regardless of what the source says now. So:
   `schemaVersion` whenever the template above changes;
 - **always compile, never look up.** `compileContentRuleList` writes to a
   temporary file and `moveFile`s over the identifier's path, so a compile
-  replaces a stale entry; six rules compile in milliseconds; the in-memory
+  replaces a stale entry; ten rules compile in milliseconds; the in-memory
   `WKContentRuleList` is cached per origin for the process. The on-disk copy
   is a side effect, not something the app relies on;
 - on success, remove other identifiers under the `latchkey.single-origin.`
   prefix (`getAvailableContentRuleListIdentifiers` + `removeContentRuleList`),
   ignoring errors. Old lists are harmless; this is hygiene.
+
+### 4.1a The CDN allowlist — four fixed hosts, compiled in, and why not five
+
+Olof's decision of 2026-09-23: *"I'm OK with an allowlisted set of URLs that are
+allowed to be fetched."* This section is the set, the mechanism, and the limits
+that keep an allowlist from becoming a general escape hatch.
+
+**The set, taken from the gateway's own CSP, not invented.** `_BASE_CSP`
+(`kiro_crew/dashboard/server.py:823-875`) names every off-origin host the
+bundle is designed to use. Read directly, it gives:
+
+| Host | Named in | What needs it |
+|---|---|---|
+| `esm.sh` | `script-src`, `style-src`, `font-src`, `connect-src` | MCP-app ESM runtimes (React, `@excalidraw/…`) imported by `srcdoc` widget frames via importmap — the server's own comment cites the real Excalidraw and PDF apps |
+| `cdn.jsdelivr.net` | `script-src`, `style-src` | widget runtimes |
+| `cdnjs.cloudflare.com` | `script-src` | widget runtimes |
+| `cdn.tailwindcss.com` | `script-src`, `style-src` | widget styling (`/vendor/tailwindcss-browser.js` is the self-hosted twin, `token_auth.py:423`) |
+| ~~`fonts.googleapis.com`~~ | `style-src` | **excluded.** Cosmetic; upstream fix filed as #13161 |
+| ~~`fonts.gstatic.com`~~ | `font-src` | **excluded.** Same |
+| ~~`*.cloudfront.net`~~ | `frame-src` | **excluded** — a wildcard over a whole CDN provider, and a different feature (deployed-artifact previews). §8 asks whether Olof wants it |
+
+Four hosts. Every one is an **exact host**, no wildcard, which matches CSP
+host-source semantics (`https://esm.sh` does not admit `evil.esm.sh` either) —
+so the app is no more permissive than the page it is protecting.
+
+**The rules**, appended after rule 1 of §4.1:
+
+```json
+  {"trigger": {"url-filter": "^https://esm\\.sh/"},
+   "action":  {"type": "ignore-previous-rules"}},
+
+  {"trigger": {"url-filter": "^https://cdn\\.jsdelivr\\.net/"},
+   "action":  {"type": "ignore-previous-rules"}},
+
+  {"trigger": {"url-filter": "^https://cdnjs\\.cloudflare\\.com/"},
+   "action":  {"type": "ignore-previous-rules"}},
+
+  {"trigger": {"url-filter": "^https://cdn\\.tailwindcss\\.com/"},
+   "action":  {"type": "ignore-previous-rules"}}
+```
+
+Four properties of that shape, each of which a test pins (§6):
+
+1. **`https://` is literal, so plaintext is still blocked.** `http://esm.sh/`
+   does not match and ATS (R28) would refuse it anyway — belt and braces, and
+   an allowlist that admitted `http` would be a downgrade channel.
+2. **The trailing `/` is load-bearing**, exactly as in rule 3.
+   `^https://esm\.sh/` does not match `https://esm.sh.evil.example/pwn.js`,
+   because after the escaped host the next character must be `/` and there it
+   is `.`. Nor `https://esm.shady.example/`. This is the prefix attack the
+   naive `^https://esm\.sh` would hand over, and it is the single most
+   important character in this section.
+3. **Only the default port.** WebKit serialises `https://esm.sh/x` with no
+   port, so a URL written `https://esm.sh:8443/x` keeps its `:` and fails the
+   `/` match — blocked. An allowlisted host cannot be used to reach an
+   arbitrary service on that host.
+4. **No `resource-type` restriction.** The CSP admits these hosts for scripts,
+   styles, fonts and `connect-src` in varying combinations; encoding that
+   matrix in the rule list would add four more rules and a maintenance
+   obligation to track their CSP, to prevent nothing — a host trusted for
+   script execution is not meaningfully more trusted for a stylesheet.
+
+**Compiled in, not configurable — and that is the design, not laziness.** The
+allowlist is `ContentRules.allowedCDNHosts`, a `static let` array of four
+strings in `App/Browser/ContentRules.swift`. There is no Settings text field, no
+"allow this origin" prompt, no persisted list, and no way for a page to add to
+it. The reason is the one already in §8: a runtime-editable allowlist is a hole
+with a UI on it, and the interesting attack is not "the owner types a bad host"
+but "something convinces the owner to type a bad host". A constant in the binary
+changes only in a commit, with a review and a test.
+
+**One toggle, because the strict promise must remain reachable.** Settings →
+Privacy gains *Allow widget CDNs*, default **on** (Olof's decision). Off
+recompiles the list without those four rules, giving the original one-origin
+behaviour. The toggle's state is part of the rule-list identity, so it joins the
+identifier: `latchkey.single-origin.v<schemaVersion>.<cdn0|cdn1>.<origin>`.
+Without that, flipping the toggle would leave a stale compiled list under the
+same name — the identifier-as-file-name trap §4.1 already documents.
+
+**The owner can see what was actually fetched.** An allowed CDN load goes
+*direct*, not through the SOCKS relay (`TailnetProxyPolicy` sends non-tailnet
+hosts direct — that is why the fonts leak existed), so **the app cannot observe
+it from the network side at all**: there is no CONNECT to journal. The only
+on-device instrument is the page itself, so the marker script (§4a) gains a
+reporter: after `load`, and on a 2 s debounce thereafter, it walks
+`performance.getEntriesByType('resource')`, keeps entries whose origin is not
+the gateway's, and posts the set of **origins** (never full URLs — a widget's
+module path is not something to accumulate) to the app. `BrowserViewModel`
+counts them per origin and Settings → Diagnostics → Page shows
+"Off-origin hosts contacted: esm.sh (14)". It stays on the device (D1).
+
+This is a page-script instrument, so it is as fragile as the marker and fails
+the same way: if a future bundle breaks it the counter reads zero while the
+blocking and the allowlist keep working. It is a **diagnostic, not an
+enforcement point**, and §6 pins that distinction — no test may use it as
+evidence that a block happened; the harness counters do that.
+
+**What this section deliberately does not do:** it does not allow the font
+hosts (§2), does not admit `*.cloudfront.net` (§8), does not widen `img-src`
+back to `https:` (remote images keep the marker), and does not touch
+`NavigationPolicy` — a *navigation* to `esm.sh` still leaves for Safari, because
+rule 2 exempts top documents and the allowlist changes nothing about them.
 
 ### 4.2 What a rule list does not see — every hole named, with what covers it
 
@@ -326,11 +455,19 @@ project edit). Two parts, so the pure one is host-testable:
 /// Pure Foundation. scripts/test-content-rules.sh compiles it alone.
 enum ContentRules {
     static let schemaVersion = 1
-    /// The six rules for `origin` (as GatewayAddress.origin(of:) renders it:
+    /// The four CDN hosts of §4.1a, in this order. Exact hosts, no wildcards,
+    /// neither font host. Changing this list changes a promise: see §4.1a.
+    static let allowedCDNHosts = ["esm.sh", "cdn.jsdelivr.net",
+                                  "cdnjs.cloudflare.com", "cdn.tailwindcss.com"]
+    /// The rules for `origin` (as GatewayAddress.origin(of:) renders it:
     /// lowercase, default port dropped), or nil if it is not http(s).
-    nonisolated static func json(forOrigin origin: String) -> String?
-    /// "latchkey.single-origin.v1.<origin>"
-    nonisolated static func identifier(forOrigin origin: String) -> String
+    /// Ten rules when allowCDNs, six when not.
+    nonisolated static func json(forOrigin origin: String,
+                                 allowCDNs: Bool) -> String?
+    /// "latchkey.single-origin.v1.cdn1.<origin>" — the CDN flag is part of the
+    /// identity, or flipping the toggle would reuse the stale compiled list.
+    nonisolated static func identifier(forOrigin origin: String,
+                                       allowCDNs: Bool) -> String
     /// WebKit's own domain escape table: \ { } [ . ? * $
     nonisolated static func urlFilterEscaped(_ s: String) -> String
 }
@@ -580,7 +717,14 @@ for this to fail, and a test pins it (§6).
 
 ## 5. State and migration
 
-Nothing in the workspace store. WebKit's store keeps
+**One persisted value:** *Allow widget CDNs*, a `Bool` in the same defaults the
+other Settings toggles use, default **true**. A build that predates it reads
+absent → true, which matches Olof's decision; a workspace written by a newer
+build and read by an older one simply ignores the key. Because the value
+selects which rules compile, it is part of the rule-list identifier (§4.1a), so
+flipping it recompiles rather than reusing the previous list.
+
+Nothing else in the workspace store. WebKit's store keeps
 `ContentRuleList-<encoded identifier>` files under the app's Library — verify
 the exact directory on the first simulator run (the R1 disk scan lists the
 container) and confirm R5's `BackupExclusion` covers it (`Library/WebKit` is
@@ -589,9 +733,10 @@ already excluded; if the store lives elsewhere, add that directory to
 name the workspace file already holds, not a secret.
 
 Migration: none; earlier builds installed no list. Old identifiers (another
-gateway, an older `v<N>`) are removed opportunistically and are harmless if
-left. Changing the template without bumping `schemaVersion` is the one way to
-ship stale rules — the host test asserts the identifier carries the version.
+gateway, an older `v<N>`, the other `cdn<0|1>`) are removed opportunistically
+and are harmless if left. Changing the template without bumping `schemaVersion`
+is the one way to ship stale rules — the host test asserts the identifier
+carries the version and the CDN flag.
 
 ## 6. End-to-end tests
 
@@ -629,6 +774,17 @@ harness, all in the parent repo:
   `--map fonts.googleapis.com:443=127.0.0.1:9 --map fonts.gstatic.com:443=127.0.0.1:9`
   so a leaked attempt is journaled and dies on a closed loopback port,
   **never reaching Google**.
+- **The CDN allowlist needs the same treatment, and must never reach the real
+  CDNs.** Map all four of `esm.sh:443` and the three lookalikes
+  `esm.sh.away.example:443`, `esm.shady.example:443`, `esm.sh:8444` to
+  `127.0.0.1:$(DASH_PORT)`, so each *would* be served — and counted by Host —
+  if the list allowed it. Only `esm.sh:443` may answer; the other three prove
+  the anchoring. One allowlisted host is enough to test the mechanism; the
+  other three entries are the same regex shape and are covered by the host
+  test, which is cheaper than four more launches. `/single-origin` gains
+  `<script src="https://esm.sh/f6/cdn.js">` (reporting `cdn: ok`), a
+  lookalike `<script src="https://esm.sh.away.example/f6/pwn.js">`, and a
+  `fetch("https://esm.sh:8444/f6/cdn-port")`.
 
 The session suite launches with `-ProxyEverything` for F6's tests: the fixture
 path honours it (`TSNetManager.proxyConfig(upstreamHost:…)` →
@@ -641,6 +797,10 @@ keeps testing it.
 |---|---|---|---|
 | `testOffOriginLoadsNeverReachTheAwayOrigin` | L1 (`test-offline.sh`) | `/single-origin` on the gateway, wait for a report with `ws:open`; then `requests["dash.localtest.me"] == 0`; no `/f6/` path without a `Safari/` UA; journal has no CONNECT to `dash.localtest.me` and **none to `dash.tail-scale.ts.net:8444`** (the port); **`handshakes["dash.localtest.me"] == 0`** (the preconnect) — three named assertions | the next row is the permanent positive control; and today's build (no list): every count rises |
 | `testWithoutTheRuleListTheAwayOriginIsReached` | L1 | same page with `-UITestNoContentRules`: `requests["dash.localtest.me"] > 0`, `/f6/img.png`, `/f6/fetch`, `/f6/frame` served, a CONNECT to `:8444` journaled, **and `handshakes["dash.localtest.me"] >= 1`**. If the last is 0 the preconnect probe is vacuous and the test fails saying so | run it without the hook: every assertion inverts. This is R10's shape: the instrument must be shown to see a leak |
+| `testAnAllowlistedCDNIsFetchedAndItsLookalikesAreNot` | L1 | on `/single-origin` with the allowlist on: `requests["esm.sh"] > 0` and the report says `cdn: ok` (the script ran); **and in the same run** `requests["esm.sh.away.example"] == 0`, `requests["esm.shady.example"] == 0`, and no request or CONNECT to `esm.sh:8444`. One test, because the positive and the anchoring must hold simultaneously or the allowlist is not what it claims | dropping the trailing `/` from the allow regex: the lookalike is served and its count rises — this is the prefix attack of §4.1a(2) and the assertion that catches it. Dropping the CDN rules entirely: `cdn: ok` never reports |
+| `testStrictModeBlocksTheAllowlistedCDNs` | L1 | relaunch with *Allow widget CDNs* off (`-UITestNoCDNAllowlist`): `requests["esm.sh"] == 0`, no `cdn: ok`, and every assertion of `testOffOriginLoadsNeverReachTheAwayOrigin` still holds — strict mode is the original promise, intact | an identifier that omits the `cdn0`/`cdn1` component: WebKit hands back the stale ten-rule list compiled under the same name and `esm.sh` is still fetched. This is the §4.1a identifier trap, and it is the only test that catches it |
+| `testTheFontHostsStayBlockedWhileTheCDNsAreAllowed` | L1 + session (real bundle) | with the allowlist **on**: the font hosts' counters are 0 and their SNI handshake counts are 0, while `esm.sh` is > 0. In the session run the journal's CONNECT set contains no `fonts.*` | adding either font host to `allowedCDNHosts`: the counter rises. Pins §2's "the font hosts stay blocked" against a well-meaning future edit that treats the CSP as one list |
+| `testThePageCannotWidenTheAllowlist` | L1 | `/single-origin` appends, at runtime, a `<script>` and a `fetch` for the away origin and for `esm.sh.away.example`; both counters stay 0. A page cannot add to a compiled list | nothing in the app — this is a property of the mechanism, so the test exists to catch a future "allow this origin" affordance being added (§8) without the spec being revisited |
 | `testTheGatewaysOwnMachineryStillWorks` | L1 | report shows `ws:open`, an SSE tick, `data_img: ok`, `blob_img: ok`, `blob_worker: ok`, `srcdoc: ok`, `sw: undefined`, `sw_reg: unavailable`; the report itself arriving proves same-origin `fetch` | dropping rule 5: `blob_worker` never reports; rule 6: `srcdoc` never reports; rule 4: `ws` never opens; an allow regex without the port (or with `:443` written out) on the gateway: nothing but the HTML loads and `CONTENT-RULES: … own assets failed` appears in the log |
 | `testFailedRuleCompileLoadsNothing` | L1 | `-UITestBreakContentRules`: `nav-error-overlay` within 10 s whose text contains "filter"; `requests["dash.tail-scale.ts.net"] == 0` and no CONNECT for it; log has `CONTENT-RULES: compile failed`; *Try again* keeps both at zero | a one-line sabotage, `load(url)` in the catch block: the count rises. Recorded in §9 when done |
 | `testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard` (existing) | L1 | unchanged: Safari foregrounds, no error page, `/away-target` never fetched in-app | dropping `top-document` from rule 2: WebKitErrorDomain 104, error page, Safari never appears |
@@ -649,11 +809,14 @@ keeps testing it.
 | `testTheRealDashboardConnectsToNothingButTheGateway` | session (`test-session.sh`), real 0.6.0 bundle, `-ProxyEverything` | after the existing sign-in reaches a live chat: the journal's CONNECT set is exactly `{gw.tail-scale.ts.net:443}` — no `fonts.googleapis.com`, no `fonts.gstatic.com`; and the `LOADED-PAGE` log line (`-UITestLogResponses`, extended with `fontsLinkRel` and `webFonts`) shows `fontsLinkRel: "preload"` (its `onload` never ran) and no Space Grotesk / JetBrains Mono face. Post-run grep in `test-session.sh`, like the R1 check | `testWithoutTheRuleListTheRealDashboardReachesForGoogle`: `-UITestNoContentRules` — the journal shows CONNECT `fonts.googleapis.com:443` and `fonts.gstatic.com:443` (dying on port 9, never leaving the machine). Permanent, like R10's control |
 | The dashboard is undisturbed | session + F5 + F4 | the existing session tests, F5's chip tests and F4's "a painted dashboard never shows the connecting state" all run with the list installed — they are F6's regression net for "nothing else changes" | any of them failing after F6 lands |
 | A ported gateway under the list (when F1 lands) | discovery (L2) | against `gw-alt` on 8443: the CONNECT set is `{…:8443}` only and the WebSocket opens (the page reports) | an allow rule built from the host alone |
-| `test-content-rules.sh` | host (`make test-policy`) | `json(forOrigin:)` for `https://gw.example.ts.net` (no port) and `:8443`; `.` escaped; an IPv6-literal origin escapes `[`; `http://` yields `ws://`; identifier carries `v1` and the origin; **then compiles the exact JSON with macOS WebKit's `WKContentRuleListStore(url:)`** in a temp store — pass = compiles; and asserts the `-UITestBreakContentRules` payload does **not** compile, so the compile check is not vacuous | a misspelled type (`"top-documents"`) fails to compile; an alternation `(https|wss)` fails to compile — both recorded once as evidence. If the CLI cannot use WebKit under the agent's sandbox, the same check moves into the simulator suite |
+| `test-content-rules.sh` | host (`make test-policy`) | `json(forOrigin:allowCDNs:)` for `https://gw.example.ts.net` (no port) and `:8443`; `.` escaped; an IPv6-literal origin escapes `[`; `http://` yields `ws://`; identifier carries `v1`, `cdn0`/`cdn1` and the origin; **10 rules with the allowlist on and 6 with it off**, the four CDN entries in the documented order, each anchored `^https://` and ending `/`; **then compiles the exact JSON with macOS WebKit's `WKContentRuleListStore(url:)`** in a temp store — pass = compiles; and asserts the `-UITestBreakContentRules` payload does **not** compile, so the compile check is not vacuous | a misspelled type (`"top-documents"`) fails to compile; an alternation `(https\|wss)` fails to compile; a CDN entry without its trailing `/` fails the shape assertion — all recorded once as evidence. If the CLI cannot use WebKit under the agent's sandbox, the same check moves into the simulator suite |
+| `test-cdn-allowlist.swift` | host (`make test-policy`) | table-driven over the **regex semantics**, without WebKit: for each of the four hosts, that the emitted filter matches `https://<host>/x` and does **not** match `https://<host>.evil.example/x`, `https://<host>evil.example/x`, `https://<host>:8444/x`, `http://<host>/x`, or `https://sub.<host>/x`. The set is exactly the four hosts of §4.1a and contains neither font host nor any `*` | adding a fifth host without updating the expected set; emitting a filter without `^`; emitting one without the trailing `/` — each flips a single boolean |
 | `test-blocked-marker.js` | host, Node | the exact injected text against a fake `document`/`location`/`webkit`: same-origin error → no attribute, counted; off-origin `img` error → attribute + label; `javascript:`/`data:` src → nothing; untrusted click → no post; trusted click on a marked image → `open` with the URL; click elsewhere → nothing; counts posted once | the script printed from a build without the fix |
 
-L1's budget: six new launches add roughly 90 s; raise the budget line in
-`test-offline.sh` from 180 s to 300 s (it warns, not fails) and say why.
+L1's budget: ten new launches add roughly 150 s; raise the budget line in
+`test-offline.sh` from 180 s to 360 s (it warns, not fails) and say why. Three
+of the four allowlist tests reuse `/single-origin` unchanged, so the cost is
+launches, not fixtures.
 
 ## 7. Acceptance criteria
 
@@ -661,6 +824,16 @@ L1's budget: six new launches add roughly 90 s; raise the budget line in
   origin from a page that references it a dozen ways — `/__state.requests`,
   `/journal`, `/__state.handshakes` — and the positive control shows each
   instrument seeing a leak when the list is off.
+- **The allowlist is exactly four hosts and admits nothing adjacent to them:**
+  `esm.sh` is fetched; `esm.sh.away.example`, `esm.shady.example` and
+  `esm.sh:8444` are not — `/__state.requests`, one run. The host test pins the
+  set itself, so a fifth host cannot be added without a failing test.
+- **Strict mode restores the original promise:** with *Allow widget CDNs* off,
+  `requests["esm.sh"] == 0` and every single-origin assertion still passes —
+  which also proves the compiled list is keyed by the toggle rather than
+  reused stale.
+- **The font hosts are blocked whether the allowlist is on or off** — their
+  request counters and SNI handshake counts, in both modes.
 - The same host on another port is refused: no CONNECT to `:8444` — the
   journal.
 - The real 0.6.0 bundle's connection set under `-ProxyEverything` is exactly
@@ -685,13 +858,21 @@ L1's budget: six new launches add roughly 90 s; raise the budget line in
 
 ## 8. Open questions and owner actions
 
-- **Olof — acknowledge the cost:** CDN-backed widgets and MCP apps (runtimes
-  from `esm.sh`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`,
-  `cdn.tailwindcss.com`, per the server's CSP) will not render in the app.
-  Recommended: accept, as with OAuth-in-Safari, and report upstream that
-  self-hosting those runtimes is the same fix as #13161. Not a blocker: the
-  design is identical either way; only §2's wording and an upstream issue
-  change.
+- ~~**Olof — acknowledge the cost:** CDN-backed widgets will not render.~~
+  **Answered 2026-09-23: allowlist them** (§4.1a). Four fixed hosts,
+  compiled in, default on, one toggle to go strict, font hosts excluded.
+- **Open, and worth a deliberate answer: `*.cloudfront.net`.** The server's
+  `frame-src` admits it for live previews of **deployed webapp artifacts**
+  (`WebAppArtifactCard`/`WebAppThumb`), and the front end gates on the exact
+  `<dist-id>.cloudfront.net` shape. It is excluded from the allowlist because it
+  is the one wildcard in the CSP — admitting it trusts every distribution any
+  AWS customer has ever created, which is a categorically weaker promise than
+  four fixed hosts. **Recommend leaving it blocked** until the phone is actually
+  used to preview a deployed artifact; a blocked preview frame is an empty box,
+  not a broken dashboard. If wanted, the honest form is `^https://[a-z0-9]+
+  \.cloudfront\.net/` (this dialect has no `\d`, and `[a-z0-9]+` at least
+  forbids a further dot), plus the front end's own shape check — say so in a
+  revision rather than widening §4.1a quietly.
 - **Olof:** should blocked embeds (YouTube/Vimeo iframes) also get an
   "open in Safari" affordance? Iframes fire no `error`, so it is a different
   mechanism — a follow-up if wanted.
@@ -702,7 +883,11 @@ L1's budget: six new launches add roughly 90 s; raise the budget line in
   split-tunnel change that needs its own spec and Olof's call. Not decided
   here.
 - Should the app ever offer "allow this origin for this session"? It would be a
-  hole with a UI on it; recommend not.
+  hole with a UI on it; recommend not — and note that the allowlist of §4.1a is
+  deliberately *not* this: a constant in the binary that changes in a reviewed
+  commit is a different object from a text field the owner can be talked into
+  filling. `testThePageCannotWidenTheAllowlist` exists to make that difference
+  a failing test rather than a preference.
 - Worth telling KiroCrew: a self-hosted dashboard that fetches fonts from Google
   is a privacy leak for every deployment, and the fonts could be served from the
   gateway. **Filed as KiroCrew#13161.**
@@ -732,3 +917,17 @@ L1's budget: six new launches add roughly 90 s; raise the budget line in
   domains); `index.html` has two preconnects the request counter cannot see,
   so the harness gains an SNI handshake counter; the server's CSP shows
   CDN-backed widgets will not render (§8). Nothing built yet.
+- 2026-09-23, **revised on Olof's answer**: CDN-backed widgets are allowlisted
+  rather than sacrificed. The set is the four fixed hosts the gateway's own
+  `_BASE_CSP` names for widget runtimes (`dashboard/server.py:823-875`),
+  **excluding both font hosts** — they are cosmetic, #13161 is filed, and they
+  are the evidence this feature was built on — and excluding
+  `*.cloudfront.net`, the CSP's one wildcard (§8 asks). Consequences recorded
+  honestly: the promise is now "one origin plus four hosts", each of those
+  hosts sees the phone's address and that it loads a KiroCrew dashboard, and an
+  allowed load goes direct so **no network-side instrument in the app can see
+  it** — the Diagnostics counter is a page-script reporter and is explicitly a
+  diagnostic, not enforcement. The toggle joins the rule-list identifier,
+  because otherwise flipping it would silently reuse the stale compiled list.
+  Four new L1 tests, one new host test; the anchoring test (`esm.sh` yes,
+  `esm.sh.away.example` no, in the same run) is the one that matters.

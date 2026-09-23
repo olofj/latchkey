@@ -24,7 +24,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F3](F3-share-into-a-session.md) | Share a link **or a document** from another app into a session on a gateway | designed; recommends stage 1 only (open item 1) |
 | [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | designed; ready to build |
 | [F5](F5-portrait-session-list.md) | The instance chips collide in portrait (bug report) | designed; two independent halves (CSS rule, gateway switcher) |
-| [F6](F6-single-origin-web-view.md) | The web view loads the gateway and nothing else (no Google Fonts) | designed; ready to build, one consequence to weigh (CDN widgets) |
+| [F6](F6-single-origin-web-view.md) | The web view loads the gateway, four named CDNs, and nothing else | designed; ready to build (CDN widgets allowlisted, fonts still blocked) |
 
 ## Still open, not yet answered
 
