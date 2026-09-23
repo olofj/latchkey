@@ -2312,6 +2312,18 @@ version, so O2 has nothing left to report. It was tried against crafted
 `devicectl` output for each state (a fake `xcrun` on `PATH`), since no phone
 is paired yet.
 
+**Corrected 2026-09-23, by the first real phone.** The crafted output was
+made by flipping a simulator's `reality` to `"physical"`, and a real device
+reports **no `reality` field at all** — only simulators say `"simulated"`.
+So `make device` found "no paired devices" with the phone sitting right
+there, paired. The filter now excludes simulators instead of requiring
+"physical", and `DEVICE=` also matches a device by name. The lesson: a
+fixture built by editing a neighbouring record assumes the fields are the
+same shape, and here the absence of a field was the whole difference.
+
+Olof's phone is **"Telefone (2)"**, iPhone15,2, iOS **26.6.1** (the version
+#9399 was reported on), UDID `00008120-0000000000000000`.
+
 ## 2026-09-21 — The device check's O3b step, rehearsed on L2
 
 In O3b the owner moves the phone's node from purgatory into `kiro-clients`
