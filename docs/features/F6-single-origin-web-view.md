@@ -104,6 +104,38 @@ what goes through the proxy; blocked requests never reach it.
 **Sub-frames:** the rule list blocks cross-origin frames as a side effect, which
 is what we want; same-origin ones are untouched.
 
+## 4a. How the marker works (the gap the decision exposed)
+
+A content rule list blocks silently: the page never learns why, and the app
+never sees the request. So "show a marker" needs a mechanism, and the obvious
+one — inject a marker element next to the image — fights React, which will
+reconcile an injected sibling away on the next render.
+
+The design that survives a re-render, and mutates as little as possible:
+
+- A `WKUserScript` (document-start, page world, gated to the gateway's origin)
+  adds a **capture-phase** `error` listener on `document` for `img` elements
+  (`error` does not bubble, so capture is required). Same-origin failures are
+  left alone — those are the dashboard's own problem, not this feature's.
+- For a cross-origin failure it sets one attribute on the existing element,
+  `data-kiro-blocked="<url>"`. Setting an attribute on a node React already
+  owns is the smallest possible intervention, and if React does re-render the
+  image, the load fails again and the listener sets it again.
+- An injected stylesheet renders the marker from that attribute: a
+  `background-image` (inline SVG data URI) plus a minimum size, so a failed
+  `img` shows a small glyph. Note `::before`/`::after` do **not** apply to
+  replaced elements like `img`, which is why this is a background rather than a
+  pseudo-element.
+- A capture-phase `click` listener on `[data-kiro-blocked]` calls
+  `window.webkit.messageHandlers.<name>.postMessage(url)`. The app validates
+  that it is `http`/`https` and hands it to the system — the same path
+  `NavigationPolicy.openExternally` already uses, so Safari opens it.
+
+The script is injected content, so it is the fragile part of this feature and
+is marked as such: if a future bundle swallows `error` events, the marker stops
+appearing while **the blocking itself keeps working**. That is the right way for
+this to fail, and a test pins it (§6).
+
 ## 5. State and migration
 
 None persisted. The compiled rule list lives in WebKit's store, keyed by an
