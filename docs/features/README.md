@@ -23,7 +23,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F2](F2-connecting-state.md) | A visible connecting state for a page load in flight | superseded by F4 |
 | [F3](F3-share-into-a-session.md) | Share a link **or a document** from another app into a session on a gateway | designed; attachments to fold in |
 | [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | spec |
-| [F5](F5-portrait-session-list.md) | The instance chips collide in portrait (bug report) | **measured: first diagnosis wrong, needs a new call** |
+| [F5](F5-portrait-session-list.md) | The instance chips collide in portrait (bug report) | decided: legible chips **and** a native instance switcher |
 | [F6](F6-single-origin-web-view.md) | The web view loads the gateway and nothing else (no Google Fonts) | decided; ready to build |
 
 ## Still open, not yet answered
@@ -33,8 +33,12 @@ depends on guessing them:
 
 1. **F3 scope** — stage 1 only (links via a URL scheme and an App Intent,
    reachable through a Shortcut), or both stages including the share-sheet
-   extension? Note that answer 2 to F3 (documents, not only links) pulls the
-   App Group inbox forward regardless.
+   extension? **The design pass recommends stage 1 only, now**, and corrects
+   what this list said before: documents do *not* pull the App Group inbox
+   forward, because an `IntentFile` from Shortcuts is delivered to the **app's
+   own process**. The App Group is a stage-2 cost only — and it may not be
+   available on a free Personal Team at all, which would block stage 2
+   regardless (F3 §4.3).
 2. **Build order** — F4 and F6 together in one reinstall, since both touch
    `App/Browser` and both need the device to matter?
 3. **GitHub** — two private repos (`latchkey`, `latchkey-app`), with Olof
