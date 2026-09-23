@@ -162,5 +162,6 @@ something.
   fix is the build step they already run. KiroCrew's issues searched: no
   existing report (#6578 is their capture browser's egress, #9399 is the import
   map, #8091 is the CJK font precedent). Draft report:
-  `../upstream/kirocrew-google-fonts.md`. The app still blocks the fetch
-  regardless — a client cannot wait for someone else's release.
+  `../upstream/kirocrew-google-fonts.md`, **filed as KiroCrew#13161**. The
+  app still blocks the fetch regardless — a client cannot wait for someone
+  else's release, and the block is what makes the promise checkable.

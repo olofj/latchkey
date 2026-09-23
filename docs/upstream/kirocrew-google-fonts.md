@@ -1,4 +1,9 @@
-# Upstream report draft — KiroCrew fetches two fonts from Google on every dashboard load
+# Upstream report — KiroCrew fetches two fonts from Google on every dashboard load
+
+**Filed 2026-09-23 as [kirodotdev/KiroCrew#13161](https://github.com/kirodotdev/KiroCrew/issues/13161)**,
+from Olof's account, with his go-ahead. Version 0.6.0, stable, pip/venv
+service install, observed on macOS. This file is the local record; the
+issue is the live copy.
 
 Prepared 2026-09-23 for [kirodotdev/KiroCrew](https://github.com/kirodotdev/KiroCrew),
 to be filed with their **Bug report** form. Found while building F6
