@@ -16,7 +16,7 @@
 //    - `GET /manifest.json` is JSON named "Kiro Crew", and
 //    - `GET /api/auth/me` (no cookies) is 403 with `X-Auth-Required: true`.
 //
-//  12 probes at a time, 1.5 s per request, 5 s for the whole sweep; results
+//  12 probes at a time, 4 s per request, 12 s for the whole sweep; results
 //  stream into `gateways` as they arrive. HTTPS only (R26): a plain-http
 //  origin fails KiroCrew's /api/ws origin check, and HSTS upgrades it anyway.
 //  Redirects are never followed: the probe session has no route for a host
@@ -53,8 +53,19 @@ final class GatewayDiscovery: ObservableObject {
     @Published private(set) var gateways: [Gateway] = []
     @Published private(set) var candidateCount = 0
 
-    nonisolated static let requestTimeout: TimeInterval = 1.5
-    static let deadline: Duration = .seconds(5)
+    /// Per-request budget. Was 1.5 s, chosen before anyone had tried a real
+    /// tailnet: on the first device run (2026-09-23) the phone's network
+    /// blocked UDP, so every path relayed through DERP over TCP, and the
+    /// gateway was a continent away (190 ms RTT direct, more relayed). A
+    /// probe is TCP, then TLS, then the request, and the peer's WireGuard
+    /// handshake may happen inside it; 1.5 s loses that race against a
+    /// gateway that would have answered. 4 s covers a relayed
+    /// intercontinental path with room to spare, and a dead peer still costs
+    /// only one probe's wait because they run concurrently.
+    nonisolated static let requestTimeout: TimeInterval = 4
+    /// Whole-sweep budget: enough for two rounds of `concurrency` probes at
+    /// the per-request timeout, so a slow peer cannot starve a later one.
+    static let deadline: Duration = .seconds(12)
     static let concurrency = 12
 
     private let model: TSNetModel
@@ -152,7 +163,7 @@ final class GatewayDiscovery: ObservableObject {
                 case .deadline:
                     pastDeadline = true
                     if inFlight > 0 {
-                        logger.log("Discovery: 5 s deadline with \(inFlight) probe(s) unanswered")
+                        logger.log("Discovery: \(Self.deadline) deadline with \(inFlight) probe(s) unanswered")
                     }
                     group.cancelAll()
                     continue
