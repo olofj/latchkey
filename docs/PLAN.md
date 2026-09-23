@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | In implementation. M0–M5 done; M6's simulator-testable parts done (6.5, 6.7, 6.8 on the L2 harness; 6.6 and the AC numbers need the device); M8 done (8.1–8.6). Revisions R1–R40 applied. Remaining work needs the owner or the phone: the M1 device check (O1 and O3 done 2026-09-21; O2 needs Olof at chonk with the phone, then `make -C app device`, O3b, O5), O4, O7, M6.6, M7. Where a revision disagrees with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
+| Status | **Superseded as the driver of work (2026-09-23):** new work is specified one feature at a time in [`features/`](features/README.md); this document stays as the record of M0–M8. In implementation. M0–M5 done; M6's simulator-testable parts done (6.5, 6.7, 6.8 on the L2 harness; 6.6 and the AC numbers need the device); M8 done (8.1–8.6). Revisions R1–R40 applied. Remaining work needs the owner or the phone: the M1 device check (O1 and O3 done 2026-09-21; O2 needs Olof at chonk with the phone, then `make -C app device`, O3b, O5), O4, O7, M6.6, M7. Where a revision disagrees with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
 | Author | Drafted 2026-09-20 from three parallel research passes |
 | Repo | `~/src/latchkey` |
 | Base | Fork of [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) @ `dba0555` (2026-08-24), BSD-3-Clause |

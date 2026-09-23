@@ -1,0 +1,46 @@
+# Feature specs
+
+From 2026-09-23 Latchkey is no longer built from `../PLAN.md`. The plan's
+milestones are done bar the owner-and-device items; what follows is driven by
+Olof's requests and feedback, one spec at a time.
+
+**The rule: spec first.** Every request — a feature, a change, a piece of
+feedback — gets a document here before any code is written. Fine-grained:
+someone who has not seen the conversation should be able to build it, and
+should be able to tell afterwards whether it was built. Then it is
+implemented, tested end to end, reviewed adversarially, and recorded in
+`../DECISIONS.md` like everything before it.
+
+**Tests are end-to-end.** A feature is done when a test drives the real app
+against a real (fake-backed) tailnet and asserts what the owner would see.
+Host unit tests are welcome where logic is pure, but they do not stand in for
+a suite run. Every test must be shown able to fail — against the code before
+the change, or by breaking it on purpose — and the spec says how.
+
+| # | Feature | Status |
+|---|---|---|
+| [F1](F1-gateway-port.md) | A gateway carries a port; 8443 is the standard one (R40) | spec |
+| [F2](F2-connecting-state.md) | A visible connecting state for a page load in flight | building |
+
+## The shape of a spec
+
+Copy [`TEMPLATE.md`](TEMPLATE.md). It asks for:
+
+1. **What Olof asked for**, quoted, and the date.
+2. **Why** — the failure or the gap, with evidence (a log line, a measurement,
+   a device run) rather than an assertion.
+3. **What the owner sees** when it works, and when each part of it fails.
+4. **Non-goals**, so the thing has edges.
+5. **Design** — files, types, functions, the actual names. Including what
+   *not* to touch: the split tunnel, `allowFailover`, ATS, D1 (nothing leaves
+   the device), and the vendored tree's one-change-per-commit rule.
+6. **State and migration** — what is persisted, and what happens to a value
+   written by the previous version.
+7. **End-to-end tests** — which suite, what each asserts, and how each is
+   shown able to fail.
+8. **Acceptance criteria** — measurable, with the instrument named.
+9. **Open questions and owner actions.**
+
+A spec is a living document: it records what was decided while building, and
+what turned out to be wrong. When it disagrees with `../PLAN.md`, the spec
+wins.

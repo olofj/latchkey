@@ -2423,6 +2423,37 @@ What this changes:
 - box and chonk are minutes away rather than a continent, which separates a
   blank dashboard (#9399) from a slow path.
 
+## 2026-09-23 — From the plan to feature requests, spec first
+
+Olof: "I think most of the original plan is now implemented. We should switch
+from working off of that plan, to a mode where I give you requests for
+features to consider and implement. I want you to plan, design and document
+the feature in a similar PLAN document with finegrained details before you go
+ahead with an implementation. This is true for all feedback and all requests I
+give you, and I expect you to add suitable end to end testcases (unit tests
+don't matter as much)."
+
+**Adopted, with a place to put it:** `docs/features/`, one document per
+request, `README.md` for the rule and `TEMPLATE.md` for the shape. A spec
+names files, types and functions, says what the owner sees when it works AND
+when each part fails, lists the invariants it must not break, and specifies
+its end-to-end tests including **how each test was shown able to fail**. The
+PLAN stays as history; where a spec disagrees with it, the spec wins.
+
+Recorded in `app/AGENTS.md` too, since agents read that first.
+
+- **F1** (`features/F1-gateway-port.md`): a gateway carries a port, 8443 the
+  standard one. Specified, not started.
+- **F2** (`features/F2-connecting-state.md`): the connecting state for the
+  blank screen. It was briefed and started an hour before this rule existed,
+  so its spec was written from the brief afterwards and says so.
+
+**Why end-to-end and not units, in this project's terms:** every fault the
+device run turned up today — a dropped SOCKS dial, a stale devicectl cache,
+a locked-out node, a policy with no grant — was invisible to unit tests and
+obvious to a suite that drove the real app. The existing L1/L2/session/
+discovery/lifecycle suites are the model, and they earn their keep.
+
 **Open question for M1's record:** should the app recognise a locked-out node
 and say so? tsnet's status carries a tailnet-lock field, and "connected but
 reaching nothing" is otherwise indistinguishable from purgatory in the UI.
