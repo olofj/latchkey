@@ -1,270 +1,713 @@
-# F3 — Share a link from another app into a session on a gateway
+# F3 — Share a link or a document from another app into a session on a gateway
 
 | | |
 |---|---|
-| **Status** | researched; design below, awaiting Olof's answers to §6 before building |
-| **Requested** | 2026-09-23, by Olof: "I want to be able to share from one app straight into a session on kiro to a remote gateway. The by far most common would be for me to want to share a link article straight to the obsidian session on chonk, but the feature should be generic. Share -> latchkey -> gateway/session UI flow. Map out feasability, explore options and present me with well-researched options if needed." |
-| **Revision** | will need one: it adds a second target and a new user-facing flow |
-| **Touches** | a new share extension or App Intent target, `App/Session`, `App/Discovery`, the project file, and a new end-to-end suite |
+| **Status** | designed, buildable; one owner call open (§8 Q1: stage 1 only, or both — recommendation given) |
+| **Requested** | 2026-09-23, by Olof: "I want to be able to share from one app straight into a session on kiro to a remote gateway. The by far most common would be for me to want to share a link article straight to the obsidian session on chonk, but the feature should be generic. Share -> latchkey -> gateway/session UI flow. Map out feasability, explore options and present me with well-researched options if needed." Answers of the same day are in §6. |
+| **Revision** | needs one: a second entry point into the app (URL scheme, App Intent, optionally a share extension), a new user-facing flow, and the first App Group if stage 2 is built |
+| **Touches** | new `App/Share/`, `App/Browser/PageScriptSources.swift`, `App/LatchkeyApp.swift`, `Latchkey/Info.plist`, Settings, `testing/harness/fake_gateway.py`, the session suite; stage 2 adds a `ShareExtension/` target, an entitlements file and a pbxproj edit |
 
 ## 1. Why
 
-The phone is where links arrive and the crew is where they should land.
-Today getting an article into a session means opening Latchkey, finding the
-session, and pasting by hand. The flow should be: share sheet → Latchkey →
-choose gateway and session → done.
+The phone is where links and documents arrive and the crew is where they
+should land. Today getting an article into a session means opening Latchkey,
+finding the session, and pasting by hand; a PDF cannot be got in at all from
+the phone. The flow should be: share sheet → Latchkey → the session it went
+to last time, preselected → Send → watch it arrive.
 
-## 2. What is being researched
+Two facts, both read from the code rather than assumed, shape everything
+below:
 
-Two strands, both running as research before any design is written, because
-the answers decide the shape of the whole feature.
+- **The gateway takes a message and a file over plain HTTP** with the
+  dashboard's cookie, and nothing else (§4.5). There is no client "send" frame
+  on its WebSocket.
+- **Only the app process has the tailnet.** The node, its SOCKS5 proxy and the
+  signed-in dashboard all live in the app process (§4.4). Any other process
+  — a share extension in particular — can capture, but cannot deliver.
 
-**The gateway side** — does KiroCrew 0.6.x let a client do this at all?
-1. Is there an endpoint that lists sessions (id, title, folder, last activity)?
-2. What exactly posts a message into an existing session: HTTP, or a WebSocket
-   frame? Body schema, headers, `Origin` enforcement.
-3. Can a client create a session, and choose its folder or crew?
-4. Attachments versus plain text, and any size limit.
-5. Which credential is required, and is any of it bound to loopback rather
-   than reachable through `tailscale serve`?
-6. Is there anything in the built dashboard bundle that a `WKUserScript` could
-   drive instead (and is that honestly less fragile than the API)?
-7. Would the gateway refuse an automated post (rate limits, per-session locks,
-   the revocation generation)?
-8. Is there a deep link that opens a specific session?
+So the design is one app-side flow with more than one way in. The entry
+points differ in cost; the delivery does not.
 
-**The iOS side** — what is possible for this app, signed by a free personal
-team?
-1. The current target type for a share-sheet action on iOS 26 / Xcode 27.
-2. How a share extension hands a payload to the containing app, and which of
-   those routes survive a cold launch: `NSExtensionContext.open`, an App Group
-   container, the pasteboard.
-3. **Free-team limits**, which may be decisive: can this project add an
-   extension target at all, and are App Groups available without paying? Also
-   the 10-App-IDs-per-7-days and 3-apps-per-device limits, and whether a second
-   target worsens the 7-day expiry ritual.
-4. Extension memory and lifetime limits — and confirmation that the extension
-   must not run the embedded node (one node, one state directory).
-5. Whether an App Intent can receive shared content without a share extension.
-6. What comparable apps do: thin capture that opens the host app, versus the
-   extension rendering the picker itself.
-7. Anything that makes this outright infeasible for a sideloaded, free-team app.
+## 2. What the owner sees
 
-## 3. What is already known
+### Working
 
-- **The extension cannot use the tailnet.** The embedded node lives in the app
-  process with a single state directory; a second process cannot join the same
-  node. So the extension captures, and the app — which has the node, the proxy
-  and the signed-in dashboard — does the delivery.
-- **The app can already act on the dashboard's behalf.** `DashboardSignOut`
-  performs a page-world `POST /api/auth/logout` inside the loaded WKWebView
-  (R32), reusing the session's own cookies with no credential extraction. The
-  same route is the obvious candidate for posting a shared link.
-- **The app can also make its own HTTPS requests through the tunnel:**
-  discovery probes gateways with an ephemeral `URLSession` built from the
-  published proxy configuration. That is the alternative to driving the page.
-- **Multiple gateways are now normal** (byskebox, box, chonk), so "which
-  gateway" is a real question in the flow, not a formality.
-- **ATS stays on and D1 holds:** HTTPS only, and nothing about this may send
-  logs or content anywhere but the owner's own gateway.
+1. In Safari (or Files, Mail, …) he shares an article or a PDF. Depending on
+   the stage built (§4.2): a "Send to Latchkey" action in the share sheet
+   (stage 1, a Shortcut he made once), or the Latchkey icon in the app row
+   (stage 2).
+2. **Stage 1:** Latchkey comes to the front at once. **Stage 2:** a small
+   sheet shows what is being shared (title and link, or file name and size),
+   a note field, and *Save for Latchkey*. It then says "Saved. Open Latchkey
+   to send it." and closes. Nothing has been sent yet, and the sheet says so.
+3. In Latchkey, the **destination picker** is up: the current gateway named
+   at the top, its sessions listed newest-activity first with their folder,
+   and **the session he sent to last time already selected**. One tap changes
+   it. A note field (prefilled if he typed one in the extension). *Send*.
+4. A short progress line — "Listing sessions", "Uploading 3 of 13",
+   "Sending" — then one of:
+   - **Sent** — and the dashboard moves to that session, so he watches it
+     arrive as if he had typed it there;
+   - **Queued** — "The session is mid-turn; the gateway queued it." Not an
+     error, and said as such.
+5. If several things were shared before he opened the app, they go one at a
+   time, "1 of 3", each with its own destination (defaulting to the last used).
 
-## 3a. What the research found
+Settings → **Share** shows what is waiting (source, kind, size, when), the
+last outcome, and *Retry* / *Delete* per item. Settings → Diagnostics → Logs
+carries one line per step (§4.4, "how he knows").
 
-### The gateway will take a message over HTTP
+### Failing
+
+Every failure keeps the item and says what happened. A silent failure is a
+bug in this spec.
+
+| Failure | What he sees | Then |
+|---|---|---|
+| Gateway unreachable (tailnet down, gateway off, phone offline) | "Couldn't reach `<gateway>`. Kept — it will be sent when the gateway is back." with *Retry* | Retried automatically on the next foreground while the item is pending, up to 5 automatic attempts, then only by *Retry* |
+| No gateway chosen yet (first run) | The gateway picker, then the share picker | — |
+| Not signed in / token expired (`403` + `X-Auth-Required` on the list or the post) | The existing sign-in sheet, with a line above the page: "1 share waiting for sign-in" | After sign-in the delivery resumes by itself; nothing is re-shared |
+| The remembered session is gone (not in the list just fetched) | The picker with nothing selected and "The session you used last time isn't there any more — pick one." | Never posts the stale key (§4.5, the silent-create trap) |
+| The gateway refuses the post (`403` without the auth header — the 8443 origin case, F1 §4a) | "`<gateway>` refused the message (403). Open the session with it prefilled instead?" | Prefill fallback (§4.9): the composer holds the text for 30 s, he taps the page's own Send |
+| A busy session | "Queued" (see above) | — |
+| File over 50 MB | Refused **at capture**: "Files over 50 MB can't be sent — that's the gateway's limit." Nothing is staged | — |
+| The gateway refuses the file (`413`, or `400` unsupported type / content mismatch) | The gateway's own `error` text, verbatim, e.g. "Unsupported file type: .bin" | *Delete* or keep |
+| Upload interrupted mid-way | "Upload failed after `<n>` of `<m>` chunks." with *Retry* | Retry uploads again from the start (uploads are not resumable) |
+| Post accepted but the page cannot show the session (navigation fails) | "Sent" stands (server-confirmed); the page is reloaded on `/chat?sid=<key>` | — |
+| Inbox full (20 items or 200 MB) when sharing | Extension / intent: "Latchkey has `<n>` shares waiting. Open it to send them before sharing more." | — |
+| The app is never opened again | Nothing is sent. Items older than 7 days are removed by whichever process next looks at the inbox (§4.3). Deleting the app deletes the inbox with it | — |
+| Two sheets would overlap (Settings or the sign-in sheet is up) | The share picker waits until the other sheet is gone (the M4/M5 rule) | — |
+
+## 3. Non-goals
+
+- **No new sessions from the share flow.** Sharing adds to a session that
+  exists. `POST /api/chat/slots` is there when wanted (§6 answer 3).
+- **No archived sessions.** Only live slots (`GET /api/chat/slots`); the
+  archive (`GET /api/sessions`) needs a resume first and is a different flow.
+- **The app never fetches the shared URL.** Title and URL come from the
+  sharing app; nothing about the link is looked up. R3's single-origin rule
+  stands: the web view shows the gateway and nothing else.
+- **No video.** The gateway streams video to 512 MB; this flow caps
+  everything at 50 MB and does not special-case video containers.
+- **The extension never picks a destination.** It captures; the picker is in
+  the app, where the live list is (§4.7).
+- **No background delivery** (BGTask). Why, in §4.4.
+- **No notification** unless Olof says so (§8 Q2; R34/D6).
+- **No delivery from any process but the app** (§4.4).
+
+## 4. Design
+
+### 4.1 The shape: capture → inbox → deliver
+
+```
+[share sheet / Shortcut / URL]        [Latchkey, foreground, page signed in]
+   capture the payload  ─────►  inbox on disk  ─────►  ShareDelivery
+   (extension, intent,           (§4.3)                 list → verify → upload → post → navigate
+    or URL handler)                                     (§4.5, page world of the WKWebView)
+```
+
+Every entry point ends by writing one `ShareItem` into the inbox. Every
+delivery starts by reading one. The app drains the inbox when it becomes
+active and whenever an item is added while it is active. Nothing is ever
+sent from the capture side.
+
+### 4.2 Entry points, by stage
+
+**Stage 1 — no new target.**
+
+- **URL scheme** `latchkey://share?url=<https URL>&title=<text>&text=<text>`,
+  declared as `CFBundleURLTypes` in `Latchkey/Info.plist` (the file exists and
+  is empty; `GENERATE_INFOPLIST_FILE = YES` merges it — an array of
+  dictionaries does not fit the `INFOPLIST_KEY_` form, so this corrects the
+  earlier note). Handled in `LatchkeyApp.swift` with `.onOpenURL` →
+  `ShareURL.parse` (pure) → `ShareInbox.add`. Links and text only.
+  Hardening, since any app or web page can open it: only `http`/`https`
+  URLs; `url` ≤ 8 KB, `title` ≤ 1 KB, `text` ≤ 64 KB; **any parameter naming
+  a gateway or session is ignored** — the destination is chosen in the app,
+  and there is no auto-send from a URL, ever.
+- **App Intent** `SendToSessionIntent` (`App/Share/ShareIntents.swift`):
+  `static let supportedModes: IntentModes = .foreground(.immediate)`, so it
+  runs *in the app process* with the app in front. Parameters: `url: URL?`,
+  `title: String?`, `text: String?`, `file: IntentFile?`, `note: String?`.
+  `perform()` writes the item and returns `.result()`; the picker then
+  appears through the same path as any other item. **This is what carries
+  documents in stage 1:** an `IntentFile` from Shortcuts arrives in the app's
+  own process — `fileURL` when Shortcuts staged it on disk (copied with
+  `FileManager.copyItem`, no bytes through memory), else `data` (≤ 50 MB,
+  fine in the app's budget, written straight to the inbox). No App Group, no
+  extension memory limit, and a *supported* foreground hand-off.
+- **Owner-made Shortcut** "Send to Latchkey": *Show in Share Sheet*, input
+  types URLs, Safari web pages, text, files, PDFs, images; one action, this
+  intent, with the Shortcut input in `url`/`file`/`text` and — for Safari —
+  *Get Details of Safari Web Page → Name* in `title`. It appears in the
+  share sheet's actions list, not the app row. Owner action (§8).
+
+**Stage 2 — the share sheet's app row.**
+
+- `ShareExtension/` target (`net.lixom.latchkey.share`,
+  `NSExtensionPointIdentifier = com.apple.share-services`), sources *outside*
+  `App/` (that folder is a synchronized group compiled into the app target).
+  Activation rule: `NSExtensionActivationSupportsWebURLWithMaxCount = 1`,
+  `NSExtensionActivationSupportsText = YES`,
+  `NSExtensionActivationSupportsFileWithMaxCount = 1`. It links **no**
+  TailscaleKit and no `TSNet/` code.
+- `ShareViewController: UIViewController` hosting a SwiftUI
+  `ShareCaptureView` (what is shared, a note, *Save for Latchkey*, the count
+  of items already waiting). `SLComposeServiceViewController` is not used:
+  it drags in the Social framework for a look this app does not need.
+- On *Save*: `ShareInboxPolicy.admit` (size, count, byte total, extension
+  advisory) → write the item (§4.3) → show "Saved. Open Latchkey to send
+  it." for a second → `extensionContext.completeRequest`. On refusal, the
+  reason, and *Cancel*.
+- **No unsupported open.** The earlier draft tried the responder-chain
+  `openURL:` "as a courtesy". Dropped: `NSExtensionContext.open` is documented
+  for Today and iMessage extensions only, the trick is unsupported, and a
+  hand-off that works some of the time teaches the owner to expect it and
+  then to lose shares when it does not. The extension's own text is the
+  bounce until §8 Q2 is answered.
+- Shared source: `App/Share/Inbox/{ShareItem,ShareInboxPolicy,ShareInboxStore}.swift`
+  are compiled into both targets (per-file membership exception on the
+  synchronized group — one pbxproj edit, the same mechanism `TSNet/` uses).
+
+Both stages write the same item and land in the same picker.
+
+### 4.3 The inbox
+
+**Where.** `ShareInboxStore.locations`, drained in this order:
+
+1. the App Group container `group.net.lixom.latchkey` →
+   `Library/Application Support/ShareInbox/`, when
+   `FileManager.default.containerURL(forSecurityApplicationGroupIdentifier:)`
+   returns one (stage 2 built, entitlement present);
+2. the app's own `WorkspaceStore.appSupportDir/ShareInbox/` (stage 1; the
+   fallback if the entitlement is absent).
+
+Stage 1 uses only the second. Stage 2 adds the first without a migration:
+the app reads both, and the intent and URL handler keep writing to whichever
+`ShareInboxStore.writeLocation` resolves to (the group container when it
+exists, so one process never has to look in two places for its own writes).
+
+**Identifier.** `group.net.lixom.latchkey` (matches the app's
+`PRODUCT_BUNDLE_IDENTIFIER = net.lixom.latchkey`,
+`Latchkey.xcodeproj/project.pbxproj:295`).
+
+**Unverified, and stage 2 rests on it:** whether an App Group can be
+registered at all under Olof's **free Personal Team**. Apple's free
+provisioning excludes several capabilities, and App Groups is commonly listed
+among them — if that holds here, **stage 2 is blocked until a paid membership
+exists**, and no amount of design works around it. Do not treat the earlier
+"available on the free personal team" claim as established; it was asserted
+without a signing attempt to back it.
+
+This is cheap to settle and costs nothing until stage 2 is wanted: add the
+entitlement to the app target in Xcode and press Run once. Xcode registers an
+App Group when it signs automatically; `xcodebuild` here cannot (no usable
+Apple ID for that step, DECISIONS 2026-09-23). Either it signs — the group
+exists and stage 2 is open — or it refuses with a capability error, which is
+the answer.
+
+Stage 1 is unaffected either way: it writes to the **app's own container**, so
+it needs no group and no entitlement. That asymmetry is another argument for
+the staging recommendation in §8 Q1.
+
+**Layout.** One directory per item:
+
+```
+ShareInbox/
+  <uuid>/item.json      written LAST; an item without it does not exist
+  <uuid>/payload        the document's bytes, only for kind = document
+  .staging/<uuid>/      where a writer assembles an item before renaming it in
+```
+
+`item.json` (`ShareItem`, `Codable`, `version: 1`):
+`id`, `kind` (`link` | `text` | `document`), `url?`, `title?`, `text?`,
+`note?`, `filename?` (sanitised to `[\w.\-]`, as the gateway does),
+`utType?`, `byteCount`, `createdAt`, `source` (`urlScheme` | `intent` |
+`extension`), `state` (`pending` | `sending` | `failed`), `attempts` (count),
+`lastError?`, `lastAttemptAt?`.
+
+**Who writes.** The extension (stage 2), the intent and the URL handler (in
+the app). A writer assembles under `.staging/<uuid>/`, writes `payload`
+first, `item.json` last, then `FileManager.moveItem` renames the directory
+into place — one atomic rename on the same volume, so a reader never sees a
+half-written item. `.staging` entries older than 10 minutes are a crashed
+writer's and are removed by the next sweep.
+
+**Who reads.** The app only (`ShareInboxStore.pending()`), on `scenePhase ==
+.active` and after each `add`.
+
+**Who deletes.**
+- The app: an item the gateway confirmed (`sent`, `queued`) is deleted at
+  once, payload and all; a `failed` item on *Delete* in Settings → Share, or
+  by the sweep.
+- **The sweep** (`ShareInboxPolicy.sweep`, pure, shared source): items whose
+  `createdAt` is older than **7 days**, and stale `.staging` directories. Run
+  by the app at every launch, and by the extension before every write — so
+  an inbox nobody opens the app for cannot fill forever. The extension
+  deletes nothing else: never a fresh pending item, never one in `sending`.
+- Deleting the app deletes both containers.
+
+**Size and lifetime policy** (`ShareInboxPolicy`, pure):
+- one document ≤ **50 MB** (the gateway's `_MAX_UPLOAD_BYTES`,
+  `handlers/files.py:959`) — refused at capture, before any copy;
+- at most **20 items** and **200 MB** in the inbox — refused at capture with
+  the count shown;
+- lifetime **7 days**;
+- extension allowlist mirrored from `files.py` (`_ALLOWED_IMAGE_EXT |
+  _ALLOWED_TEXT_EXT | _ALLOWED_DOC_EXT`) as an **advisory** at capture
+  ("the gateway may refuse `.bin`") — the gateway's own answer is
+  authoritative, so a drift between versions costs a clearer message, never
+  a wrongly refused share.
+
+**What happens with a 50 MB file in the extension.** The extension process
+has an observed hard limit of about 120 MB. It never loads the bytes:
+`NSItemProvider.loadFileRepresentation(for:openInPlace:completionHandler:)`
+hands it a temporary file URL, valid inside the handler, and the handler
+does `FileManager.copyItem` into `.staging/` — a kernel copy (an APFS clone
+when on the same volume), no `Data` in the process. `loadDataRepresentation`
+and `loadItem` are not used for files, and a code comment says why. Item
+providers that offer only in-memory data (rare for files) are refused above
+8 MB with "Share this from Files instead." The 50 MB check reads the file's
+size from the URL before copying.
+
+**Backup.** `BackupExclusion.exclude` is applied to the inbox directory by
+whichever process creates it: shared content is transient, and a restored
+phone should start clean (R5's reasoning).
+
+**Never launched.** Covered above: nothing is sent, the count is shown at
+the next share, 7-day items go at the next sweep, the cap refuses new ones,
+and the app's deletion removes the rest.
+
+### 4.4 The network path — read from the code, not assumed
+
+What `app/TSNet/TSNetManager.swift` and `app/App/Workspace/` actually do:
+
+- `WorkspaceManager` creates one `Workspace` per definition; each constructs
+  `TSNetManager(config:)`, which constructs **one `TailscaleNode` in the app
+  process**, its state directory `WorkspaceStore.stateDir(id)` under the app
+  container's Application Support — not the group container. The node's
+  private key lives there (R5 excludes it from backup).
+- The node's SOCKS5 proxy and LocalAPI are one loopback listener with a
+  **per-launch credential** (`LoopbackConfig.proxyCredential`), fronted by the
+  app-owned `SocksLogProxy` relay on another loopback port. WebKit is handed a
+  `ProxyConfiguration` from `ProxyConfigurationFactory` (`allowFailover =
+  false`, `matchDomains` from `StableProxyPolicy`).
+- `willEnterBackground` leaves "tsnet, proxy, and observers unchanged"; iOS
+  then suspends the process, and recovery is *reactive* on the next
+  foreground (`willEnterForeground`: "no lifecycle recovery; awaiting actual
+  socket errors"; the relay listener is probed). M6 recorded that real
+  suspension, jetsam and listener reclamation are device-only behaviours.
+- A cold node start to `Running` is seconds on a good day and was ~66 s in
+  the M6.8 flake. `startTailscaleIfNeeded` is guarded by `startInFlight`.
+- The dashboard session is the page's: `SessionManager` asks the gateway
+  *as the page* (`PageScriptSources.sessionFetch` via `callAsyncJavaScript`
+  in the `latchkey-session` content world), so cookies, `Origin` and the
+  page's refresh cycle are the page's. R32 chose this over URLSession
+  precisely to extract no credential.
+
+The options, weighed against that:
+
+| Option | Verdict | Why |
+|---|---|---|
+| **The extension brings up its own node** | **No** | A node is a key and a state directory. The app's directory is in the app container, unreadable to the extension — and even if shared, two tsnet servers on one state directory is the failure `tailscaleUp`'s comment already warns about. A *fresh* node in the group container is a new identity: its own interactive login (in a share sheet), its own tailnet-lock signature (a manual step per new node, DECISIONS 2026-09-23), its own move out of purgatory (O3b), and — with `pin_scope: node` — its own dashboard sign-in at every gateway. Plus the Go runtime, WireGuard and netstack inside a ~120 MB process, and a share sheet that may sit for a minute waiting for `Running`. |
+| **The extension dials the app's loopback proxy** (127.0.0.1 is host-wide) | **No** | The app is backgrounded the moment the share sheet is up in another app, and suspended seconds later; a suspended process accepts nothing, and iOS may reclaim its listeners. The extension would also need the port and the per-launch credential handed over through the group container, and would still have no dashboard cookie: that lives in the app's `WKWebsiteDataStore`. A race against suspension with a credential hand-off is not a design. |
+| **The app delivers in the background** (`BGAppRefreshTask` / `BGProcessingTask`) | **No** | iOS schedules these when it likes — minutes to hours, not at all on a low battery — so "delivered" would still be unknown to the owner until he looks. Inside the ~30 s refresh budget the node must come up (cold: seconds to a minute) and the page must load and be signed in, or the app must go around the page with a copied cookie (the URLSession route below). The one thing it would buy — delivery while the owner does not have the app open — it cannot promise. |
+| **The app's own `URLSession` through the proxy, with the session cookie copied out of WebKit** | **Kept in reserve, not chosen** (§4.9) | It works — discovery already builds an ephemeral session from `proxyConfiguration` — and it streams a file from disk. But it copies `mc_token_<port>` out of the page's store and forges `Origin`, the exact line R32 drew, and it makes a second auth path that must track the page's refresh cycle. Only if the page-world upload proves too heavy on the device, and only with Olof's say. |
+| **The extension stages the payload; the app delivers in the foreground, in the page world** | **Chosen** | The only route on which everything that must be true is true by construction: the node is up (the app is in front), the page is loaded and signed in (`SessionManager.state == .active`), the cookies and `Origin` are the page's own, the split tunnel and ATS apply unchanged, and the owner is *looking* when the outcome is known. |
+
+**The honest cost:** nothing is delivered until Latchkey is opened. Stage 1
+opens it for him (a foreground intent); stage 2 tells him to ("Saved. Open
+Latchkey to send it."). Neither pretends otherwise.
+
+**How the owner knows whether a share was delivered:**
+
+1. **In the flow:** the result line — *Sent* / *Queued* / the failure with
+   its reason — is shown only after the gateway's JSON answered
+   (`{"ok":true,…}`), never on the app's own say-so; and the page is moved to
+   the session, so the message is visible in the transcript.
+2. **Later:** Settings → Share lists what is still waiting and the last
+   outcome per item; an empty list means everything shared has been
+   confirmed by a gateway.
+3. **Evidence:** Settings → Diagnostics → Logs, one line per step, none
+   carrying content (D1): `Share: received <id> (<kind>, <bytes> B) via
+   <source>`, `Share: listed <n> session(s) on <gateway host>`, `Share:
+   uploaded <id> (<bytes> B) as <ext>`, `Share: sent <id> to <slot key>` /
+   `… (queued)`, `Share: failed <id>: <reason>`, `Share: swept <n> item(s)`.
+4. **From the sharing app's side, nothing** beyond "saved". That is the
+   truth of the process boundary and the spec does not paper over it.
+
+**Ordering.** `ShareDelivery` runs only when *all* hold: the app is active,
+the workspace has a gateway, the current tab's `BrowserViewModel.sessionOrigin`
+is that gateway, and `SessionManager.state == .active`. Otherwise it waits and
+says what it is waiting for ("waiting for sign-in", "waiting for the
+gateway"). After 20 s of the page not becoming active on a foreground it
+shows the unreachable failure with *Retry*; a `needsToken` state shows the
+sign-in sheet instead and waits indefinitely. It never starts on
+`scenePhase == .active` alone — the L2 test in §6 exists to catch exactly
+that regression.
+
+### 4.5 Delivery, and the gateway API as verified
 
 All references are into the installed 0.6.0 at
-`~/.kiro/crew-venv/lib/python3.12/site-packages/kiro_crew/`.
+`~/.kiro/crew-venv/lib/python3.12/site-packages/kiro_crew/`, read, not run.
 
-- **List sessions:** `GET /api/chat/slots` (`dashboard/routes/chat.py:50` →
-  `chat_handlers.py:1066`) returns an array of slots with `key`, `title`,
-  `folder_id`, `agent`, `running`, `queue_depth`, `last_activity_ts`,
-  `last_message`. No paging. Folders: `GET /api/chat/folders`. Archived
-  sessions live behind `GET /api/sessions` and must be resumed before they can
-  take a message.
-- **Send:** `POST /api/chat?ws=1` with `{"message": "<text>", "slot": "<key>"}`
-  (`chat_handlers.py:212`). `?ws=1` returns `{"ok":true,"slot":…,"mid":…}`
-  at once and the turn streams over the page's own WebSocket; without it the
-  response is an SSE stream held open for the whole turn. A busy slot **queues**
-  (`{"ok":true,"queued":true}`) rather than refusing. No length cap found. There
-  is no client "send" frame on the WebSocket at all — HTTP is the only route.
-- **Create:** `POST /api/chat/slots` with optional `name`, `agent`,
-  `folder_id`, `title`, `memory_mode`.
-- **A trap:** an unknown `slot` is **silently created**
-  (`chat_handlers.py:313`, `get_or_create_slot`). A typo makes a new session
-  rather than an error, so the app must post only keys it has just listed.
-- **Auth is the dashboard cookie** (`mc_token_<port>`); there is no bearer
-  token. Non-GET requests are CSRF-checked against the origin allowlist.
-- **Deep link:** `https://<gateway>/chat?sid=<slotKey>` selects a session, and
-  `&prefill=<text>` drops text into that slot's composer for 30 s without
-  sending. Whether a URL alone can auto-send is not confirmed.
-- **Driving the page's UI instead is the worst option.** The bundle exposes only
-  `window.__mc_chat_launch` (which forces a *new* session) and an
-  `mc-widget-send` event that merely fills the composer; the composer has no
-  stable test id, and it is React.
+| Step | Call (page world, `credentials: 'same-origin'`, header `X-Latchkey-Share: <item id>`) | Verified |
+|---|---|---|
+| List | `GET /api/chat/slots` → JSON array; per slot `key`, `title`, `folder_id`, `agent`, `mode`, `surface`, `running`, `queue_depth`, `last_activity_ts`, `last_message`, `memory_mode`, `pinned`, `subagents_running` | `routes/chat.py:50` → `chat_handlers.py:1066` → `state.serialize_slots` → `slot_projection.py` |
+| Folders | `GET /api/chat/folders` → array with `id`, `name` (+ counts) | `routes/sessions.py:38` → `chat_folders.py:298` |
+| Upload | `POST /api/upload/file`, multipart, part name `file`, filename kept → `{"paths": ["<server path>"]}`; refusals `413 {"error":"File too large (max 50MB)"}`, `400 {"error":"Unsupported file type: .x","code":"unsupported_file_type"}`, `400 {"error":"File content does not match its type: .x"}`, `400` too many files | `routes/taskrunner.py:55` → `handlers/files.py:1222`; limits `:959-966`; allowlists `:984-1040` |
+| Send | `POST /api/chat?ws=1` `{"message": <text>, "slot": <key>}` → `{"ok":true,"slot":<key>,"mid"?:…}` at once; a busy slot → `{"ok":true,"queued":true,"queue_id"?:…}`; `409` for a member-reserved key or a memory-mode mismatch | `chat_handlers.py:212` (`api_chat`), receipt `:1009-1017`, queued `:583,641,716` |
+| **The trap** | an unknown `slot` is **silently created** — `state.get_or_create_slot(slot_name, …)` at `chat_handlers.py:314` | a typo or a stale key makes a new session, not an error |
+| Auth | the dashboard cookie `mc_token_<port>`; every non-GET is CSRF-checked against the origin allowlist (F1 §4a: port-blind in 0.6.0) | `server.py:653-707`, `urls.py:419-452` |
+| Deep link | `/chat?sid=<key>` selects a session; `&prefill=<text>` is stored per slot with a timestamp and dropped after **30 s** (`Date.now()-ts>3e4`); `&autoSend=1` acts only when *no* session is active and then creates a **new** one — useless for an existing session | `App-*.js` (the effect that stores `{slotKey,prompt,ts}` and the reader that checks `3e4`) |
 
-**Consequence:** the app should call the API **in the page world of its own
-WebView**, exactly as `DashboardSignOut` already posts `/api/auth/logout`
-(R32) via `PageScriptSources`/`callAsyncJavaScript`. That carries the session's
-cookies and a correct `Origin` with no credential extraction, and works today on
-443.
+**What the dashboard's own composer sends after an upload** — the seam the
+earlier draft left open, now read:
 
-**This feature depends on F1 §4a.** On a gateway served on 8443 the origin
-allowlist does not match the ported origin, so every POST — including this one —
-returns 403. Sharing to an 8443 gateway cannot work until that is resolved.
+- the composer's send is `sendChat(message, slot, colorTheme, signal, meta,
+  steer)` posting `{message, slot, …meta?}` to `/api/chat?ws=1`
+  (`client-*.js`); `uploadFiles` posts a `FormData` of `file` parts and keeps
+  the returned `paths`;
+- an uploaded path reaches the agent as a **`[attached_file N] <path>` token
+  in the message text** (`files.py:1322`, `chat_title.py:425`; the renderer's
+  grammar is `/\[attached_file (\d+)\]([^\S\n]+)/` followed by the path,
+  `fileTokens-*.js`);
+- server-side, `acp/prompt_blocks.py:build_prompt_blocks` scans the message
+  text for readable **image** paths and inlines them as image blocks; any
+  other path (a PDF) stays in the text for a tool-capable agent to open —
+  which is what "the artifact itself, as in the chat window" means in
+  practice.
 
-### iOS will not let the extension do the sending
+So the app posts the same thing: `message` = the token line(s) plus the
+note; no `meta` (optional; `sendId` is a client-side reconciliation aid the
+app does not need). **One detail to pin during build, not guess:** whether
+the composer puts the token line before or after the typed text, and its
+separator (one grep of the send path in `App-*.js` for the pending-files
+join). The fake gateway asserts on the token grammar and the path, not the
+order, so either answer passes; the choice is recorded in §9.
 
-- A **share extension** is still the only way into the share sheet's app row
-  (`NSExtensionPointIdentifier = com.apple.share-services`); App Intents have no
-  share-sheet surface on iOS 26. A user-made Shortcut with "Show in Share Sheet"
-  is the extension-free alternative and appears in the actions list, not the app
-  row.
-- **The extension must never dial the tailnet.** Not mainly for memory (the
-  observed hard limit is ~120 MB) but because a node is one key and one state
-  directory: a second node would need its own tailnet-lock signature, its own
-  grant, and — since `pin_scope: node` — its own sign-in at every gateway. The
-  extension captures; the app sends.
-- **There is no supported way for a share extension to launch its containing
-  app.** `NSExtensionContext.open` is documented for Today and iMessage
-  extensions only, and Apple has said so directly on the forums. The
-  responder-chain trick works today and is unsupported. The sanctioned bounce is
-  a local notification, or the owner opening the app.
-- **App Groups are available on the free personal team** on iOS (Apple's
-  capability table), so the extension can hand the payload over properly.
-  Keychain sharing is available too, as a fallback. TestFlight, Associated
-  Domains and Network Extensions are not — none is needed.
-- Cost of a second target: a second bundle id and a second 7-day profile minted
-  in the same build, so no extra reinstall cadence. The **first** install after
-  adding the extension has to go through Xcode's Run, because xcodebuild here
-  has no usable Apple ID (DECISIONS 2026-09-23).
+**`ShareDelivery.run(item)`** (`App/Share/ShareDelivery.swift`, `@MainActor`):
 
-## 4. Design: two stages, one app-side flow
+1. `list`: `GET /api/chat/slots` and `GET /api/chat/folders` (10 s). Filter
+   to `surface == ""` and `mode != "member"` (what the sidebar shows); sort by
+   `last_activity_ts` desc; attach folder names. 403 + `X-Auth-Required` →
+   `.signedOut` (the sheet); other failure → `.unreachable`.
+2. `pick`: the picker (§4.7) with the last destination preselected when its
+   key is in *this* list; the owner taps Send with a key **from this list**.
+3. `verify`: re-`GET /api/chat/slots` immediately before posting; if the key
+   is absent → `.sessionGone`, back to the picker, nothing posted. The race
+   left is one round trip wide; it is recorded here rather than hidden.
+4. `upload` (documents): §4.6's chunked page-world upload → `paths[0]`;
+   refusals → the gateway's `error` text.
+5. `post`: `POST /api/chat?ws=1` with the message (§4.6) and the verified
+   key (10 s) → `.sent(key)` / `.queued(key)` / `.refused(status, text)` /
+   `.unreachable`.
+6. `navigate`: in the page world, `history.pushState({}, '', '/chat?sid=<key>')`
+   + `dispatchEvent(new PopStateEvent('popstate'))` (React Router follows
+   popstate; no reload). If `location.search` does not carry the key within
+   1 s, `BrowserViewModel.load(url:)` on the same-origin URL — allowed by
+   `NavigationPolicy`.
+7. `finish`: delete the item on `.sent`/`.queued`; otherwise `state =
+   failed`, `lastError`, `attempts += 1`; `ShareDefaults.lastDestination[origin]
+   = (key, title)` on success. Log one line.
 
-The app-side half is the same in both stages and is where the work is.
+`ShareOutcome` (`App/Share/ShareOutcome.swift`, pure, `nonisolated`, host-
+tested like `DashboardSignOut`) maps `(status, body)` to the outcome and to
+the sentence the owner reads.
 
-**Stage 1 — the flow, reachable without a new target.**
-- A URL scheme `latchkey://share?url=…&text=…` (`CFBundleURLTypes`, now an
-  `INFOPLIST_KEY_` since Xcode rewrote the plist) handled in
-  `LatchkeyApp.swift` via `.onOpenURL`, plus an `AppIntent` (`SendLinkIntent`,
-  `supportedModes = [.foreground(.immediate)]`) so a Shortcut can drive it.
-- `App/Share/ShareInbox.swift`: the pending item (`url`, `title`, optional
-  note, timestamp), persisted so a cold launch does not lose it.
-- `App/Share/ShareDestinationView.swift`: pick a **gateway** (the existing
-  discovery/saved list) and then a **session**, listed with
-  `GET /api/chat/slots` through the page world, newest activity first, with the
-  folder shown. A gateway that is not signed in says so and offers Sign in
-  rather than an empty list.
-- Send: `POST /api/chat?ws=1` in the page world with the message text, only
-  ever with a `slot` taken from the list just fetched. Then navigate the web
-  view to `/chat?sid=<key>` so the owner watches it arrive.
-- Result: sent, queued (`queued:true` — say so, it is not an error), or failed
-  with the reason and a Retry. Never a silent success.
+### 4.6 What is sent
 
-**Stage 2 — the share sheet proper.**
-- A `ShareExtension` target (`net.lixom.latchkey.share`), `NSExtensionActivationSupportsWebURLWithMaxCount = 1` plus text, an `SLComposeServiceViewController` with a link preview and an optional note.
-- It writes the item to an App Group container
-  (`group.net.lixom.latchkey`), then tries the unsupported open as a courtesy,
-  and always schedules a local notification ("Link ready — pick a session") so
-  there is a sanctioned way back. The app drains the inbox on `.active` and on
-  `onOpenURL`.
-- A later refinement (not stage 2): let the extension preselect a destination
-  from a list the app cached, once it is known whether a cached list is
-  meaningful.
+`ShareMessage` (pure):
 
-**Fallback kept in reserve:** `/chat?sid=<key>&prefill=<url>` needs no API call
-and gives a "review before send" mode. Worth wiring as the behaviour when the
-POST is refused (for example on an 8443 gateway before F1 §4a is fixed).
+- **link:** `title` line if present, then the URL, then a blank line and the
+  note if typed. Olof: "the title and the URL, plus a note if typed."
+- **text:** the text, blank line, note.
+- **document:** `[attached_file 1] <server path>` line, then the note (order
+  and separator pinned per §4.5). The gateway's `[attached_file N]` grammar
+  needs the path exactly as returned; the app never edits it.
 
-## 5. End-to-end tests
+**The chunked page-world upload.** The file bytes must reach the page's
+`fetch` without extracting a credential. `callAsyncJavaScript` takes strings,
+not `Data`, so:
 
-The fake gateway (`testing/harness/fake_gateway.py`) grows the two endpoints
-with the real shapes: `GET /api/chat/slots` returning a fixed set of slots, and
-`POST /api/chat` recording what it received. Server-side evidence, as in every
-other suite here.
+- `PageScriptSources.shareStageChunk` — arguments `id`, `chunk` (base64 of
+  ≤ 4 MiB raw); in the app's content world: `atob` → `Uint8Array` →
+  `parts.push(new Blob([bytes]))` on `window.__latchkeyShare[id]` (the app
+  world's `window`, invisible to the page). 50 MB is 13 calls of ~5.6 MB
+  strings, well inside IPC limits.
+- `PageScriptSources.shareUpload` — `new Blob(parts)` → `FormData.append('file',
+  blob, filename)` → `fetch('/api/upload/file', {method:'POST', body, credentials:
+  'same-origin', headers:{'X-Latchkey-Share': id}, signal})` → returns
+  `{status, body}`; clears the staged parts in `finally`.
+- `PageScriptSources.shareFetch` — the JSON-returning sibling of
+  `sessionFetch` (which returns only a status): `{status, body}` for the
+  list, the folders and the post.
 
-| Test | Suite | Asserts | Shown to fail by |
+Memory, honestly: the staged blob holds the whole file in WebKit's processes
+until the upload completes; the dashboard's own composer stages the same
+50 MB, file-backed, which is cheaper. Progress is per chunk ("Uploading 3 of
+13"). If the device shows the content process dying on a 50 MB share
+(`AppDiagnostics.webContentTerminations` rises during a share), the ladder
+is: 4 MiB → 1 MiB chunks first; then a `WKURLSchemeHandler` serving the
+payload to a page-world `fetch` (CORS on a custom scheme — to be measured,
+not assumed); and only then §4.9's URLSession route, with Olof's say.
+
+### 4.7 The destination picker and the remembered default
+
+`ShareDestinationView` (`App/Share/`), a sheet over `DashboardContent`,
+obeying the one-sheet rule (it waits for Settings or the sign-in sheet):
+
+- header: the item (title/URL, or filename and size), the gateway host, and
+  "Change gateway…" which runs the existing `GatewayPickerView` →
+  `workspace.selectGateway` and then waits for the new page to sign in;
+- the list from §4.5 step 1: title (or key when untitled), folder, a
+  running/queued badge; accessibility ids `share-picker`, `share-session-<key>`,
+  `share-destination-selected` (label = key), `share-note`, `share-send`,
+  `share-result` (label = `sent:<key>` | `queued:<key>` | `failed:<reason>`),
+  `share-cancel`;
+- preselection: `ShareDefaults.lastDestination[origin]` when its key is in
+  the list; if the last share went to a *different* gateway, a line "Last
+  time: `<session>` on `<other gateway>` — switch?" that runs the gateway
+  switch;
+- one item at a time, "1 of `<n>`", oldest first.
+
+`ShareDefaults` (`App/Share/ShareDefaults.swift`): `lastDestination: [origin:
+(slotKey, slotTitle, at)]`, JSON at `appSupportDir/share-defaults.json`. Not
+in `WorkspaceDefinition`: it is a share preference, not a workspace
+property, and keeping it apart means a `-UITestResetWorkspaces` launch does
+not have to know about it (the test hook `-UITestResetShare` clears it and
+the inbox).
+
+### 4.8 Files, types and functions
+
+| File | What |
+|---|---|
+| `App/Share/Inbox/ShareItem.swift` | the `Codable` item, `version`, kinds, states — shared source |
+| `App/Share/Inbox/ShareInboxPolicy.swift` | pure: `admit(byteCount:, extension:, inboxCount:, inboxBytes:) -> Admission`, `sweep(items:, now:) -> [id]`, the constants (50 MB, 20, 200 MB, 7 d, 10 min) — shared source, host-tested |
+| `App/Share/Inbox/ShareInboxStore.swift` | `locations`, `writeLocation`, `add(_:payloadURL:)` (stage → rename), `pending()`, `delete(id)`, `markFailed`, `sweep()`; file IO in `nonisolated` helpers off the main actor — shared source |
+| `App/Share/ShareURL.swift` | pure: `parse(URL) -> ShareItem?` with the caps and refusals — host-tested |
+| `App/Share/ShareMessage.swift` | pure: the three message shapes — host-tested |
+| `App/Share/ShareOutcome.swift` | pure: `(status, body) -> Outcome`, `sentence(for:)` — host-tested |
+| `App/Share/ShareDelivery.swift` | `@MainActor` the sequence of §4.5, driven by `SessionManager.state` and the tab's origin; `retry(id)` |
+| `App/Share/ShareDefaults.swift` | the last destination per origin |
+| `App/Share/ShareDestinationView.swift` | the picker sheet (§4.7) |
+| `App/Share/ShareIntents.swift` | `SendToSessionIntent` |
+| `App/Share/ShareSettingsSection.swift` | Settings → Share: the waiting list, outcomes, Retry/Delete; ids `share-settings`, `share-waiting-count` |
+| `App/Browser/PageScriptSources.swift` | `shareFetch`, `shareStageChunk`, `shareUpload`, `shareNavigate` (source text; `scripts/test-page-scripts.sh` runs them under Node against a fake `fetch`) |
+| `App/Browser/BrowserViewModel.swift` | `SessionHost` gains `shareCall(script:arguments:timeout:) async -> [String: Any]?` beside `sessionFetchStatus` |
+| `App/LatchkeyApp.swift` | `.onOpenURL { ShareURL.parse($0).map(inbox.add) }` |
+| `Latchkey/Info.plist` | `CFBundleURLTypes` with scheme `latchkey` |
+| `App/Diagnostics/AppDiagnostics.swift` | counters `sharesReceived`, `sharesSent`, `sharesQueued`, `sharesFailed`, `sharesSwept` |
+| `App/TestHooks` (test builds) | `-UITestResetShare`; `-UITestSeedShare <kind>:<bytes>[:age=<days>d]` writes a synthetic item (a `%PDF-` header for `pdf`, random bytes for `bin`) into the inbox at launch; overlay ids `share-inbox-count`, `share-terminations` |
+| `ShareExtension/` (stage 2) | `ShareViewController.swift`, `ShareCaptureView.swift`, `Info.plist` (activation rule), `ShareExtension.entitlements` |
+| `Latchkey.entitlements` (stage 2) | `com.apple.security.application-groups = [group.net.lixom.latchkey]`; `CODE_SIGN_ENTITLEMENTS` in the pbxproj for both targets |
+| `testing/harness/fake_gateway.py` | the four routes with the real shapes, counters and controls (§6) |
+
+**Invariants this must not break** (`../../app/AGENTS.md`):
+- the split tunnel decides what goes through the proxy; only tailnet hosts
+  do — the share's requests are the page's, on the page's proxied session;
+  nothing new is routed;
+- `allowFailover` stays false — the factory is untouched;
+- ATS stays on with no exceptions; the share never loads anything but the
+  gateway's own origin, and never fetches the shared URL;
+- D1: no app or node logs leave the device, and no log line carries a URL,
+  title, note, filename or content (item ids, kinds, byte counts and
+  extensions only; `LogRedaction.scrub` remains the backstop);
+- R3: the main frame stays on the gateway; `/chat?sid=` is same-origin;
+- R32's line: no credential is copied out of WebKit (§4.4, §4.9);
+- a vendored-tree change is its own commit (R16) — none is needed here;
+- the extension never links TailscaleKit or touches the node's state
+  directory.
+
+### 4.9 Kept in reserve
+
+- **Prefill** (`/chat?sid=<key>&prefill=<text>`): no API call, "review
+  before send", 30 s. Wired as the offer when a post is refused (the 8443
+  origin case before F1 §4a is fixed). Links and text only.
+- **URLSession through the proxy with the copied cookie**: the last rung of
+  §4.6's ladder, and a design line not crossed without Olof.
+- **A cached session list in the extension**, so stage 2 could preselect
+  before the app opens: not until it is known whether a cached list is ever
+  right; the app re-lists before posting regardless.
+
+## 5. State and migration
+
+| What | Where | Previous version | Downgrade |
 |---|---|---|---|
-| A shared link reaches the chosen session | session (M4) | `XCUIDevice.shared.system.open("latchkey://share?url=…")` → picker → pick gateway and session → the fake gateway's journal holds `POST /api/chat` with that URL and that `slot` | posting without a slot (the fake must reject an unknown key) |
-| The session list is the gateway's, newest first | session (M4) | the picker's rows match `/api/chat/slots`, ordered by `last_activity_ts`, folder shown | serving a different order from the fake |
-| Only a listed slot is ever posted | session (M4) | with the fake returning a slot list that omits the saved default, the app re-lists rather than posting a stale key (the fake 404s an unlisted key and the test asserts no such request was made) | posting the remembered key blindly — the trap in `get_or_create_slot` |
-| A busy slot reports "queued", not success | session (M4) | fake returns `{"ok":true,"queued":true}` → the UI says queued | treating `queued` as sent |
-| A refused post surfaces, with the prefill fallback offered | session (M4) | fake returns 403 for the POST (the 8443 origin case) → the app says so and offers to open the session with the link prefilled | swallowing the 403 |
-| A cold launch does not lose the link | session (M4) | terminate the app, open the share URL, relaunch: the inbox still holds it and the picker appears | keeping the inbox in memory only |
-| The share sheet route works (stage 2) | new share suite | drive Safari to the fake dashboard, Share → "Latchkey" → Post → the app is frontmost with the link; then the same journal assertion | building without the extension: the app is absent from the sheet |
+| Inbox items and payloads | `ShareInbox/` in the app container (stage 1) and/or the group container (stage 2); `isExcludedFromBackup` | did not exist; nothing to migrate | an older build ignores the directory; the sweep of a newer build removes 7-day items |
+| `item.json` | `version: 1`; unknown fields ignored, a higher `version` is left alone and logged | — | — |
+| Last destination | `appSupportDir/share-defaults.json` | did not exist | ignored by an older build |
+| The URL scheme | `Info.plist` | none | an older build has no handler: iOS shows nothing for `latchkey://`; the Shortcut's intent is absent too |
+| The App Group (stage 2) | entitlement on both targets | none | removing it later orphans the group container's inbox until the app is deleted — the app keeps reading both locations, so the items are still drained first |
 
-XCUITest cannot attach to the extension's process, but its UI appears in
-Safari's element tree, which is all the test needs.
+Nothing here touches `WorkspaceDefinition`, `HomePage.url`, the node's state
+directory or WebKit's store.
 
 ## 6. Decisions — answered by Olof, 2026-09-23
 
-1. **Default destination: remember the last session, preselected.** The picker
-   still opens, so one tap changes it. The common case (chonk's Obsidian
-   session) is fast, and the destination is never hidden.
-2. **What arrives: the title and the URL, plus a note if typed** — *and, when
-   what is shared is a document rather than a link, the artifact itself with a
-   note, "similar to how it would be in the chat window of kirocrew or a web
-   session".* This enlarges the feature; see §6a.
-3. **New sessions:** still unanswered, and not needed for a first cut. Sharing
-   adds to a session that exists; `POST /api/chat/slots` is there when wanted.
+1. **Default destination: remember the last session, preselected.** The
+   picker still opens, so one tap changes it.
+2. **What arrives: the title and the URL, plus a note if typed** — and, for
+   a document, **the artifact itself with a note**, "similar to how it would
+   be in the chat window of kirocrew or a web session". Folded in: §4.3,
+   §4.5, §4.6.
+3. **New sessions:** not answered, and not needed for a first cut.
 
-## 6a. Attachments: what answer 2 adds
+## 7. End-to-end tests
 
-Sharing a PDF is not sharing a link, and it changes three things.
+Suites: host `make test-policy` (new `scripts/test-share.sh`, `swiftc`
+against the pure files, like `test-signout.sh`); **session**
+`scripts/test-session.sh` against the real 0.6.0 bundle (new
+`UITests/ShareTests.swift`; the script's expected count sums both classes);
+**L2** `scripts/test-tailnet.sh` (one test, on the real node); L1 gains
+nothing — the flow adds no routing. Server-side evidence throughout (R13).
 
-**The gateway side is ready.** `POST /api/upload/file` takes multipart `file`
-parts (`kiro_crew/dashboard/routes/taskrunner.py:55` →
-`handlers/files.py:1222`) and returns server paths the agent can read; the
-limits are 50 MB per file, 512 MB for video, 20 files, and an extension
-allowlist (`files.py:959-966`). So the flow for an artifact is: upload, then
-post a message that references it, exactly as the dashboard's own composer
-does.
+**The fake gateway grows** (`testing/harness/fake_gateway.py`), with the real
+shapes read from 0.6.0: `GET /api/chat/slots` (a configurable list; default
+three slots in two folders, one `running`), `GET /api/chat/folders`, `POST
+/api/upload/file` (multipart, part name `file`, the 50 MB and extension
+rules, `{"paths": […]}`), `POST /api/chat` (requires `slot`; `{"ok":true,
+"slot":…}`; `{"ok":true,"queued":true}` for the busy slot; **any `slot` not in
+the current list is recorded as a `violation` and answered 404** — the fake
+refuses what the real gateway would silently create, so the trap is a test
+failure rather than a stray session). Counters `slot_lists`, `share_posts`,
+`share_uploads`, `upload_bytes`, `share_denials`; a `posts` journal of
+`{slot, message, item}` keyed by the `X-Latchkey-Share` header. Controls:
+`/__slots?keys=a,b,c&busy=b`, `/__upload-limit?bytes=`, `/__csrf-deny?on=1`.
+`gateway_check.py` gains steps for each.
 
-**Open, and to be settled before building:** what the composer actually sends
-to `POST /api/chat` once a file is uploaded — the returned path inline in
-`message`, or a separate field. The research covered upload and send
-separately; this seam needs one more read of the bundle. Nothing should be
-built on a guess here.
+**Seeding without the extension.** XCUITest cannot attach to an extension
+process, and the intent is not drivable from XCUITest. Links enter through
+the URL scheme (`XCUIDevice.shared.system.open`); documents through the
+test-hook `-UITestSeedShare` (test builds only, R15), which writes exactly
+what the extension would write. That tests the inbox-to-gateway path fully
+and the capture side not at all — the capture side is the device's (below).
 
-**The iOS side gets harder, and it moves the staging.** A custom URL scheme can
-carry a link but not a PDF, so:
-- the extension's activation rule must accept files as well as URLs and text
-  (`NSExtensionActivationSupportsFileWithMaxCount` alongside the web-URL and
-  text keys);
-- the payload must be **copied into the App Group container** by the extension
-  before it completes its request — the item's own URL points into a sandbox
-  that disappears with the extension;
-- so the App Group inbox stops being stage 2's mechanism and becomes the
-  mechanism for anything but a bare link. Stage 1 can still ship links through
-  the URL scheme, but the inbox arrives with attachments rather than after
-  them.
-- size: the inbox needs a cap and a sweep, or a shared 50 MB PDF lives in the
-  container until someone notices. Delete on successful post, and drop anything
-  older than a day at launch.
+| Test | Suite | Asserts | Shown to fail by |
+|---|---|---|---|
+| `ShareMessage` formats the three shapes | host | link = title, URL, blank, note; text; document = `[attached_file 1] <path>` + note; no trailing whitespace; note omitted when empty | changing the blank-line separator |
+| `ShareOutcome` maps every answer | host | `{ok,slot}`→sent; `{ok,queued}`→queued; 403+`X-Auth-Required`→signedOut; bare 403→refused(403); 413→tooLarge(gateway text); 400 `{error}`→refused(text); no answer→unreachable; and the sentence for each | treating `queued` as `sent` (the earlier draft's named hazard) |
+| `ShareInboxPolicy` admits and sweeps | host | refuses > 50 MB, a 21st item, a 201st MB; advisory for `.bin`; sweeps 7-day items and 10-minute staging dirs; keeps a 6-day item | an 8-day-old item kept |
+| `ShareURL.parse` is hardened | host | accepts `https`; refuses `javascript:`, `data:`, `file:`, `ftp:`; caps sizes; **ignores `gateway=`/`slot=` parameters** | accepting `javascript:` |
+| `ShareItem` round-trips | host | encode → decode equal; unknown field ignored; `version: 2` left alone | dropping `source` |
+| The page scripts run | host (`test-page-scripts.sh`, Node) | `shareStageChunk` + `shareUpload` post one `FormData` whose `file` part has the staged byte count; `shareFetch` returns `{status, body}` | dropping the last chunk |
+| A shared link reaches the chosen session | session | `system.open("latchkey://share?url=https://example.com/a-XYZ&title=A")` → the app is frontmost with `share-picker` → tap `share-session-obsidian` → `share-send` → `/__state.posts` holds one post with `slot == "obsidian"` and a message containing the title and the URL; `share-result` = `sent:obsidian`; the page's URL carries `sid=obsidian` (the fake's request journal shows the navigation or the SPA's refetch for that slot) | posting without `slot`: the fake 400s and `share_posts` stays 0 |
+| The last session is preselected | session | share twice; on the second, `share-destination-selected` = the first's key before any tap, and Send posts to it | not writing `share-defaults.json` |
+| Only a listed slot is ever posted | session | after a share to `obsidian`, `/__slots?keys=notes,plan` → next share → the picker shows nothing selected and the "isn't there any more" line; `share_posts` unchanged; **`violations` empty** | posting the remembered key: the fake records a violation |
+| A busy slot is "queued", not "sent" | session | `/__slots?…&busy=obsidian` → `share-result` = `queued:obsidian`, and the item is gone from the inbox (`share-inbox-count` = 0) | mapping `queued` to `sent:` |
+| A refused post offers prefill | session | `/__csrf-deny?on=1` → `share-result` = `failed:refused-403` and a `share-prefill` button; tapping it → the fake's journal shows `GET /chat?sid=obsidian&prefill=…`; the item stays (`share-inbox-count` = 1) | swallowing the 403 (`share-result` says sent) |
+| Signed out mid-share, then resumed | session | `/__expire` + `/__revoke` before Send → `token-sheet` appears, `share-waiting-count` = 1; `signIn(kind: "cli")` → without any further tap, `share_posts` becomes 1 and `share-result` = `sent:…` | dropping the item on 403 |
+| A cold launch keeps the item | session | open the share URL, `app.terminate()` before Send, `launch(reset: false)` → `share-picker` reappears with the same title | a memory-only inbox |
+| A document is uploaded, then referenced | session | `-UITestSeedShare pdf:1048576` → Send → `share_uploads` = 1, `upload_bytes` = 1048576, the part's filename ends `.pdf`; then one post whose message matches `\[attached_file 1\][ \t]+<the path the fake returned>`; `share-inbox-count` = 0 afterwards | posting before uploading: the message names no returned path → the fake records a violation |
+| 50 MB goes through, byte for byte | session | `-UITestSeedShare pdf:52428800` → `upload_bytes` = 52428800 and `share-terminations` unchanged across the share; elapsed logged | a 64 MiB chunk (one call) — or, cheaper, dropping the last chunk: the byte count differs |
+| Over the limit is refused at capture; a gateway 413 is shown | session | `pdf:52428801` → `share-inbox-count` = 0 and the log line `Share: refused … over 50 MB`; then `/__upload-limit?bytes=1048576` + `pdf:2097152` → `share-result` = `failed:File too large (max 1MB)` (the fake's text) | ignoring the 413 |
+| An unsupported type shows the gateway's words | session | `bin:1024` → `share-result` = `failed:Unsupported file type: .bin` | swallowing the 400 |
+| Unreachable, kept, retried | session | `/__restart?down=8` + proxy blackhole → `share-result` = `failed:unreachable`, `share-inbox-count` = 1; blackhole off, tap `share-retry` → `share_posts` = 1 | deleting the item on failure |
+| The sweep runs at launch | session | `pdf:1024:age=8d` → `share-inbox-count` = 0 and `Share: swept 1 item(s)` in the unified log | no sweep |
+| Nothing about the share is logged (D1) | session (the script) | share `https://example.com/secret-XYZ` with note `NOTE-XYZ` and a file `secret-XYZ.pdf`; the unified log and the app container's Logs contain no `XYZ`; validated by ≥ 1 `Share: sent` line in the same log | logging the URL |
+| Delivery waits for the page, on the real node | L2 | with the fake gateway behind the `gw` peer (F1's harness wiring), the app launched **by the share URL from terminated**; the node comes up, the page loads and is signed in; then exactly one post arrives *through the peer* (the fake sees the node's forward, not loopback) and `share_denials` = 0 | starting on `scenePhase == .active`: a post before sign-in → a denial with the share header |
+| The share sheet route (stage 2) | session, full tier; **fragile by nature** | drive Safari to the fake dashboard, Share → *Latchkey* → *Save* → the group container (`simctl get_app_container … groups`) holds one item with `source: extension`; then relaunch the app and the ordinary link test's assertions | building without the extension: no app row; or writing `item.json` first: the item is visible before its payload |
 
-**Tests this adds** (to §5's table when built): a shared PDF reaches the
-session as an upload plus a message that references it, asserted from the fake
-gateway's side (it records the multipart part and the message); a file over the
-size limit is refused with something the owner can read, not silently; and the
-inbox is empty after a successful post.
+**What only the device can show** (added to `DEVICE-CHECK.md` §6 when
+built): the Shortcut appears in Safari's and Files' share sheets and opens
+the app with the item (stage 1); a 50 MB PDF from Files is captured by the
+extension without it being killed (Settings → Share shows the byte count;
+Settings → Privacy → Analytics shows no jetsam of the extension) (stage 2);
+a share made with the phone offline is delivered the next time the app is
+opened on the tailnet; a real gateway's `[attached_file 1]` renders the PDF
+in the transcript.
 
-## 7. Open questions and owner actions
+## 7a. Acceptance criteria
 
-Answered in §6 as recommendations; Olof's call.
+- **A link share is server-confirmed within 10 s** of the app coming to the
+  front with the page already signed in (simulator). Instrument: the fake's
+  `posts` journal timestamp against the `Share: received` log line.
+- **No post ever names an unlisted slot.** Instrument: `/__state.violations`
+  empty after the whole session suite.
+- **Every outcome is shown, and "sent" is never shown unstamped.**
+  Instrument: `share-result` in each test equals the fake's counters
+  (`share_posts` incremented iff `sent:`/`queued:`).
+- **A document arrives whole.** Instrument: `upload_bytes` equals the seeded
+  size at 1 MiB and 50 MiB; `share-terminations` unchanged.
+- **The inbox is bounded and self-cleaning.** Instrument: `share-inbox-count`
+  after the sweep test; the script's listing of the container's `ShareInbox/`
+  shows no item older than 7 days and no `.staging` entry.
+- **D1 holds.** Instrument: the script's grep for the marker strings, validated
+  by a `Share: sent` line.
+- **Host coverage.** `make test-policy` gains `scripts/test-share.sh` with at
+  least 40 checks, all green.
+- **Delivery order.** The L2 test passes with `share_denials` = 0.
+- **On the device:** the four checks above, recorded in `DEVICE-CHECK.md`.
 
-Owner actions this will need:
-- the **first** install after the extension target exists must go through
-  Xcode's Run, to mint the second profile (xcodebuild here has no usable Apple
-  ID);
-- allow notifications once, so the sanctioned bounce works;
-- for any gateway on 8443: fix the origin allowlist first (F1 §4a), or sharing
-  there returns 403.
+## 8. Open questions and owner actions
 
-## 5. Log
+**Q1 — Stage 1 only, or both?** Recommendation: **stage 1 only, now.** The
+reasoning:
 
-- 2026-09-23: requested; two research strands (gateway API, iOS platform),
-  both reported the same day. Design written as two stages. Two findings
-  changed the shape: the extension can never send (one node, one state
-  directory, and `pin_scope: node`), and there is no supported way for a share
-  extension to launch its containing app — so a local notification is the
-  bounce and the app drains an inbox. A third finding went into F1 §4a: the
+- Documents no longer pull the App Group forward: an `IntentFile` reaches
+  the app's own process (§4.2), so stage 1 carries links *and* documents
+  with no second target, no entitlement, no second profile, no
+  memory-limited process and no unsupported hand-off.
+- Stage 1's hand-off is *better* than stage 2's: a foreground intent brings
+  Latchkey up with the picker; the extension can only say "open Latchkey".
+- Stage 2 buys exactly two things — the app icon in the share sheet's app
+  row, and no one-time Shortcut to make — at the cost of a target, an App
+  Group entitlement (a new profile, hence an Xcode Run), a capture UI, a
+  memory-limited copy, and a suite test that is fragile in the simulator.
+- The inbox is designed group-container-ready (§4.3), so "both" later is
+  additive: the extension target, the entitlement, and the one L2/session
+  test in the table. Nothing in stage 1 is thrown away.
+
+If Olof says "both", §4.2's stage 2 and §4.3's first location are built as
+written, and Q2 needs an answer first.
+
+**Q2 — Does R34/D6 ("no notifications in v1") cover a local notification
+posted by the share extension?** Without one, "Saved. Open Latchkey to send
+it." is the only bounce in stage 2. With one, the owner is asked once for
+notification permission. Not needed for stage 1. Olof's call.
+
+**Q3 — New sessions from the share flow?** Still open; not needed.
+
+**Owner actions:**
+- **Stage 1:** make the "Send to Latchkey" Shortcut once (§4.2), with
+  *Show in Share Sheet* on. Five minutes, on the phone.
+- **Any gateway on 8443:** allow the ported origin first (F1 §4a), or every
+  share there returns 403 and falls back to prefill.
+- **Stage 2 only:** the first install after the entitlement and the extension
+  target exist goes through Xcode's Run, to register the App Group and mint
+  the second profile; and allow notifications once, if Q2 says yes.
+- **Device check** after the build: the four items in §7.
+
+## 9. Log
+
+- 2026-09-23: requested; two research strands (gateway API, iOS platform)
+  reported the same day. First design: two stages, one app-side flow. Two
+  findings shaped it: the extension can never send (one node, one state
+  directory, `pin_scope: node`), and there is no supported way for a share
+  extension to launch its containing app. A third went to F1 §4a: the
   gateway's origin allowlist is port-blind, so 8443 breaks every POST.
+- 2026-09-23: Olof's answers (§6). Documents enlarge the feature.
+- 2026-09-23, design pass to buildable:
+  - **Network path decided and argued from the code** (§4.4): the app
+    delivers, foreground, page world. The extension's own node, the app's
+    loopback from another process, and BGTask delivery are each rejected
+    with the lifecycle reason. The URLSession-with-cookie route is named,
+    reserved, and gated on Olof.
+  - **Documents through stage 1 after all:** `IntentFile` lands in the app
+    process, so the App Group is a stage-2 cost only. README's "pulls the
+    App Group inbox forward regardless" is corrected by this; the README
+    row and its open item 1 need the parent's edit (not done here — one
+    file only).
+  - **The composer/send seam read** (§4.5): `sendChat` body, upload receipt,
+    the `[attached_file N] <path>` grammar, and `build_prompt_blocks`. One
+    ordering detail left to pin at build time, with the fake indifferent to
+    it.
+  - **Prefill semantics verified:** 30 s, per slot; `autoSend=1` only ever
+    makes a new session.
+  - **Dropped:** the responder-chain "courtesy" open (unsupported and
+    non-deterministic), and the extension's local notification pending Q2
+    (R34/D6). **Corrected:** `CFBundleURLTypes` goes in `Latchkey/Info.plist`,
+    not an `INFOPLIST_KEY_`.
+  - **The fake refuses the trap:** an unlisted `slot` is a recorded violation
+    and a 404, so the silent-create hazard fails a test instead of minting a
+    session.
