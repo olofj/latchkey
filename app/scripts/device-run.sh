@@ -50,14 +50,22 @@ def get(d, new, old):
 def udid(d):
     return get(d, "properties.hardware.udid", "hardwareProperties.udid") or d.get("identifier")
 
+def name_of(d):
+    return str(get(d, "properties.state.name", "deviceProperties.name"))
+
+# A real phone reports NO `reality` at all; only simulators say "simulated"
+# (measured on Xcode 27 — the first `make device` found no phone because it
+# asked for reality == "physical", which nothing is).
 phones = [d for d in devices
-          if get(d, "properties.hardware.reality", "hardwareProperties.reality") == "physical"]
+          if get(d, "properties.hardware.reality", "hardwareProperties.reality") != "simulated"]
 if wanted:
-    phones = [d for d in phones if wanted in (udid(d), d.get("identifier"))]
+    phones = [d for d in phones
+              if wanted in (udid(d), d.get("identifier")) or wanted == name_of(d)]
 if len(phones) != 1:
-    names = ", ".join(str(get(d, "properties.state.name", "deviceProperties.name")) for d in phones) or "none"
+    names = ", ".join(name_of(d) for d in phones) or "none"
     sys.exit("error: need exactly one paired iPhone%s, found: %s. Plug it into this Mac, "
-             "unlock it and tap Trust (or pass DEVICE=<udid>)" % (" matching " + wanted if wanted else "", names))
+             "unlock it and tap Trust (or pass DEVICE=<udid, or the name>)"
+             % (" matching " + wanted if wanted else "", names))
 d = phones[0]
 name = get(d, "properties.state.name", "deviceProperties.name")
 ios = get(d, "properties.software.osVersionNumber.stringValue", "deviceProperties.osVersionNumber")
@@ -73,10 +81,15 @@ if devmode == "disabled":
     sys.exit("error: Developer Mode is off on %s: Settings -> Privacy & Security -> "
              "Developer Mode, then let it restart" % name)
 # Only a definite no: an idle paired phone can read "available", and devicectl
-# brings the tunnel up on demand.
+# brings the tunnel up on demand. "disconnected" means the pairing is
+# remembered from an earlier cable, which is what a hub or a charge-only cable
+# leaves behind: `ioreg -p IOUSB -l | grep "USB Product Name"` then lists no
+# iPhone at all.
 if state in ("unavailable", "disconnected"):
-    sys.exit("error: %s is paired but not reachable now (%s): plug it in, or put it on "
-             "this Mac's network, and unlock it" % (name, state))
+    sys.exit("error: %s is paired but not connected now (%s over %s). Plug it straight "
+             "into the Mac, not through a hub, with a cable that carries data, and unlock "
+             "it. Check it is really there: ioreg -p IOUSB -l | grep 'USB Product Name'"
+             % (name, state, transport))
 print(udid(d))
 EOF
 )
