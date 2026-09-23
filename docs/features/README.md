@@ -24,6 +24,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F3](F3-share-into-a-session.md) | Share a link from another app into a session on a gateway | designed; needs 3 answers |
 | [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | spec |
 | [F5](F5-portrait-session-list.md) | Reaching the session list in portrait (bug report) | spec; one measurement outstanding |
+| [F6](F6-single-origin-web-view.md) | The web view loads the gateway and nothing else (no Google Fonts) | spec |
 
 ## Bugs
 
