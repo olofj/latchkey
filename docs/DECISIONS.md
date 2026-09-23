@@ -2397,6 +2397,32 @@ cache with the filter and the peer list. That is how tonight's faults were
 identified without guessing. It stays local (D1 is about not uploading, and
 tsnet.log is redacted before it is written).
 
+## 2026-09-23 — D4 superseded: chonk is a usable gateway, and so is box
+
+D4 and R26 ruled chonk out of v1 because its dashboard listens on
+`127.0.0.1:5476` only, and a plain-HTTP origin fails both the dashboard's
+own `/api/ws` origin check and the app's ATS-only rule (R28). The premise is
+no longer true: chonk already has `tailscale serve` in front of it.
+`https://chonk.…/` answers **HTTP 200 with the KiroCrew frontend in 30 ms**,
+and Tailscale's extension already listens on 443. The dashboard is still
+loopback-only; serve is what makes it a proper tailnet HTTPS origin.
+
+So chonk needs no change, only a grant. Same for box, which was already
+served. **Neither needs app work:** discovery probes every candidate peer and
+never excluded chonk by name — it was probing `chonk:443` tonight and being
+dropped by the policy.
+
+What this changes:
+- the `kiro-clients` grant covers `byskebox`, `box` and `chonk` on 443;
+- M7.6's AC ("discovery finds byskebox and nothing else") is wrong now:
+  three gateways is the real shape, so the picker lists them and does not
+  auto-choose (M5.3). Gateway switching (Settings → Gateway, M5) is no longer
+  a nicety; it is how the owner reaches the machine he wants;
+- each gateway is its own sign-in: sessions are per host, so a token is
+  minted per gateway;
+- box and chonk are minutes away rather than a continent, which separates a
+  blank dashboard (#9399) from a slow path.
+
 **Open question for M1's record:** should the app recognise a locked-out node
 and say so? tsnet's status carries a tailnet-lock field, and "connected but
 reaching nothing" is otherwise indistinguishable from purgatory in the UI.
