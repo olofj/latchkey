@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | building |
+| **Status** | **superseded by [F4](F4-never-a-bare-screen.md)** — the same views, and no code had landed; F4 covers the connecting state along with the other bare screens |
 | **Requested** | 2026-09-23, by Olof: "I entered byskebox manually, screen went blank. Not a great UI experience if it's stuck loading something." |
 | **Revision** | none — a gap, not a change of documented behaviour (M8 polish) |
 | **Touches** | `App/Browser`, the L1 offline suite |
