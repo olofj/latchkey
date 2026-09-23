@@ -2531,3 +2531,70 @@ have made the next test built on `/move` flaky with no clue why.
 
 Rerun: harness self-test green, discovery 5/5 twice (the framework rebuilt
 first), L2 9/9, lifecycle 5/5.
+
+## 2026-09-23 — The product is renamed to Latchkey; three identities keep the old name
+
+**Decision:** Latchkey becomes **Latchkey** everywhere it is a *name* —
+target, scheme, project, Swift types and files, the home-screen display name,
+and all prose. Three classes of identity keep the old spelling, deliberately:
+
+1. **Bundle identity.** `net.lixom.latchkey` (app and UI-test target), the
+   os_log subsystem that mirrors it, the DispatchQueue labels, and the App
+   Group F3 would add. Olof's instruction: keep the bundle id so the app keeps
+   its container and its Tailscale node.
+2. **The on-disk data root**, `<Application Support>/Latchkey/` and the
+   `Latchkey-UI-Test*` siblings.
+3. **The default tailnet hostnames**, `latchkey-iphone` / `-ipad` / `-roam`.
+
+The vendored tree (`ThirdParty/`, including `latchkey_locallog.go` and
+`TestLatchkeyRawStderr…`) is untouched under R16, so `scripts/test-all.sh`
+still runs `go test -run Latchkey`.
+
+**Why:** the previous rename (Aperture → Latchkey) could move the data root,
+and its script says exactly why it was safe: *"the bundle id changed too, so
+this is inside a different app container and there is nothing to migrate."*
+**That condition is absent this time.** Same bundle id means the same
+container, so `<Application Support>/Latchkey/` is a live directory holding
+each workspace's tsnet state dir — the node's identity — plus
+`workspaces.json` and the logs. Renaming the literal would silently point the
+renamed app at an empty directory: new node key, fresh login, tailnet-lock
+re-signing, new grants. Nothing would crash; Olof would simply find himself
+logged out with an unapproved device. The cost of the stale-looking literal is
+one comment; the cost of renaming it is the device bring-up chain again.
+
+The hostname is the same class of thing for a different reason: it is the
+node's MagicDNS name, it is what the admin console and any host-scoped grant
+refer to, and a live install carries its own copy in `workspaces.json` anyway.
+Changing the default would rename only future fresh installs, producing a node
+whose name Olof's grants may not admit. Rename it only together with that
+grant.
+
+**Also renamed, in lockstep because both ends are ours:** the app's probe
+header `X-Latchkey-Check` → `X-Latchkey-Check`, sent by
+`App/Browser/PageScriptSources.swift` and counted by
+`testing/harness/fake_gateway.py`. A host test asserts the name
+(`scripts/test-session-fetch.js`) and caught the first pass, which had missed
+`.js` files entirely.
+
+**Not renamed:** the repository directories (`~/src/latchkey`, and the
+`latchkey` / `latchkey-app` names in the GitHub question). Nothing in the
+build refers to the directory by name, and renaming it would orphan this
+project's agent session history and memory, which are keyed on the path.
+
+**Evidence:** `app/scripts/rename-to-latchkey.py` is the recipe, with the
+preserved strings listed by name and a `--check` mode that lists every
+remaining mention for review; 45 remained in the parent and 61 in the app, all
+in the three preserved classes or in the historical record of the *previous*
+rename. Verified after: `make test-policy` green, `make app` **BUILD
+SUCCEEDED**, and the built bundle reports `CFBundleIdentifier =
+net.lixom.latchkey`, `CFBundleDisplayName = Latchkey`,
+`CFBundleExecutable = Latchkey` — the rename is visible to the owner and
+invisible to the container.
+
+**Two traps found while doing it**, both recorded because they would recur:
+- masking `"Latchkey"` (quoted) to protect the data root also protected the
+  **target name** in `project.pbxproj` and `.xcscheme`, leaving the project
+  half-renamed. The script now masks the quoted form in `.swift` files only.
+- the script rewrote the bare old name inside the very comment that warns
+  against renaming the data root, inverting its meaning — twice. The comment
+  is now phrased without the literal.

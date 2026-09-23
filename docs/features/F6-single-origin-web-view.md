@@ -717,12 +717,16 @@ for this to fail, and a test pins it (§6).
 
 ## 5. State and migration
 
-**One persisted value:** *Allow widget CDNs*, a `Bool` in the same defaults the
-other Settings toggles use, default **true**. A build that predates it reads
-absent → true, which matches Olof's decision; a workspace written by a newer
-build and read by an older one simply ignores the key. Because the value
-selects which rules compile, it is part of the rule-list identifier (§4.1a), so
-flipping it recompiles rather than reusing the previous list.
+**One persisted value:** *Allow widget CDNs*, default **true**. It goes in
+`WorkspaceDefinition` as an optional `Bool`, written back through the
+workspace's `onChange` like every other setting — **not** `UserDefaults`, which
+this app does not use anywhere (`SettingsViewModel` reads and writes the
+definition, and `BackupExclusion` notes the Keychain is unused too). Optional
+so a definition written by an older build decodes with the key absent, which
+reads as `true` and matches Olof's decision; an older build reading a newer
+definition ignores the key. Because the value selects which rules compile, it is
+part of the rule-list identifier (§4.1a), so flipping it recompiles rather than
+reusing the previous list.
 
 Nothing else in the workspace store. WebKit's store keeps
 `ContentRuleList-<encoded identifier>` files under the app's Library — verify
