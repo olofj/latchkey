@@ -156,3 +156,11 @@ something.
 - 2026-09-23: requested and specified. Half already held (navigations, R3);
   the gap is subresources, and the live example is Google Fonts in the 0.6.0
   bundle's `index.html`.
+- 2026-09-23: licences checked — JetBrains Mono and Space Grotesk are both OFL
+  1.1 with **no Reserved Font Name**, and the bundle already self-hosts
+  OpenDyslexic (with `OFL.txt`), Assistant and the KaTeX faces, so the upstream
+  fix is the build step they already run. KiroCrew's issues searched: no
+  existing report (#6578 is their capture browser's egress, #9399 is the import
+  map, #8091 is the CJK font precedent). Draft report:
+  `../upstream/kirocrew-google-fonts.md`. The app still blocks the fetch
+  regardless — a client cannot wait for someone else's release.
