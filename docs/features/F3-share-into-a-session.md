@@ -195,18 +195,57 @@ other suite here.
 XCUITest cannot attach to the extension's process, but its UI appears in
 Safari's element tree, which is all the test needs.
 
-## 6. Decisions needed from Olof (my recommendations)
+## 6. Decisions — answered by Olof, 2026-09-23
 
-1. **Default destination.** Recommend: remember the last gateway+session and
-   preselect it, with the picker still shown so one tap changes it. It makes the
-   common case (chonk's Obsidian session) fast without hiding where the link is
-   going. *Alternative: always ask with nothing preselected.*
-2. **New sessions.** Recommend: not in stage 1. Sharing adds to a session that
-   exists; creating one is a second decision (agent, folder, title) that belongs
-   in the app proper. `POST /api/chat/slots` is there when wanted.
-3. **What arrives.** Recommend: the page title and the URL on one line, plus the
-   note if typed — the note field costs nothing in the compose sheet and is
-   where "read this, then summarise" goes.
+1. **Default destination: remember the last session, preselected.** The picker
+   still opens, so one tap changes it. The common case (chonk's Obsidian
+   session) is fast, and the destination is never hidden.
+2. **What arrives: the title and the URL, plus a note if typed** — *and, when
+   what is shared is a document rather than a link, the artifact itself with a
+   note, "similar to how it would be in the chat window of kirocrew or a web
+   session".* This enlarges the feature; see §6a.
+3. **New sessions:** still unanswered, and not needed for a first cut. Sharing
+   adds to a session that exists; `POST /api/chat/slots` is there when wanted.
+
+## 6a. Attachments: what answer 2 adds
+
+Sharing a PDF is not sharing a link, and it changes three things.
+
+**The gateway side is ready.** `POST /api/upload/file` takes multipart `file`
+parts (`kiro_crew/dashboard/routes/taskrunner.py:55` →
+`handlers/files.py:1222`) and returns server paths the agent can read; the
+limits are 50 MB per file, 512 MB for video, 20 files, and an extension
+allowlist (`files.py:959-966`). So the flow for an artifact is: upload, then
+post a message that references it, exactly as the dashboard's own composer
+does.
+
+**Open, and to be settled before building:** what the composer actually sends
+to `POST /api/chat` once a file is uploaded — the returned path inline in
+`message`, or a separate field. The research covered upload and send
+separately; this seam needs one more read of the bundle. Nothing should be
+built on a guess here.
+
+**The iOS side gets harder, and it moves the staging.** A custom URL scheme can
+carry a link but not a PDF, so:
+- the extension's activation rule must accept files as well as URLs and text
+  (`NSExtensionActivationSupportsFileWithMaxCount` alongside the web-URL and
+  text keys);
+- the payload must be **copied into the App Group container** by the extension
+  before it completes its request — the item's own URL points into a sandbox
+  that disappears with the extension;
+- so the App Group inbox stops being stage 2's mechanism and becomes the
+  mechanism for anything but a bare link. Stage 1 can still ship links through
+  the URL scheme, but the inbox arrives with attachments rather than after
+  them.
+- size: the inbox needs a cap and a sweep, or a shared 50 MB PDF lives in the
+  container until someone notices. Delete on successful post, and drop anything
+  older than a day at launch.
+
+**Tests this adds** (to §5's table when built): a shared PDF reaches the
+session as an upload plus a message that references it, asserted from the fake
+gateway's side (it records the multipart part and the message); a file over the
+size limit is refused with something the owner can read, not silently; and the
+inbox is empty after a successful post.
 
 ## 7. Open questions and owner actions
 

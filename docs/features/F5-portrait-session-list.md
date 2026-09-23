@@ -108,9 +108,10 @@ the share picker as one component.
 
 ## 7. Open questions and owner actions
 
-- **Olof:** does the switcher belong behind the gear, or on its own control?
-  A one-tap control is better for something used often; the gear is already
-  there.
+- **Answered 2026-09-23:** the switcher lives **behind the gear**. No new
+  permanent affordance over the page; the gear is already there, and this keeps
+  the one-page design intact. (Option C of §3 — the native switcher — is
+  therefore the chosen approach.)
 - Should it list remote instances as well as sessions, or only sessions? The
   bundle has remote-instance management ("Add remote instance", "Configured
   remote instances"); whether the app needs to mirror that is a separate ask.

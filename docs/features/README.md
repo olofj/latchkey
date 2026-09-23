@@ -21,10 +21,24 @@ the change, or by breaking it on purpose — and the spec says how.
 |---|---|---|
 | [F1](F1-gateway-port.md) | A gateway carries a port; 8443 is the standard one (R40) | spec |
 | [F2](F2-connecting-state.md) | A visible connecting state for a page load in flight | superseded by F4 |
-| [F3](F3-share-into-a-session.md) | Share a link from another app into a session on a gateway | designed; needs 3 answers |
+| [F3](F3-share-into-a-session.md) | Share a link **or a document** from another app into a session on a gateway | designed; attachments to fold in |
 | [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | spec |
-| [F5](F5-portrait-session-list.md) | Reaching the session list in portrait (bug report) | spec; one measurement outstanding |
-| [F6](F6-single-origin-web-view.md) | The web view loads the gateway and nothing else (no Google Fonts) | spec |
+| [F5](F5-portrait-session-list.md) | Reaching the session list in portrait (bug report) | decided: native switcher behind the gear |
+| [F6](F6-single-origin-web-view.md) | The web view loads the gateway and nothing else (no Google Fonts) | decided; ready to build |
+
+## Still open, not yet answered
+
+Three sequencing questions from 2026-09-23 have no answer yet, and no work
+depends on guessing them:
+
+1. **F3 scope** — stage 1 only (links via a URL scheme and an App Intent,
+   reachable through a Shortcut), or both stages including the share-sheet
+   extension? Note that answer 2 to F3 (documents, not only links) pulls the
+   App Group inbox forward regardless.
+2. **Build order** — F4 and F6 together in one reinstall, since both touch
+   `App/Browser` and both need the device to matter?
+3. **GitHub** — two private repos (`latchkey`, `latchkey-app`), with Olof
+   running the pushes (a policy here blocks the agent from pushing)?
 
 ## Bugs
 

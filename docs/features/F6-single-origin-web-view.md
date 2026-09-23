@@ -72,13 +72,11 @@ retry.
 - The app's own network calls are out of scope: discovery probes tailnet hosts
   only, and the node talks to control and DERP. Nothing else exists.
 
-**Open trade-off — remote images in agent output.** Strict blocking is the
-honest default and what the request asks for. But an agent that answers with a
-chart or a screenshot URL will show nothing. Options: block silently; block with
-a tappable marker that opens it in Safari; or allow images (and only images)
-from any origin, which reopens a tracking pixel's worth of leak. Recommend the
-**marker**: it keeps the promise and loses nothing the owner cannot reach in one
-tap.
+**Remote images in agent output — decided 2026-09-23: a tappable marker.** A
+blocked image shows a small marker that hands the URL to Safari when tapped, so
+the single-origin promise holds and nothing is more than one tap away. Not
+blocked silently (the owner would not know an image was there), and not allowed
+through (that reopens exactly the tracking-pixel leak this feature closes).
 
 ## 4. Design
 
