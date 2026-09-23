@@ -1,0 +1,63 @@
+name: Bug
+description: Something the app did that it should not have
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Evidence beats description in this project. The two things that
+        identify almost any fault here are the app's own log
+        (Settings → Diagnostics → Logs) and the node's log
+        (Settings → Node log). Both are redacted before they are written and
+        neither leaves the phone on its own.
+
+        If the phone is plugged into chonk, the node log can be pulled:
+        `xcrun devicectl device copy from --device <udid> --domain-type appDataContainer --domain-identifier net.lixom.latchkey --source "Library/Application Support/Latchkey/Logs/tsnet.log" --destination .`
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Gateway and port
+      description: Which gateway, on which port (443 or 8443), and whether others worked at the time.
+      placeholder: chonk:443 — byskebox was fine
+  - type: dropdown
+    id: reach
+    attributes:
+      label: Could the app reach the tailnet at all?
+      options:
+        - "Yes — other things loaded"
+        - "No — nothing loaded"
+        - "Don't know"
+        - "Not relevant"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: Anything around the failure from Settings → Diagnostics → Logs or the node log. A `socks[n]` line or a `dial tcp … failed` line is usually decisive.
+      render: text
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: The app's commit if you know it (Settings → Status), the iOS version, and whether it was a `make device` (Release) or an Xcode Run (Debug) install.
+  - type: dropdown
+    id: repeatable
+    attributes:
+      label: Does it happen again?
+      options:
+        - "Every time"
+        - "Sometimes"
+        - "Saw it once"
+  - type: markdown
+    attributes:
+      value: |
+        **What happens next:** a small, obvious fix goes straight to a commit
+        that closes this issue, with a test that fails without it. Anything
+        that changes behaviour or needs design gets a spec in
+        `docs/features/` first, linked from here.

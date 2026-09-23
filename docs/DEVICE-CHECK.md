@@ -39,10 +39,10 @@ With the phone paired and on the cable (or on chonk's network):
    `app/.dev-team`, installed and launched on the paired iPhone. A session can
    run this for you. The first build creates the signing certificate and a
    7-day profile, and registers the phone.
-   *Or in Xcode:* open `app/Latchkey.xcodeproj`, set `Latchkey` → Signing &
-   Capabilities → Team to your personal team (`DEVELOPMENT_TEAM` is blank in
-   the project on purpose), pick the iPhone and press **Run**. That installs
-   a Debug build.
+   *Or in Xcode:* open `app/Latchkey.xcodeproj`, check `Latchkey` → Signing &
+   Capabilities → Team (the app target carries the Team ID since Xcode wrote it
+   there on the first Run, 2026-09-23), pick the iPhone and press **Run**. That
+   installs a Debug build.
 2. The first time only, on the phone: Settings → General → VPN & Device
    Management → trust your developer profile. Then open Latchkey.
 

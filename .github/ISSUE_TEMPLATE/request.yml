@@ -1,0 +1,42 @@
+name: Feature or change
+description: Something the app should do, or should do differently
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Requests become a spec in `docs/features/` before any code is written
+        (see `docs/features/README.md`). This issue is the request; the spec is
+        the design, and it links back here.
+
+        Rough is fine. The questions below are the ones a spec has to answer
+        anyway, and your answers stop them being guessed at.
+  - type: textarea
+    id: want
+    attributes:
+      label: What you want
+      description: In your own terms. What you would do with it.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
+      description: The workaround, if there is one. This usually says more about the shape of the feature than the request does.
+  - type: input
+    id: often
+    attributes:
+      label: How often
+      description: Daily, weekly, once in a while. It decides how much friction is acceptable.
+  - type: textarea
+    id: edges
+    attributes:
+      label: Where it should stop
+      description: Anything you explicitly do not want it to do.
+  - type: markdown
+    attributes:
+      value: |
+        **What happens next:** the spec lands in `docs/features/`, with
+        end-to-end tests named in it; then it is built, reviewed adversarially
+        and recorded in `docs/DECISIONS.md`. If the spec needs a decision only
+        you can make, it is listed there and asked here.

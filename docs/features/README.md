@@ -24,6 +24,35 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F3](F3-share-into-a-session.md) | Share a link from another app into a session on a gateway | designed; needs 3 answers |
 | [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | spec |
 
+## Bugs
+
+A bug is a report, not a spec, and it should cost Olof one message to file.
+
+- **Where:** a GitHub issue on the parent repo (both repos' faults, one
+  tracker), templates in `../../.github/ISSUE_TEMPLATE/`. Until the repos are
+  pushed, a message in the session does the same job and the issue is opened
+  afterwards.
+- **What a report needs:** what happened, which gateway and port, and any log
+  lines. The app's own log is Settings → Diagnostics → Logs, the node's is
+  Settings → Node log, and while the phone is plugged in and
+  development-signed, both can be pulled with
+  `xcrun devicectl device copy from --domain-type appDataContainer`. Evidence
+  beats description: every fault the first device run turned up was identified
+  from a log line, not from a description.
+- **What happens then:**
+  - a small, obvious fix goes straight to a commit that closes the issue, **with
+    a test that fails without it** — the same rule as everything else here;
+  - anything that changes behaviour, or needs a design, gets a spec in this
+    directory first, linked from the issue;
+  - either way the finding lands in `../DECISIONS.md` if it says something
+    non-obvious about the system. A fault worth remembering is worth a
+    paragraph.
+- **Reproduce it in a suite where it can be reproduced.** The bar is not "a
+  test exists" but "the test failed before the fix". Where a fault needs the
+  phone (a real suspension, a real tailnet, jetsam), say so in the issue and
+  test what can be tested; the device stays the place some things are only
+  ever found.
+
 ## The shape of a spec
 
 Copy [`TEMPLATE.md`](TEMPLATE.md). It asks for:
