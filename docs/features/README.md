@@ -19,12 +19,12 @@ the change, or by breaking it on purpose — and the spec says how.
 
 | # | Feature | Status |
 |---|---|---|
-| [F1](F1-gateway-port.md) | A gateway carries a port; 8443 is the standard one (R40) | spec |
+| [F1](F1-gateway-port.md) | A gateway carries a port; 8443 is the standard one (R40) | designed; **blocked on an owner action** — 8443 is outside the gateway's origin allowlist (§4a) |
 | [F2](F2-connecting-state.md) | A visible connecting state for a page load in flight | superseded by F4 |
-| [F3](F3-share-into-a-session.md) | Share a link **or a document** from another app into a session on a gateway | designed; attachments to fold in |
-| [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | spec |
-| [F5](F5-portrait-session-list.md) | The instance chips collide in portrait (bug report) | decided: legible chips **and** a native instance switcher |
-| [F6](F6-single-origin-web-view.md) | The web view loads the gateway and nothing else (no Google Fonts) | decided; ready to build |
+| [F3](F3-share-into-a-session.md) | Share a link **or a document** from another app into a session on a gateway | designed; recommends stage 1 only (open item 1) |
+| [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | designed; ready to build |
+| [F5](F5-portrait-session-list.md) | The instance chips collide in portrait (bug report) | designed; two independent halves (CSS rule, gateway switcher) |
+| [F6](F6-single-origin-web-view.md) | The web view loads the gateway and nothing else (no Google Fonts) | designed; ready to build, one consequence to weigh (CDN widgets) |
 
 ## Still open, not yet answered
 
