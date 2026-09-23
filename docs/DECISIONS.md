@@ -2353,6 +2353,50 @@ section. It is independent of purgatory (O3b) and of the key expiry warnings
 (R31/R33) — a third way for the app to be up and reach nothing, which
 Diagnostics does not name yet (see the open question below).
 
+## 2026-09-23 — O4 answered (for box), and what the phone's own filter proved
+
+**O4, from `kirocrew config get dashboard.tailscale` on box:** `enabled`
+true, `trust_identity` true, `allowed_logins` `["owner@example.com"]`,
+`pin_scope` `node`, `bind_refresh_chains` true, `keep_awake` true.
+
+So M7.5's preconditions hold on box (trust_identity with a non-empty
+allowed_logins that includes the login), and `pin_scope: node` confirms R6:
+renaming the node after a sign-in signs the app out. It changes nothing about
+the token: PLAN §116 stands — with `trust_identity` on, the gateway resolves
+the tailnet peer only when a credential is already present, so identity
+narrows access and never grants it. **The app still has to hold a token.**
+
+**box is a second, local gateway.** It already served `https://box.…/` →
+`127.0.0.1:5476` over the tailnet. Since it is minutes away rather than a
+continent, it separates two failure modes that look identical on screen: a
+blank dashboard (#9399) and a slow path. With both gateways granted, the
+picker will list two, so it will no longer auto-choose (M5.3) — the owner
+picks.
+
+**Why the phone reached nothing, settled from evidence.** Its netmap cache
+(pulled over USB from the app's container) holds the packet filter its node
+was given:
+
+```json
+{"Rules":[{"SrcIPs":["<chonk>","<air>"],"DstPorts":[{"IP":"*","Ports":{"First":0,"Last":65535}}]}]}
+```
+
+That is grant 1 of D5 (chonk and air may reach the device) and the only rule
+the node has. Nothing grants the phone outbound access, which is why every
+dial ended in `context deadline exceeded` — dropped SYNs, not refusals — to
+byskebox AND chonk. The node itself was healthy throughout: address
+`100.82.1.100`, `machineAuthorized=true`, tailnet lock ok, DERP connected.
+The `kiro-clients` grant (`100.82.1.0/24` → `byskebox`, `box`, port 443) is
+still missing. Discovery cannot find a gateway the policy forbids, and no
+number of Search agains changes that.
+
+**A better diagnostic channel, found today:** while the app is
+development-signed, `xcrun devicectl device copy from --domain-type
+appDataContainer` reads its container — `Logs/tsnet.log`, and the netmap
+cache with the filter and the peer list. That is how tonight's faults were
+identified without guessing. It stays local (D1 is about not uploading, and
+tsnet.log is redacted before it is written).
+
 **Open question for M1's record:** should the app recognise a locked-out node
 and say so? tsnet's status carries a tailnet-lock field, and "connected but
 reaching nothing" is otherwise indistinguishable from purgatory in the UI.
