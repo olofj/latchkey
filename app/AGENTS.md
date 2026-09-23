@@ -57,6 +57,21 @@ non-goals, not omissions.
   Keep it that way: never fold a vendored-tree change into an unrelated
   commit. Provenance and diff recipes are in `ThirdParty/VENDORED.md`.
 
+## How work arrives (from 2026-09-23)
+
+The project is no longer built from `../docs/PLAN.md`; its milestones are done
+bar the owner-and-device items. Work now comes as Olof's requests and
+feedback, and **every one of them gets a spec in `../docs/features/` before
+any code is written** — fine-grained enough to build from and to check
+afterwards. `../docs/features/README.md` states the rule and
+`TEMPLATE.md` the shape. Then: implement, test end to end, adversarial
+review, record in `../docs/DECISIONS.md`.
+
+**Tests are end-to-end.** A feature is done when a suite drives the real app
+against the fake-backed tailnet and asserts what the owner would see. Host
+unit tests are welcome for pure logic but do not substitute. Every test must
+be shown able to fail, and the spec says how.
+
 ## Git workflow
 
 Single-developer repositories with no outside contributors, so:
