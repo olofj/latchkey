@@ -31,7 +31,7 @@ xcrun devicectl list devices --json-output "$DEVICES_JSON" >/dev/null 2>&1 || tr
 # which the device check records. `properties` is devicectl's current layout;
 # the older *Properties keys are read as a fallback.
 DEVICE=$(python3 - "$DEVICES_JSON" "${DEVICE:-}" <<'EOF'
-import json, sys
+import json, re, sys
 try:
     devices = json.load(open(sys.argv[1]))["result"]["devices"]
 except (OSError, ValueError, KeyError):
@@ -73,23 +73,51 @@ pairing = get(d, "properties.connection.pairingState", "connectionProperties.pai
 state = get(d, "properties.connection.state", "connectionProperties.tunnelState")
 transport = get(d, "properties.connection.transportType", "connectionProperties.transportType")
 devmode = get(d, "properties.state.developerModeStatus", "deviceProperties.developerModeStatus")
+# `list devices` does not carry the Developer Mode status for a phone it
+# cannot reach; `ddiServicesAvailable: false` is the hint that it is off (or
+# its disk image is not mounted), and asking for details names the reason.
+ddi = get(d, "properties.state.ddiServicesAvailable", "deviceProperties.ddiServicesAvailable")
+reason = None
+# Once devicectl has reached the phone, the status is a one-key object,
+# {"disabled": {}}, not a string. Take the key.
+if isinstance(devmode, dict):
+    devmode = next(iter(devmode), None)
+if isinstance(devmode, str):
+    devmode = devmode.lower()
+if devmode is None and ddi is False:
+    import subprocess
+    try:
+        out = subprocess.run(["xcrun", "devicectl", "device", "info", "details",
+                              "--device", udid(d)], capture_output=True, text=True,
+                             timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    m = re.search(r"Developer Mode Status: *(\w+)", out)
+    if m:
+        devmode = m.group(1).lower()
+    m = re.search(r"^\s*Error: *(.+)$", out, re.M)
+    if m:
+        reason = m.group(1).strip()
 print("::: %s: iOS %s, %s, connection %s (%s), Developer Mode %s"
       % (name, ios, pairing, state, transport, devmode or "not reported"), file=sys.stderr)
 if pairing != "paired":
     sys.exit("error: %s is not paired with this Mac: unlock it and tap Trust" % name)
 if devmode == "disabled":
-    sys.exit("error: Developer Mode is off on %s: Settings -> Privacy & Security -> "
-             "Developer Mode, then let it restart" % name)
+    sys.exit("error: Developer Mode is off on %s. On the phone: Settings -> Privacy & "
+             "Security -> Developer Mode, switch it on, let it restart, then unlock it "
+             "and allow the prompt. (The menu only appears once the phone has been "
+             "connected to a Mac with Xcode, which it now has.)" % name)
 # Only a definite no: an idle paired phone can read "available", and devicectl
 # brings the tunnel up on demand. "disconnected" means the pairing is
 # remembered from an earlier cable, which is what a hub or a charge-only cable
 # leaves behind: `ioreg -p IOUSB -l | grep "USB Product Name"` then lists no
 # iPhone at all.
 if state in ("unavailable", "disconnected"):
-    sys.exit("error: %s is paired but not connected now (%s over %s). Plug it straight "
-             "into the Mac, not through a hub, with a cable that carries data, and unlock "
-             "it. Check it is really there: ioreg -p IOUSB -l | grep 'USB Product Name'"
-             % (name, state, transport))
+    sys.exit("error: %s is paired but not connected now (%s over %s)%s. If it is not on "
+             "the bus at all (ioreg -p IOUSB -l | grep 'USB Product Name'), plug it "
+             "straight into the Mac, not through a hub, with a cable that carries data. "
+             "Otherwise unlock it and allow the prompt."
+             % (name, state, transport, ": " + reason if reason else ""))
 print(udid(d))
 EOF
 )
