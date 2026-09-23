@@ -23,7 +23,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F2](F2-connecting-state.md) | A visible connecting state for a page load in flight | superseded by F4 |
 | [F3](F3-share-into-a-session.md) | Share a link **or a document** from another app into a session on a gateway | designed; attachments to fold in |
 | [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | spec |
-| [F5](F5-portrait-session-list.md) | Reaching the session list in portrait (bug report) | decided: native switcher behind the gear |
+| [F5](F5-portrait-session-list.md) | The instance chips collide in portrait (bug report) | **measured: first diagnosis wrong, needs a new call** |
 | [F6](F6-single-origin-web-view.md) | The web view loads the gateway and nothing else (no Google Fonts) | decided; ready to build |
 
 ## Still open, not yet answered
