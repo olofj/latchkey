@@ -2,151 +2,695 @@
 
 | | |
 |---|---|
-| **Status** | spec |
-| **Requested** | 2026-09-23, by Olof: "The UI has some blank screens where you don't know what's going on, such as when there's no gateway available and all you have is the gear in the top right. That should be improved." — and earlier the same day, "I entered byskebox manually, screen went blank. Not a great UI experience if it's stuck loading something." Plus: "Make sure the UI indicates the scan is going on." |
-| **Revision** | none; a gap, not a change of documented behaviour |
-| **Supersedes** | F2 (the connecting state), folded in here: both live in the same views, and F2 had no code yet |
-| **Touches** | `App/Browser` (`DashboardRootView`, `BrowserView`, `BrowserViewModel`), `App/Discovery/GatewayPickerView`, the L1 offline and L2 discovery suites |
+| **Status** | **spec — design pass 2026-09-23: every root-view state enumerated from the code, the blank screen's code path identified, ready to build** |
+| **Requested** | 2026-09-23, by Olof: "I entered byskebox manually, screen went blank. Not a great UI experience if it's stuck loading something." On discovery: "Is it giving up too quickly?" and "Did a couple more 'Search again' and nothing showed up." Later the same day: "The UI has some blank screens where you don't know what's going on, such as when there's no gateway available and all you have is the gear in the top right. That should be improved." and "Make sure the UI indicates the scan is going on." |
+| **Revision** | none. The retry policy (20 s, 1 s cadence), the `about:blank` fallback (R3), the discovery timeouts (R39) and the SOCKS dial timeout are all unchanged; this makes them visible. One label is corrected (a SOCKS failure is not a "URL format error"), which is a fix, not a policy change. |
+| **Supersedes** | F2 (the connecting state). F2's four tests are carried over as tests 1, 3 and 12 below; its identifier `page-loading` is **not** used — `page-connecting` is. |
+| **Touches** | `App/Browser` (`BrowserView`, `BrowserViewModel`, `DashboardRootView`, new `PageState.swift`, `PageFailureText.swift`), `App/Discovery` (`GatewayDiscovery`, `GatewayPickerView`), `App/Tailnet Status/StatusView`, `TSNet/TSNetModel` + `TSNet/SocksLogProxy` (one published field, existing files), `testing/harness/socks5stub.py` (a stall mode), the L1 offline, L2 discovery and session suites, one host test |
 
-## 1. Why
+**The rule this feature asserts:** there is never a screen that tells the owner
+nothing. Every state — starting, connecting, holding, scanning, empty, failed,
+no gateway, gateway missing, node not ready — says **what is happening, how
+long it has been happening, and what to do next.**
 
-Three separate holes, all showing the same thing to the owner: a white screen
-with a gear in the corner.
+## 1. Why: the device pain, and what actually produced it
 
-**A. The silent startup retry.** `App/Browser/BrowserViewModel.swift:378`
-`retryStartupLoadIfAppropriate` swallows a transient startup failure and
-retries the load **once a second until a deadline**, with no UI at all. On the
-first device run the gateway's tailnet grant was missing, so every SOCKS dial
-was dropped:
+### 1.1 The blank screen, traced
 
-```
-socks5: dial tcp byskebox…:443 failed: context deadline exceeded
-```
+Olof typed `byskebox` and the screen went blank. The path, from the code:
 
-Each failure was "transient", so the app retried quietly and the screen stayed
-blank for as long as the retry window lasted. Nothing said it was still trying,
-and nothing said where to look.
+1. **Manual entry.** `GatewayPickerView.useManual` (`App/Discovery/GatewayPickerView.swift:159-170`)
+   qualifies the name, checks the proxy policy carries it, and calls
+   `onSelect(origin)` → `Workspace.selectGateway` (`App/Workspace/Workspace.swift:159-165`):
+   `setHomePage(origin)`, `session.reset()`, `tabManager.reopenHomeTab()`.
+   Settings → Gateway reaches the same function through
+   `SettingsViewModel.commitGateway` (`App/Settings/SettingsViewModel.swift:127-138`),
+   so it does not matter which field he used: both end here.
+2. **The picker is replaced by the web view.** `reopenHomeTab`
+   (`App/Browser/TabManager.swift:138-143`) makes a fresh `BrowserTab`;
+   `homePage.hasGateway` flips true, so `DashboardContent`
+   (`App/Browser/DashboardRootView.swift:190-196`) swaps the full-screen
+   picker for `NavigationStack { gatewayContent }`, whose body is
+   `BrowserView` (`:352`). `BrowserView` (`App/Browser/BrowserView.swift:17-42`)
+   has two branches: `navError != nil` → `NavErrorPage`; otherwise
+   `RawWebView`. `navError` is nil, so a `WKWebView` is installed.
+3. **The load starts.** `RawWebView.makeUIView` → `BrowserViewModel.makeWebView`
+   (`App/Browser/BrowserViewModel.swift:148-188`) → `loadInitial` (`:269-304`).
+   `HomePageAvailabilityChecker.check` found byskebox among the peers (it
+   was: the node log shows a dial *to* it, and MagicDNS only resolves peers
+   in the netmap), so the decision was `.load(url)`, then
+   `load(url:isAutomaticStartupLoad: true)` (`:337-359`) armed
+   `startupLoad = (target, now + 20 s)` (`:349`) and `loadResolved`
+   (`:361-373`) called `webView.load(URLRequest(url:, timeoutInterval: 120))`.
+4. **What was on screen.** A `WKWebView` with nothing committed paints its
+   backing colour — white in light mode, black in dark
+   (`App/Browser/RawWebView.swift:35-41`) — and over it the gear at 0.45
+   opacity (`DashboardRootView.swift:317-331`). No text, no indicator.
+   `isLoading` was true on the model (`BrowserViewModel.swift:37`, KVO at
+   `:233`) and nothing reads it.
+5. **Where the 30 seconds went.** WebKit's CONNECT reached the app's relay
+   (`TSNet/SocksLogProxy.swift`) and then tsnet's SOCKS5 server, whose
+   `handleTCP` (`ThirdParty/libtailscale/tailscale-patched/net/socks5/socks5.go:218-234`)
+   dials with `dialTimeout = 30 * time.Second` (`socks5.go:99`). The phone's
+   packet filter had no outbound grant (DECISIONS, "O4 answered": grant 1 of
+   D5 was the only rule), so every SYN was dropped and the dial ended at the
+   deadline — the node-log line F2 quoted:
+   ```
+   socks5: dial tcp byskebox…:443 failed: context deadline exceeded
+   ```
+   `replyCodeForDialError` (`socks5.go:687-697`) maps a deadline to
+   `generalFailure` (0x01), and the relay logged it as
+   `socks[N] FAILED byskebox…:443 — tailnet proxy could not connect: general failure (reply 1, ~30000ms)`
+   (`SocksLogProxy.swift:629`).
+6. **The failure reaches the app.** WebKit maps every SOCKS failure reply to
+   `NSURLErrorBadURL` (-1000) — the code says so itself (`BrowserViewModel.swift:405-406`).
+   `didFailProvisionalNavigation` (`:773-785`) asks
+   `retryStartupLoadIfAppropriate` (`:378-400`), whose guard
+   `ContinuousClock.now < startupLoad.deadline` is **false**: the deadline
+   was 20 s after the load and the failure arrived at 30 s. So no retry;
+   `navigationError` (`:516-535`) set `navError`, and `NavErrorPage`
+   (`BrowserView.swift:55-111`) replaced the web view.
+7. **What the error page said.** "Unable to Load Page", then in orange
+   **"URL format error"**, the escaped URL, and "bad URL [NSURLErrorDomain
+   -1000]". `categorize` (`:553-558`) maps -1000 to `.urlFormat` even though
+   the same file knows -1000 is every SOCKS failure. The page has **no
+   button**: `reload()` is bound only to ⌘R on a hardware keyboard
+   (`DashboardRootView.swift:291`), and there is no "choose another gateway"
+   anywhere but Settings.
 
-**B. Nothing painted, no error yet.** Even outside the retry path, a main-frame
-load that is merely slow paints nothing. The error overlay
-(`nav-error-overlay`) only exists once WebKit gives up.
+**So the blank screen was state D4 below — a main-frame load in flight with
+nothing committed — for the full 30 s SOCKS dial timeout, followed by an
+error page that blamed the URL and offered nothing.** The earlier draft of
+this spec blamed the silent startup-retry loop (D5). That loop did **not**
+run on the device: it is armed for 20 s and the first failure came at 30 s.
+It is a real second hole, on a transport that fails *fast* — the L1
+blackhole test shows it, which is why `assertErrorPage` waits 40 s for a
+failure the stub refuses in milliseconds (`UITests/OfflineHarnessTests.swift:327`;
+20 s of 1-s retries, then the error page). Both holes are closed here; the
+spec no longer guesses which one a given screen came from because every
+state now logs its name and its elapsed time.
 
-**C. The picker can be dismissed over emptiness.** With no gateway chosen the
-app shows `GatewayPickerView` (`DashboardRootView.swift:197`), which is right —
-but the picker is also presented as a **sheet** from Settings → Gateway and
-from the unreachable banner's *Find*. Cancel that sheet before anything has
-ever loaded and what is left is a blank page and the gear.
+Two things only Olof can confirm are in §8: which field he typed into, and
+whether he waited for the error page.
 
-**D. A sweep in progress is nearly invisible.** The picker shows "Looking for
-Kiro Crew gateways on your tailnet…" only while `phase == .probing &&
-gateways.isEmpty` (`GatewayPickerView.swift:48`). Tap *Search again* when rows
-are already listed and nothing indicates a scan is running — and since R39 a
-sweep now takes up to 12 s.
+### 1.2 The scan he could not read
 
-## 2. What the owner sees
+At the time of the device run a probe had 1.5 s and a sweep 5 s. Under the
+missing grant every probe hit its timeout, so a sweep ended after ~1.5 s
+(DECISIONS, the O3b rehearsal: "1.5–1.6 s, every probe hits its timeout").
+The "Looking for Kiro Crew gateways…" row (`GatewayPickerView.swift:48-55`)
+flashed for that long and was replaced by "No Kiro Crew gateway answered
+among N computer(s)". "Is it giving up too quickly?" — yes; R39 raised the
+budgets to 4 s and 12 s (`GatewayDiscovery.swift:65-68`) and that landed
+separately.
 
-**Connecting** (A and B): while a main-frame load is in flight and nothing has
-painted — including through the silent retries — a centred state: an indicator
-and "Connecting to byskebox over your tailnet…". After 6 s a second, smaller
-line: "Still trying. A new device may not be allowed to reach this gateway yet.
-Settings → Status shows this device's address." It disappears the instant
-content paints.
+What R39 did not fix, and this does:
 
-**Gave up** (A): when the retry deadline passes, the error state owns the
-screen and offers *Try again* and *Choose another gateway*. Today the retry
-window simply ends and the ordinary error page appears with no way to change
-gateway.
+- the row is **static** for up to 12 s: no count of what has been checked,
+  no elapsed time, nothing that moves;
+- it is shown only while `gateways.isEmpty` (`:48`), so **Search again with
+  rows already listed shows nothing at all** — the button merely goes grey;
+- before the node's status arrives the picker shows a **disabled Search
+  again and nothing else** (`ready == false`, `:42, :84, :134-138`);
+- the finished text says how many were checked but not what happened to
+  them. On the device the answer was "none answered at all", which is the
+  signature of a policy that drops the node's traffic — and "no number of
+  Search agains changes that" (DECISIONS, "O4 answered"). The text did not
+  say so, so he searched again, twice.
 
-**No gateway** (C): a centred empty state — "No gateway chosen", a line
-explaining that a gateway is a computer on the tailnet running Kiro Crew, and
-two buttons: *Find gateways* and *Enter one by name*. Both open the picker.
-Reachable at any time; it is what sits behind a dismissed picker sheet.
+### 1.3 Also found while enumerating
 
-**Scanning** (D): whenever a sweep runs, the picker shows progress: "Checking
-N computers on your tailnet…" with the count from `candidateCount`, results
-streaming in as rows as they answer, and *Search again* disabled while it runs.
-When a sweep ends with nothing: "Checked N, none answered" plus the existing
-guidance line.
+- The unreachable-gateway fallback (`about:blank` + banner) leaves 95 % of
+  the screen blank under a one-line banner (D3).
+- After `Running`, while the first status or the peer list is still on its
+  way, `loadInitial` holds (`:287-289`, `:298-300`) and the web view is blank
+  with no text (D2). On a relaunch this is a few seconds; if the netmap never
+  arrives it is forever.
+- The earlier draft's case C ("cancel the picker sheet over emptiness")
+  **does not exist**: with no gateway the picker *is* the screen
+  (`DashboardRootView.swift:197-203`), not a sheet, so Cancel lands back on
+  it. Dropped.
 
-**Every state is named in the app's log**, so a suite and a device run can both
-tell which one was on screen.
+## 2. Every state the root view can be in
 
-## 3. Non-goals
+`LatchkeyApp` → `DashboardRootView` → `WorkspaceRoot` → the gate until the
+tailnet first reaches `Running`, then `DashboardContent` for the rest of the
+session (`DashboardRootView.swift:129-147`). Within `DashboardContent`: the
+picker until a gateway is chosen (`:190-203`), else the page. Verdict:
+**bare** = nothing readable on screen; **misleading** = readable but wrong;
+**thin** = readable but missing "how long" or "what next"; **fine**.
 
-- No diagnosis of *why* the tailnet refused: the connecting hint points at
-  Settings → Status, it does not try to explain grants (that is the runbook's
-  job, and possibly a later feature).
-- No spinner over a painted page: a same-document navigation, a subresource, or
-  the page's own WebSocket reconnect must never flash the connecting state.
-- No change to the retry policy itself (cadence or deadline). This feature makes
-  it visible, not different.
-- No new controls over the web view unless taps are verified: a Button at
-  opacity < 1 over a `WKWebView` receives no taps (M8 finding). The empty and
-  connecting states have no web view under them, so their buttons are fine.
+| # | State | Where | Drawn today | Text today | Affordance today | Leaves when | Verdict |
+|---|---|---|---|---|---|---|---|
+| G0 | No `WorkspaceManager` yet | `LatchkeyApp.swift:57, 66` | `ProgressView()` | none | none | immediately (constructed in `init`) | bare, unreachable |
+| G1 | No active workspace | `DashboardRootView.swift:50-54` | `ProgressView()` | none | none | "never happens" (the manager seeds one) | bare, unreachable |
+| G2 | Node starting: state `nil`/`NoState`/`Starting` | `StatusViewModel.swift:183-187`, `StatusView.swift:36-44` | brand header, status icon + text | "Connecting…" / "Starting…" | gear | the node reaches any other state; **unbounded** | thin — no elapsed, no escalation, no where-to-look |
+| G3 | `NeedsLogin` | `StatusView.swift:66-80` | text + Login button | "Login Required" | Login | login | fine |
+| G4 | Logged in, connecting | `StatusView.swift:58-65`; watchdog `StatusViewModel.swift:137-144` | spinner + text | "Finishing the tailnet connection…" | gear | `Running`, or back to G3 after 60 s | fine (bounded); gains an elapsed count |
+| G5 | `NeedsMachineAuth` | `StatusView.swift:48-57` | text | "…waiting for a tailnet admin to approve it…" | none needed | approval | fine |
+| G6 | `Stopped` | `StatusViewModel.swift:180` | icon + text | "Stopped" | gear | the node restarts (foreground) | thin — no what-next |
+| D1 | No gateway chosen | `DashboardRootView.swift:197-203` | full-screen `GatewayPickerView` | see P1–P8 | see P1–P8 | a gateway is chosen | fine as a container |
+| D2 | Gateway chosen, load **holding** for status / peers | `BrowserViewModel.swift:287-289, 298-300` | blank `WKWebView` + gear | none (a log line only) | gear | the next status poll with peers (`TSNetManager.swift:408`, 5 s cadence); **unbounded** if peers never arrive | **bare** |
+| D3 | Gateway **not in the tailnet**: `about:blank` fallback + banner | `HomePageAvailability.swift:34, 95`; `DashboardRootView.swift:348-351, 449-480` | banner over a blank body | "No KiroCrew gateway with this name is in your tailnet." | Find, Change | the peer appears (`:395-402`) or another gateway is chosen | thin — one line over a blank page |
+| D4 | **Connecting**: main-frame load in flight, nothing committed | `BrowserViewModel.swift:361-373` → `didCommit :707` | blank `WKWebView` + gear | none | gear | `didCommit`, or a failure: 30 s (dropped SYNs, `socks5.go:99`), 120 s (accepted, never answers, `:372`), or WebKit's own TLS timeout | **bare — Olof's screen** |
+| D5 | Connecting through **silent startup retries** | `BrowserViewModel.swift:378-400` | as D4 | none (a log line per retry, `:393`) | gear | commit, or the 20 s deadline (`:349`) → D6 | **bare** |
+| D6 | **Failed**: `NavErrorPage` | `BrowserView.swift:55-111`; `BrowserViewModel.swift:516-535` | icon, title, category, escaped URL, message | "Unable to Load Page" / "URL format error" (for **every** SOCKS failure, `:553-558`) / "bad URL [NSURLErrorDomain -1000]" | **none** (⌘R only, `DashboardRootView.swift:291`) | ⌘R, a gateway switch, a relay restart (`:262-266`), R7 | **misleading, and a dead end on a phone** |
+| D7 | Failed: unknown / ambiguous short name | `BrowserViewModel.swift:494-514` | as D6 | "No device named “x” exists in this tailnet…" / "More than one…" | none | as D6 | thin — good text, no button |
+| D8 | **Painted** page; the page's own states, the token sheet, node banners, expiry warnings, return-to-dashboard | `DashboardRootView.swift:225-239, 338-367, 423-443`; `TokenEntrySheet` | web content | the page's | the page's | — | fine; **must never be covered by D4** |
+| D9 | Content process died | `BrowserViewModel.swift:883-905` | reload in place; after the budget, D6 with its own message (`:888`) | "The dashboard page stopped repeatedly…" | none | reload / ⌘R | fine text, needs D6's buttons |
+| P1 | Picker, node **not ready** (`localStatus` or `proxyConfiguration` nil), phase `.idle` | `GatewayPickerView.swift:42, 84, 134-138` | "Gateways" header, a **disabled** Search again, the manual section | none about the wait | manual entry | `ready` flips (first status poll); **unbounded** | **bare** about what it waits for |
+| P2 | Probing, no rows yet | `GatewayPickerView.swift:48-55` | spinner + one line | "Looking for Kiro Crew gateways on your tailnet…" | manual entry | `.finished` / `.proxyUnhealthy`, ≤ 12 s | thin — nothing moves for 12 s |
+| P3 | Probing, rows already listed (a re-scan) | `GatewayPickerView.swift:48` (`gateways.isEmpty`) | rows; Search again greyed | none about the scan | rows, manual entry | `.finished` | **bare** about the scan |
+| P4 | Finished, none found, candidates > 0 | `GatewayPickerView.swift:65-71` | one line | "No Kiro Crew gateway answered among N computer(s) on your tailnet. Enter one below." | Search again, manual entry | a new sweep | thin — no answered/unanswered split, no duration, no likely cause |
+| P5 | Finished, some found | `GatewayPickerView.swift:56-64, 149-154` | rows; auto-chosen on first run if exactly one | the hosts | tap a row | choice | fine |
+| P6 | Every probe failed **and** the loopback did not answer | `GatewayPickerView.swift:72-76`; `GatewayDiscovery.swift:195-204` | orange line | "The tailnet connection isn't passing traffic yet. Search again in a moment." | Search again | a new sweep | fine; gains what was tried |
+| P7 | Finished, **zero candidates** | `GatewayPickerView.swift:66-67, 144-148` | one line | "No computers on your tailnet could be a gateway. Enter one below." | manual entry; auto re-sweep when peers change | peers arrive | fine; says it re-searches by itself |
+| P8 | Manual entry refused | `GatewayPickerView.swift:101-106, 163-166` | red line | "x isn't on your tailnet. Enter a tailnet name…" | edit | edit | fine |
+
+Sheets over any of these (Settings, the picker sheet from Find / Settings,
+the token sheet) hide the state underneath; on dismissal the state
+underneath is one of the rows above, and each of those now says something.
+
+## 3. What the owner sees
+
+All wording is final unless §8 changes it. `<host>` is the gateway's first
+DNS label as the owner knows it (`byskebox`), with `:<port>` appended when
+the port is not 443 (F1). `<fqdn>` is the full name, shown only in details.
+Elapsed times are whole seconds and tick once a second.
+
+### 3.1 Connecting (D4, D5)
+
+- **0–300 ms:** the web view's own background. Nothing else.
+- **300 ms:** a centred block replaces the web view's area (opaque, system
+  background, correct in dark mode):
+  - an indeterminate indicator;
+  - **"Connecting to byskebox…"**;
+  - smaller, secondary: **"over your tailnet · 4 s"** — the number ticks.
+- **8 s:** a third block appears beneath, and stays:
+  - **"Still trying. A gateway on the tailnet normally answers within a few
+    seconds. If this device is new, it may not be allowed to reach byskebox
+    yet — whoever manages the tailnet needs this device's address, shown in
+    Settings → Status."**
+  - one button: **Choose another gateway**. Tapping it stops the load
+    (`stopLoading()`), moves the page to the failed state below with cause
+    *stopped* (so cancelling the picker lands on an error page with *Try
+    again*, never on a blank web view), and opens the picker sheet.
+- Through the silent retries (D5) the block does not change and the clock
+  does not reset: it counts from the **first** attempt. Each retry logs as it
+  does today, plus the state line (§4.9).
+- It disappears the instant `didCommit` runs. It never appears over a
+  committed page: a same-document navigation, a subresource, the page's own
+  WebSocket reconnect, the session layer's fetches — none of them touch it.
+
+### 3.2 Failed (D6, D7, D9)
+
+The error page is rebuilt. Same identifier `nav-error-overlay`, new body:
+
+- title (`nav-error-title`): **"Couldn't reach byskebox"** for a retrieval
+  failure; **"Latchkey can't open this address"** for a URL format error;
+  **"The page stopped"** for a content-process failure; **"Stopped"** when
+  the owner stopped it.
+- cause (`nav-error-cause`): one sentence from the table in §4.4, naming
+  the host, the port, the elapsed time and the most likely reason.
+- what to do (`nav-error-next`): one sentence from the same table.
+- two buttons, full opacity: **Try again** (`nav-error-retry`, calls
+  `reload()`) and **Choose another gateway** (`nav-error-choose-gateway`).
+- a **Details** disclosure (`nav-error-details`, collapsed): the escaped URL
+  exactly as today (`debugEscaped`, it has caught invisible characters
+  before), the error domain and code, the relay's reply name and its
+  timing when there is one, and "Settings → Status → Page keeps this; Logs
+  has the full record." D1 holds: nothing leaves the device; this is where
+  the diagnosis is *read*.
+
+### 3.3 Holding (D2)
+
+Same block as 3.1 with the text **"Waiting for the tailnet's peer list before
+opening byskebox…"** and the ticking **"· 3 s"**. At **15 s** a hint:
+**"Still waiting for the node's peer list. Settings → Status shows the
+node's state and how many peers it sees; Settings → Node log shows what it
+is doing."** No button: there is nothing to retry, and the picker would find
+nothing without peers either.
+
+### 3.4 Gateway missing (D3)
+
+The banner stays (with its Find and Change). The blank body under it becomes
+the same centred block: **"byskebox isn't in your tailnet right now."** and
+**"Latchkey checks again as the tailnet updates. *Find* lists the gateways
+it can see; *Change* lets you correct the name."** No buttons in the body —
+the banner's are the single presentation path (M5 review).
+
+### 3.5 The picker (P1–P7)
+
+Rows in the Gateways section, in this order, above the gateway rows:
+
+- **P1 waiting for the node:** indicator + **"Waiting for the tailnet
+  node… 2 s"**. At 15 s, a second line: **"Still waiting. Settings → Status
+  shows the node's state."** *Search again* keeps its label and stays
+  disabled; the row above it is the explanation.
+- **P2/P3 scanning, whenever `phase == .probing`, rows listed or not:** a
+  determinate bar plus **"Checking 7 computers on your tailnet · 3 of 7
+  done · 5 s"**. The count is finished probes (answered or failed) over
+  `candidateCount`; the seconds tick. Rows stream in beneath it as today.
+  *Search again* reads **Searching…** and is disabled while this row is up.
+- **P4 none found:** **"Checked 7 computers in 12 s. 2 answered but aren't
+  Kiro Crew gateways; 5 didn't answer at all."** Then one of:
+  - unanswered > 0: **"A computer that doesn't answer at all is usually one
+    this device isn't allowed to reach yet. If your gateway is among them,
+    whoever manages the tailnet needs this device's address: Settings →
+    Status. Searching again won't change that by itself."**
+  - unanswered = 0: **"Every computer answered, so the tailnet is fine; none
+    of them is a Kiro Crew gateway. Enter yours below if it isn't listed as
+    a peer."**
+- **P6 proxy unhealthy:** **"Nothing answered in 12 s, and the tailnet node
+  itself isn't passing traffic yet (its own proxy didn't answer either).
+  Search again in a moment; if it keeps happening, Settings → Node log."**
+- **P7 zero candidates:** **"No computer on your tailnet could be a gateway
+  (0 candidates among 3 peers). Latchkey searches again by itself when
+  peers appear. Enter one below if you know its name."**
+
+### 3.6 The gate (G2, G6)
+
+- G2 at **15 s** in `Connecting…` or `Starting…`: a line under the status:
+  **"Still starting after 15 s. Settings → Node log shows what the node is
+  doing."** (ticks).
+- G6: **"Stopped. Latchkey starts the node again when it returns to the
+  foreground; if it doesn't, Settings → Node log."**
+- G1: `Text("Starting Latchkey…")` beside the spinner. Unreachable, and one
+  line.
+
+### 3.7 Everything is named in the log
+
+Every transition writes one line (§4.9), so a suite and a device run can
+both tell which state was on screen and for how long — the same instrument
+`scripts/test-discovery.sh` already reads for sweeps.
 
 ## 4. Design
 
-**`App/Browser/BrowserViewModel.swift`**
-- A published `pageState` enum: `.idle`, `.connecting(host: String, since: ContinuousClock.Instant)`, `.painted`, `.failed(…)`. Derived from the existing callbacks: `.connecting` on a main-frame provisional navigation, `.painted` on `didCommit`/first paint, `.failed` where `navigationError` already runs.
-- `retryStartupLoadIfAppropriate` keeps the state at `.connecting` across retries instead of leaving it undefined, and logs each retry as it already does.
-- When the retry deadline passes, the error path runs as usual — so the "gave up" screen is the existing overlay plus a *Choose another gateway* action.
-- The hint threshold is a named constant, `connectingHintDelay = .seconds(6)`, commented: past a warm load (a painted dashboard is under 1 s on a direct path, ~2 s relayed) and well short of a dropped dial's own failure, which took tens of seconds on the device.
+### 4.1 Timing, and why these numbers
 
-**`App/Browser/BrowserView.swift`**
-- Renders the connecting state from `pageState`, `accessibilityIdentifier("page-connecting")`, with the hint line as `page-connecting-hint`. VoiceOver reads both; the indicator is not the only signal. Correct in dark mode.
+| Threshold | Value | Constant | Why |
+|---|---|---|---|
+| Connecting state becomes visible | **300 ms** after `loadResolved` with no commit | `PageStateView.showDelay` | Below it, a state that appears and is replaced reads as flicker. A loopback commit on the harness is well under it, so a healthy load never shows it; a real relayed path (190 ms RTT direct, more via DERP; TCP + TLS + GET ≈ 4 round trips) is over it, and the owner *is* waiting then. It replaces a blank rectangle, not content, so the cost of a brief appearance is low; the cost of a 30 s blank is what this feature is for. |
+| "Still trying" hint | **8 s** | `BrowserViewModel.connectingHintDelay` | Twice R39's per-probe budget (4 s), which was sized from the device's own relayed intercontinental path with "room to spare". A load is the same shape as a probe (TCP, TLS, one GET); one that has not committed by 2× that budget is not slow, it is stuck. F2 said 6–8 s; 8 s errs toward not nagging. |
+| Holding hint | **15 s** | `BrowserViewModel.holdingHintDelay` | Three status polls (`TSNetManager.startStatusPolling`, 5 s). On a relaunch the peer list arrives within one or two. |
+| Gate hint | **15 s** | `StatusView.startingHintDelay` | Same reasoning; a node normally reaches a state well inside one poll. |
+| Picker waiting-for-node hint | **15 s** | `GatewayPickerView.waitingHintDelay` | Same. |
+| Give up | **not a new timer** | — | The transport already bounds it: 30 s SOCKS dial (`socks5.go:99`), 20 s startup retries (`BrowserViewModel.swift:349`), 120 s request timeout (`:372`), 12 s sweep (`GatewayDiscovery.swift:68`). Adding a shorter app timer would abandon loads that would have succeeded on a slow path — exactly R39's lesson. Instead the clock is on screen, so nothing looks frozen, and the failure names the elapsed time. |
+| Scan progress | from the first ms of `.probing`, updated per outcome and per second | — | The picker is a list; the row is content, not a spinner over content. |
 
-**`App/Browser/DashboardRootView.swift`**
-- A `NoGatewayView` for the `!homePage.hasGateway` case, shown **behind** the picker rather than instead of it, so dismissing the sheet lands on it: identifier `no-gateway`, buttons `no-gateway-find` and `no-gateway-manual`.
-- The error overlay gains `nav-error-choose-gateway`, which opens the picker through the same single-presentation path Settings and the banner already share (M5 review: two presentations must not overlap).
+### 4.2 `App/Browser/PageState.swift` (new)
 
-**`App/Discovery/GatewayPickerView.swift`**
-- The progress row shows whenever `discovery.phase == .probing`, not only when no rows are listed yet; text from `candidateCount`; identifier `gateway-scanning`.
-- *Search again* is disabled while probing (it already is) and the row carries the count so a test can read it.
-- The finished-with-nothing text names how many were checked.
+```swift
+enum PageState: Equatable {
+    case idle
+    /// D2: `loadInitial` is waiting for status / peers.
+    case holding(host: String, since: ContinuousClock.Instant)
+    /// D4/D5: a main-frame load is in flight and nothing has committed.
+    /// `since` is the first attempt's stamp; `attempt` counts startup retries.
+    case connecting(host: String, port: Int, since: ContinuousClock.Instant, attempt: Int)
+    case committed
+    /// D6/D7/D9.
+    case failed(PageFailure)
+}
 
-**Untouched:** the split tunnel, `allowFailover`, ATS, and the node's own
-banners (login, approval, expiry), which already own the screen when they
-apply and must keep priority over the connecting state.
+struct PageFailure: Equatable {
+    enum Cause: Equatable {
+        case noAnswer            // SOCKS general failure after a long dial: dropped SYNs
+        case refused             // SOCKS connection refused
+        case unreachable         // SOCKS host / network unreachable
+        case proxyNotReady       // SOCKS general failure within 2 s of the attempt
+        case proxyDown           // the relay / loopback listener refused (R30's territory)
+        case timedOutAfterConnect // -1001: connected, never answered
+        case certificate         // -1200…-1206
+        case unknownHost(String)  // D7
+        case ambiguousHost(String, [String])
+        case redirectedAway(String)  // WebKitErrorDomain 102, nothing committed
+        case pageCrashed(times: Int, window: Int)  // D9 after the budget
+        case stopped             // the owner chose another gateway mid-load
+        case badAddress          // URL(string:) failed (reportURLParseFailure)
+        case other(domain: String, code: Int)
+    }
+    let host: String        // first label, as shown
+    let fqdn: String
+    let port: Int
+    let cause: Cause
+    let elapsed: Duration   // since the first attempt
+    let domain: String
+    let code: Int
+    let proxyReply: ProxyReply?   // from TSNetModel.lastProxyFailure when it matches host:port
+}
+```
+
+`App/Browser/PageFailureText.swift` (new): pure `static func lines(for:
+PageFailure) -> (title: String, cause: String, next: String)` and `static func
+cause(domain:code:proxyReply:elapsed:) -> Cause`. Host-tested (§6, test 5–6)
+through a new `app/scripts/test-page-failure-text.sh` on the pattern of
+`test-navigation-policy.sh`, run by `make test-policy`.
+
+### 4.3 `App/Browser/BrowserViewModel.swift`
+
+- `@Published private(set) var pageState: PageState = .idle`.
+- `loadInitial`: on `.wait` (either hold), set `.holding(host:since:)` once
+  (keep the first `since`).
+- `loadResolved`: if `pageState` is not `.connecting`, set
+  `.connecting(host:port:since: .now, attempt: 1)`; if it is (a startup
+  retry), bump `attempt` and keep `since`. Same-document and page-initiated
+  navigations never reach `loadResolved`; they are unaffected.
+- `didStartProvisionalNavigation`: **no state change.** Page-initiated
+  main-frame navigations over a committed page (a link, the session layer's
+  sign-in load) must not show the block; those are `.committed` already, and
+  the test in §6 (12) pins it.
+- `didCommit`: `.committed`. `unloadWebView`: `.idle`.
+- `navigationError`, `reportUnknownTailnetHost`, `reportAmbiguousTailnetHost`,
+  `reportURLParseFailure`, `handlePolicyInterruption`,
+  `recoverFromContentProcessTermination` (the give-up branch): `.failed(…)`
+  with `elapsed = .now - since` (zero when there was no connecting state),
+  `proxyReply` looked up as in §4.5.
+- `categorize` (`:553-558`): `-1000` is `.retrieval` unless it came from
+  `reportURLParseFailure`, which sets `.urlFormat` itself. The comment at
+  `:405-406` already states why.
+- `stopForGatewayChange()`: `stopLoading()`, cancel `startupRetryTask`, clear
+  `startupLoad`, `.failed(cause: .stopped)`.
+- Constants with their reasoning in a comment: `connectingHintDelay =
+  .seconds(8)`, `holdingHintDelay = .seconds(15)`. The retry policy at `:349`
+  and `:387` is **not** touched; a comment there records that a 30 s dial
+  outlasts the 20 s window, so the loop only ever fires on fast failures.
+
+### 4.4 Failure wording (`PageFailureText`)
+
+`<h>` = host, `<p>` = port, `<t>` = elapsed seconds, `<f>` = fqdn.
+
+| Cause | Decided by | Title | Cause line | Next line |
+|---|---|---|---|---|
+| `.noAnswer` | -1000, reply *general failure* (or no reply recorded), elapsed ≥ 2 s | Couldn't reach `<h>` | `<h>` didn't answer on port `<p>` in `<t>` s. The tailnet dropped the connection, which usually means this device isn't allowed to reach `<h>` yet, or `<h>` is off. | Whoever manages the tailnet needs this device's address (Settings → Status). If `<h>` is on, try again in a moment. |
+| `.proxyNotReady` | -1000, reply *general failure*, elapsed < 2 s | Couldn't reach `<h>` | The tailnet node couldn't open a connection to `<h>`:`<p>` (it answered "general failure" after `<t>` s). The node may still be settling. | Try again. If it keeps happening, Settings → Node log. |
+| `.refused` | reply *connection refused* | Couldn't reach `<h>` | `<h>` is reachable but refused the connection on port `<p>`: nothing is listening there. | Is Kiro Crew's dashboard served on port `<p>`? Choose another gateway, or correct the port in Settings. |
+| `.unreachable` | reply *host unreachable* / *network unreachable* | Couldn't reach `<h>` | The tailnet has no route to `<h>` right now. | Try again in a moment; if it persists, Settings → Status shows the node's state. |
+| `.proxyDown` | -1000 and the relay accepted nothing since the navigation, or R30 restarted it | Couldn't reach `<h>` | The connection never reached the tailnet node: its proxy on this phone didn't answer. | Try again; Latchkey has restarted the proxy. If it persists, Settings → Status → Proxy. |
+| `.timedOutAfterConnect` | -1001 | Couldn't reach `<h>` | `<h>` accepted the connection on port `<p>` but sent nothing in `<t>` s. | Try again. If `<h>` keeps accepting and never answering, its gateway is up but stuck. |
+| `.certificate` | -1200…-1206 | Couldn't reach `<h>` | `<h>` answered on port `<p>`, but its certificate isn't valid for `<f>`. | Latchkey only opens a gateway with a valid certificate (R28). Check the gateway's `tailscale serve` certificate. |
+| `.unknownHost(x)` | today's text | Couldn't reach `<h>` | No device named “x” exists in this tailnet. | Check the name, or choose another gateway. |
+| `.ambiguousHost` | today's text | Couldn't reach `<h>` | More than one tailnet device matches “x”: a, b. | Enter the full name. |
+| `.redirectedAway(u)` | WebKitErrorDomain 102 | Couldn't open `<h>` here | `<h>` redirected to `u`, which isn't the gateway this app is set to, so it wasn't opened here. | Check the gateway address in Settings. |
+| `.pageCrashed(n, w)` | R7 budget spent | The page stopped | The dashboard page stopped `n` times in `w` s, so automatic reloading has paused. This is the page itself, not the tailnet. | Try again. |
+| `.stopped` | owner action | Stopped | You stopped the connection to `<h>` after `<t>` s. | Try again, or choose another gateway. |
+| `.badAddress` | `URL(string:)` nil | Latchkey can't open this address | The address has a character it can't use; the details show it escaped. | Correct the gateway in Settings. |
+| `.other` | anything else | Couldn't load `<h>` | `<h>` could not be loaded (`domain` `code`). | Try again. |
+
+The words "bad URL" and "URL format error" never appear for a transport
+failure.
+
+### 4.5 `TSNet/TSNetModel.swift` and `TSNet/SocksLogProxy.swift` (existing files; no pbxproj edit)
+
+- `TSNetModel`: `@Published var lastProxyFailure: ProxyReply?` where
+  `struct ProxyReply: Sendable, Equatable { let target: String; let reply: String; let elapsed: Duration; let at: Date }`.
+- `SocksLogProxy`, at the line that logs `FAILED … could not connect`
+  (`:629`): also publish it on the model (main actor hop; the relay already
+  holds a reference to the manager's model through its owner). Only failures
+  are published; the value stays in memory and is shown in Status → Page.
+- `BrowserViewModel` reads it when building a `PageFailure`: it matches when
+  `target == "<fqdn>:<port>"` and `at >= navigationStartedAt`. Otherwise
+  `proxyReply` is nil and the cause falls back on code and elapsed alone.
+
+This is the only change to `TSNet/`. It adds one field to a model that is
+already the app's own (`TSNetModel` is not upstream's shape any more), and
+one line to the relay next to its existing log call.
+
+### 4.6 `App/Browser/BrowserView.swift`
+
+```swift
+ZStack {
+    RawWebView(model: model).id(ObjectIdentifier(model)).ignoresSafeArea(.container, edges: .top)
+    PageStateView(state: model.pageState, gatewayMissing: gatewayMissing,
+                  onRetry: model.reload, onChooseGateway: onChooseGateway)
+}
+```
+
+- `RawWebView` stays in the hierarchy in every state, so the in-flight load
+  and the committed page are never torn down by a state change (today the
+  `if navError` branch removes the web view; keeping it is simpler and
+  avoids a re-`makeUIView` on retry).
+- `PageStateView` is `EmptyView` for `.idle` and `.committed` (unless
+  `gatewayMissing`), renders `NavErrorPage` for `.failed`, and is otherwise
+  an **opaque** full-size block on `Color.platformSystemBackground`. Its buttons are at opacity 1 with an
+  opaque background behind them — the M8 finding (a control at opacity < 1
+  over a `WKWebView` gets no taps) is the reason the block is opaque, and
+  tests 4 and 10 tap the buttons to prove it.
+- The 300 ms delay: `.task(id: since) { try? await Task.sleep(for: showDelay); pastShowDelay = true }`,
+  with `pastShowDelay` reset whenever `since` changes. The elapsed label
+  uses `TimelineView(.periodic(from: since, by: 1))`.
+- `NavErrorPage` keeps its name and identifier and gains the body in §3.2;
+  `debugEscaped` moves under Details.
+- Accessibility: the container is `.accessibilityElement(children: .contain)`;
+  the ticking number is a separate element whose **label** is static
+  ("elapsed") and whose **value** ticks, so VoiceOver reads it on focus and
+  does not announce every second. The indicator is never the only signal.
+
+### 4.7 `App/Browser/DashboardRootView.swift`
+
+- `DashboardContent` owns the one picker presentation already
+  (`showingGatewayPicker`, `:182, :242-257`). It passes
+  `onChooseGateway: { tab.viewModel.stopForGatewayChange(); showingGatewayPicker = true }`
+  and `gatewayMissing: homePageAvailability == .unavailable` into `BrowserView`.
+  Find, Change, the connecting hint and the error page all go through this
+  one path; two presentations never overlap (M5 review).
+- G1: `ProgressView()` becomes `Label("Starting Latchkey…", systemImage: …)`
+  with a spinner.
+- `#if LATCHKEY_TEST_HOOKS`: a hidden overlay `page-connecting-shown-count`
+  (opacity 0.01, like `session-auth-required-count` at `:259-266`) showing
+  how many times the connecting block became visible for this tab. A flash
+  between two looks is caught by the number.
+
+### 4.8 Discovery: `App/Discovery/GatewayDiscovery.swift`, `GatewayPickerView.swift`
+
+- `GatewayDiscovery` publishes, besides `phase`, `gateways`, `candidateCount`:
+  `probed` (outcomes received), `answered`, `unanswered` (= failures),
+  `startedAt: ContinuousClock.Instant?`, and `lastSweep: SweepSummary?`
+  (`candidates, answered, unanswered, gateways, elapsed`) set at the end.
+  Updated inside the existing outcome loop (`:160-187`); the generation
+  guard already prevents a superseded sweep from writing.
+- **The existing log lines are byte-for-byte unchanged**: `Discovery:
+  probing N of M peer(s)` and `Discovery: N gateway(s); first after …`
+  are parsed by `scripts/test-discovery.sh` (its regexes at lines ~150–165).
+  Progress goes to a **new** line, `Discovery: progress k/n at t ms`, at
+  most once a second.
+- `GatewayPickerView`: the rows of §3.5 replace `:48-55` and `:65-76`. The
+  scanning row is conditioned on `phase == .probing` **only**. *Search
+  again*'s label is `Searching…` while probing. The `gateway-sweep-done`
+  hidden text is kept (tests read it) and gains `answered/unanswered`:
+  `sweep-done:<gateways>:<answered>:<unanswered>`. Existing tests read only
+  the first field and keep working; the format is documented in the view.
+- Status → Gateway → "Last discovery" (`DiagnosticsView.swift:164-171`)
+  reads `lastSweep`: "1 of 4 candidates; 2 answered, 2 didn't, 4.1 s".
+
+### 4.9 One line per state
+
+Through `logger.log`, redacted as today (`redactedForLog`):
+
+```
+page-state: holding host=<r> 
+page-state: connecting host=<r> port=443 attempt=1
+page-state: connecting host=<r> port=443 attempt=7        (each retry)
+page-state: hint after 8004 ms
+page-state: committed after 812 ms
+page-state: failed cause=noAnswer code=-1000 after 30012 ms reply="general failure"
+page-state: stopped after 9200 ms
+picker-state: waiting-node
+picker-state: scanning 0/4
+picker-state: none answered=2 unanswered=2 in 4012 ms
+picker-state: found 1 in 447 ms
+gate-state: starting-hint after 15003 ms
+```
+
+### 4.10 Gate: `App/Tailnet Status/StatusView.swift`
+
+A `StalledHint(since:delay:text:)` view (shared with the picker and the page
+block) under the status row for `Connecting…` / `Starting…`; `Stopped` gets
+the sentence in §3.6. `since` is when the gate appeared or the state last
+changed, whichever is later.
+
+### 4.11 Diagnostics: `App/Diagnostics/DiagnosticsView.swift`
+
+Status → Page gains "State" (`pageState`, with its elapsed) and keeps "Last
+error", now the cause line; "Last proxy reply" from `lastProxyFailure`.
+Read-only, on device, nothing leaves (D1).
+
+### 4.12 Identifiers (the contract between the views and the tests)
+
+| Identifier | Element | Label / value read by tests |
+|---|---|---|
+| `page-connecting` | the block (D4/D5) | — |
+| `page-connecting-host` | text | "Connecting to <host>…" |
+| `page-connecting-elapsed` | text | value "<n> s" |
+| `page-connecting-hint` | text (from 8 s) | the hint |
+| `page-connecting-choose-gateway` | button (from 8 s) | — |
+| `page-holding`, `page-holding-hint` | block (D2), its 15 s hint | "Waiting for the tailnet's peer list before opening <host>…" |
+| `page-gateway-missing` | block body (D3) | — |
+| `nav-error-overlay` | the error page (kept) | — |
+| `nav-error-title`, `nav-error-cause`, `nav-error-next` | texts | §4.4 |
+| `nav-error-retry`, `nav-error-choose-gateway` | buttons | — |
+| `nav-error-details` | disclosure | escaped URL, domain, code, reply |
+| `page-connecting-shown-count` | hidden text (test builds) | integer |
+| `gateway-waiting-node`, `gateway-waiting-node-hint` | row (P1), its hint | "Waiting for the tailnet node… <n> s" |
+| `gateway-scanning` | row (P2/P3) | "Checking <n> computers on your tailnet · <k> of <n> done · <t> s" |
+| `gateway-none` (kept), `gateway-none-hint` | P4 line, its second line | §3.5 |
+| `gateway-proxy-unhealthy`, `gateway-refresh`, `gateway-sweep-done` (kept) | | `sweep-done:<g>:<a>:<u>` |
+| `gate-starting-hint` | gate hint (G2) | — |
+
+**Invariants this must not break** (see `../../app/AGENTS.md`):
+- the split tunnel decides what goes through the proxy; only tailnet hosts
+  do — nothing here touches `TailnetProxyPolicy` or the proxy configuration;
+- `allowFailover` stays false — a dead proxy still fails the load; the
+  failure is now *described*, not avoided;
+- ATS stays on with no exceptions; HTTPS only;
+- D1: no app or node logs leave the device — every diagnostic above is shown
+  in-app (the block, the error page's Details, Settings → Status/Logs);
+- a vendored-tree change is its own commit (R16) — there is none; the SOCKS
+  dial timeout is read, not changed;
+- the node's own banners (login, approval, expiry) keep priority: they are in
+  the layout above `BrowserView` and are unaffected by the page block.
 
 ## 5. State and migration
 
-None. Nothing new is persisted; `pageState` is per-tab and in memory.
+Nothing is persisted. `pageState`, the discovery counters and
+`lastProxyFailure` are in memory, per tab / per workspace, and reset on
+launch. A value written by the previous version does not exist.
 
 ## 6. End-to-end tests
 
-| Test | Suite | Asserts | Shown to fail by |
-|---|---|---|---|
-| A stalled load shows the connecting state, with the host named | L1 offline (stub proxy blackholed) | `page-connecting` appears within 1 s and names the host; no `nav-error-overlay` yet | removing the state: the screen stays bare |
-| The hint appears while the silent retries run | L1 offline | `page-connecting-hint` appears after the threshold and **while the log shows at least two "retrying" lines** — the retry path is what hid this | leaving `pageState` undefined across retries |
-| Giving up offers another gateway | L1 offline | after the retry deadline, `nav-error-overlay` with `nav-error-choose-gateway`; tapping it opens the picker | omitting the action; the test taps it |
-| A painted dashboard never shows the connecting state | session (M4), real KiroCrew bundle | `page-connecting` absent through the page's own reconnect, refetches and a `/__drop_ws` cut | driving the state from subresource loads |
-| Dismissing the picker lands on the empty state, not a blank screen | discovery (L2) | with no gateway, cancel the picker → `no-gateway` visible with both buttons; `no-gateway-find` reopens the picker | reverting to today's layout: nothing but the gear |
-| A sweep is visible while it runs, with the count | discovery (L2) | `gateway-scanning` present during the sweep (the harness's stalling peer keeps it ≥ 4 s) and gone when it ends; its label carries the candidate count | restoring the `gateways.isEmpty` condition, which hides it on a re-scan |
-| Search again shows progress even with rows already listed | discovery (L2) | after a first sweep found a gateway, tapping *Search again* shows `gateway-scanning` | the same regression as above |
-| No state leaves only the gear | discovery (L2) | a checklist pass over: no gateway, sweep running, sweep empty, gateway chosen but unreachable, load in flight, load failed — each asserts one named identifier on screen | deleting any one state's view |
+**Suites:** host `make test-policy`; L1 `scripts/test-offline.sh`
+(`OfflineHarnessTests`); L2 `scripts/test-tailnet.sh`; session
+`scripts/test-session.sh` (`SessionTests`, real 0.6.0 bundle); discovery
+`scripts/test-discovery.sh` (`DiscoveryTests`, L2 harness with `gw`, `dash`,
+`plain`, `slow`, purgatory); lifecycle `scripts/test-lifecycle.sh`.
+
+**Harness change (L1):** `testing/harness/socks5stub.py` gains
+`POST /mode?stall=<seconds>`: authenticate, journal the CONNECT as today,
+then **hold the socket silent for N seconds and reply 0x01 general failure**
+— tsnet's exact behaviour on dropped SYNs (`socks5.go:219-232`), at a
+duration the test chooses. `stall=0` clears it. The stub's `--map` and the
+relay in front stay as they are, so `lastProxyFailure` is populated in L1
+exactly as on the device.
+
+**Why a test that waits for a spinner to appear is racy, and what these do
+instead.** `waitForExistence` polls the accessibility tree; a state present
+for 300 ms–2 s is missed or caught by luck, and in the other direction a
+wait on a transient passes even when the state is stuck. So:
+
+1. **Make the state last.** Stall the transport (`stall=<n>`, purgatory, the
+   `slow` peer) so the state's minimum duration is known, and put the
+   checkpoints inside it.
+2. **Assert at absolute checkpoints**, timed from a stamp taken at the
+   triggering tap, not with `waitForExistence`. At each checkpoint read
+   `page-connecting-elapsed` (or the scanning row) and assert it is on
+   screen **and monotonic** since the last checkpoint.
+3. **"Gone" is asserted after server-side proof** the page is up (the fake
+   dashboard's report, `waitForReport`), never after a sleep.
+4. **"Never shown" and "shown once" read the hidden counter**
+   `page-connecting-shown-count`, which catches a flash between two looks.
+5. **Timing is read from the app's log** by the script, inside its log
+   window, as `test-discovery.sh` does for sweeps: `page-state: … after N ms`.
+6. Every checkpoint in every test below also calls
+   `assertSomethingIsSaid(app)`: at least one of `page-connecting`,
+   `page-holding`, `page-gateway-missing`, `nav-error-overlay`,
+   `gateway-picker`, `gateway-waiting-node`, `gateway-scanning`,
+   `gateway-none`, `connected-browser` **with** the fake dashboard's report,
+   `logged-in-connecting`, `needs-machine-auth`, `login-button` exists.
+   That is the "no state leaves only the gear" rule, enforced at every
+   moment a test looks rather than in one test that looks once.
+
+| # | Test | Suite | Asserts | Shown to fail by |
+|---|---|---|---|---|
+| 1 | `testStalledLoadShowsTheConnectingStateForItsWholeDuration` | L1 (`stall=22`: longer than the 20 s retry window, so — as on the device — one dial, no retry) | At 1 s, 4 s, 7 s, 11 s, 20 s after launch: `page-connecting` exists, `page-connecting-host` names `dash`, `page-connecting-elapsed` is monotonic; at 4 s the hint is **absent**, at 9 s and after **present** with `page-connecting-choose-gateway`. By 26 s `nav-error-overlay` with `nav-error-cause` containing "didn't answer on port 443 in 22 s" and `nav-error-retry`. Stub journal: **exactly one** CONNECT — the failure came after the 20 s window, so the silent retry loop did not run, which is the device's path (§1.1 step 6). Log: `page-state: failed cause=noAnswer … after 22xxx ms reply="general failure"`, and no `retrying` line. | Against today's build: nothing at any checkpoint. Then: freeze the elapsed label (monotonic fails); set the hint delay to 2 s (absent-at-4 s fails); restore the old `categorize` (the cause reads "URL format"). |
+| 2 | `testSilentStartupRetriesAreVisibleAndCounted` | L1 (`blackhole=1`, refuses at once) | At 2 s, 10 s, 19 s: `page-connecting` exists, elapsed monotonic from the **first** attempt, `page-connecting-shown-count` == **1**. The log window has ≥ 5 `Startup page transport not ready; retrying` lines and ≥ 5 `page-state: connecting … attempt=N` lines. By 25 s `nav-error-overlay` with cause containing "refused the connection on port 443" (the relay's reply) and `nav-error-retry`. | Resetting `pageState` to `.idle` on each failure (count > 1, elapsed restarts); leaving it undefined across retries (absent at 10 s). |
+| 3 | `testAFastLoadDoesNotLeaveTheConnectingStateOnScreen` | L1 (happy path) | After `waitForReport` shows the page up: `page-connecting` absent, `nav-error-overlay` absent, `page-connecting-shown-count` ≤ 1. | Leaving `pageState` at `.connecting` on `didCommit`. |
+| 4 | `testTheErrorPageOffersRetryAndAnotherGateway` | L1 (`blackhole=1`, then `=0`) | On `nav-error-overlay`: set `blackhole=0`, tap `nav-error-retry` → the stub journal shows a **second** CONNECT after the tap and the dashboard's report arrives (server-side). Relaunch with `blackhole=1`: on the error page tap `nav-error-choose-gateway` → `gateway-picker` exists. | Removing either button; making the block non-opaque (the tap dies, M8). |
+| 5 | `testMinusOneThousandIsNotAURLFormatError` | host | `PageFailureText.cause(domain: NSURLErrorDomain, code: -1000, proxyReply: nil, elapsed: 30 s)` is `.noAnswer`; with reply "connection refused" it is `.refused`; with elapsed 0.1 s and "general failure" it is `.proxyNotReady`; `.badAddress` only from the parse path. | Reverting `categorize`. |
+| 6 | `testFailureTextNamesHostPortAndCause` | host | Table-driven over §4.4: each output contains the host, the port, and its row's key phrase; none contains "bad URL" or "URL format" except `.badAddress`. | Changing any row's phrase. |
+| 7 | `testHoldingStateWhileThePeerListIsMissing` | L1 (fixture with an empty `Peer` map → `.checking`) | At 2 s and 5 s `page-holding` names the host; at 16 s `page-holding-hint` exists; `nav-error-overlay` never appears; the log has `page-state: holding`. (The "leaves" edge is pinned in 11.) | Against today's build: blank at every checkpoint. |
+| 8 | `testAScanShowsProgressForItsWholeDuration` | discovery | First-run picker, `gw` present, `slow` peer (4 s timeout, so the sweep lasts ~4 s). At 1 s: `gateway-scanning` exists with "of 4 done" and k ≥ 1; at 3 s: k ≥ 3, seconds monotonic; `gateway-refresh` label "Searching…" and disabled. After `gateway-sweep-done`: row absent, label `sweep-done:1:2:2`. The sweep-signature log lines are unchanged (the script's check still passes). | Against today's build: `gateway-searching` has no count and vanishes when `gw` answers (< 1 s), so the 3 s checkpoint fails. |
+| 9 | `testSearchAgainShowsProgressWithRowsListed` | discovery | Via the unreachable-banner Find sheet (`autoSelectSingle: false`, as `testFindFromTheUnreachableBannerSwitchesGateway`): once `gateway-gw.tail-scale.ts.net` is listed, tap `gateway-refresh`; within 500 ms `gateway-scanning` exists **while the row is still listed**; it is gone after `gateway-sweep-done`. | Restoring the `gateways.isEmpty` condition (`GatewayPickerView.swift:48`). |
+| 10 | `testDeviceCheckRehearsalPurgatoryThenAddressMove` (**extended**) | discovery | In purgatory: the first-run sweep ends with `gateway-none` reading "Checked 4 computers in 4 s. 0 answered…; 4 didn't answer at all." and `gateway-none-hint` naming Settings → Status. Then **enter `gw` manually — Olof's exact case**: at 1 s, 8 s, 20 s, 29 s `page-connecting` exists, elapsed monotonic, hint present from 8 s; by 35 s `nav-error-overlay` with cause "didn't answer on port 443 in 30 s" and the address hint; the harness journal shows **no** accept at `gw` from the app node; log `page-state: failed cause=noAnswer … after ≥ 29000 ms`. Tap `nav-error-choose-gateway` → the picker sheet; **then** `/move`; Search again lists `gw`; choose it; the token sheet opens with no navigation error (the existing tail of the test). The script's rule that the all-failed purgatory sweep happens **exactly once** still holds: the manual entry is a page load, not a sweep. | Against today's build: blank for 30 s then "URL format error" with no button — every checkpoint fails. |
+| 11 | `testTheChosenGatewayPersistsAcrossRelaunch` (**one assertion added**) | discovery | Once `token-sheet` is up after the relaunch, `page-holding` and `page-connecting` are absent and the log has `page-state: committed`. | Leaving `.holding` set when `loadInitial` finally loads. |
+| 12 | `testAPaintedDashboardNeverShowsTheConnectingState` | session | With the real bundle live: read `page-connecting-shown-count` after the first paint (c₀ ≤ 1); through the page's own WebSocket reconnect (`/__drop_ws`), its refetches and a sign-in navigation, the count stays c₀ and `page-connecting` is absent. | Driving `pageState` from `isLoading` KVO or from `didStartProvisionalNavigation`. |
+| 13 | `testASlowGatewayShowsConnectingUntilItsTimeout` | discovery | Manual entry of `slow` (accepts on 443, never answers): `page-connecting` at 1 s, 10 s, 20 s with elapsed monotonic; the test terminates the app at 25 s (WebKit's own timeout for this shape is not yet measured; §8). | Against today's build: blank. |
+| 14 | Lifecycle | lifecycle | No new test; the suite must stay green. A frozen process resumes with a larger elapsed number, and the R30 relay restart's reload (`applyProxy` → `reload`) moves `.failed` → `.connecting` again, incrementing the counter legitimately. | — |
+
+Gate states G2/G6 have no harness that can hold the node in `Starting` or
+`Stopped` today; the `StalledHint` threshold logic is pure and covered by a
+host check, and the gate text is confirmed on the device (§8). Said plainly
+rather than pretended.
 
 ## 7. Acceptance criteria
 
-- In every state enumerated in §2, a named identifier is on screen; the
-  checklist test enforces it.
-- The connecting state appears within 1 s of a main-frame load that has not
-  painted, survives the silent retries, and is gone on paint.
-- A sweep is visibly in progress for its whole duration, including re-scans.
-- The owner can always reach the gateway picker without going through Settings:
-  from the empty state, and from a failed load.
-- L1, discovery and session suites stay green.
+Each with its instrument.
+
+1. **No bare screen.** In every test above, `assertSomethingIsSaid` holds at
+   every checkpoint — *XCUITest*. On the device, a screenshot at 1 s, 8 s
+   and 30 s after a manual entry to a gateway the node cannot reach shows the
+   block, the hint and the error page respectively — *`make look` / a photo*.
+2. **The connecting block appears within 300 ms + one render of a load that
+   has not committed, survives the silent retries with its clock running from
+   the first attempt, and is gone on commit** — tests 1, 2, 3; the log's
+   `page-state:` lines with elapsed ms, checked by the script.
+3. **The failure names host, port, elapsed time and the most likely cause,
+   and offers Try again and Choose another gateway** — tests 1, 2, 4, 5, 6,
+   10; the relay's reply name appears in `nav-error-details` — *accessibility
+   tree + app log*.
+4. **A SOCKS failure is never labelled a URL format error** — tests 1, 5, 6.
+5. **A sweep is visibly in progress for its whole duration, including a
+   re-scan with rows listed, with a count that moves and seconds that tick;
+   its end names answered and unanswered and, when nothing answered, the
+   likely cause** — tests 8, 9, 10; `sweep-done:<g>:<a>:<u>`;
+   `picker-state:` log lines; the script's existing sweep-signature check
+   still passes unchanged.
+6. **The picker never shows a disabled Search again with no explanation** —
+   `gateway-waiting-node` exists whenever `ready == false` (test 8's first
+   look, before the node's status; and the log's `picker-state:
+   waiting-node`).
+7. **The owner can always reach the picker without Settings**: from the
+   connecting hint, the error page, the banner — tests 4, 10.
+8. **Nothing is covered that was painted** — test 12, counter unchanged
+   through a reconnect.
+9. **Suites green:** host, L1, L2, discovery, session, lifecycle; the
+   discovery script's timing rules unchanged and passing.
+10. **D1:** `scripts/check-no-log-upload.sh` unchanged and green; nothing new
+    writes off-device.
 
 ## 8. Open questions and owner actions
 
-- Wording is the author's; the owner may want the hint blunter or shorter.
-- Should the connecting state show which port is being tried once F1 lands?
-  Probably yes, as `byskebox:8443` — decide when F1 is in.
-- A later feature could name the actual cause (locked-out node, no grant) by
-  reading the node's own health; recorded as an open question in DECISIONS
-  rather than guessed at here.
+Only Olof can answer these; nothing in §4 waits on them.
+
+1. **Which field did you type `byskebox` into** — the picker's *Enter
+   manually*, or Settings → Gateway? Both reach `selectGateway`; the answer
+   only confirms the trace in §1.1.
+2. **Did you wait ~30 s** and see "Unable to Load Page / URL format error",
+   or leave before it? If you saw it, the label's wrongness is confirmed on
+   the device as well as in the code.
+3. **The hint's tone.** "whoever manages the tailnet needs this device's
+   address" is written for the one tailnet you manage yourself; say if it
+   should be blunter ("you haven't granted this device access yet").
+4. **Choose another gateway at 8 s** — offered during the wait, or only
+   after the failure? Specified: during (from 8 s). Say if that invites
+   abandoning loads that would have succeeded.
+5. **Tailnet lock.** DECISIONS' open question stands: should Status say
+   "locked out" from the node's own tailnet-lock field? It is one more way
+   for "nothing answers at all" to happen; the P4 hint would then name it.
+   Not in this feature unless you say so.
+6. **Device confirmation** of G2/G6 wording, which no harness can drive.
 
 ## 9. Log
 
-- 2026-09-23: specified, superseding F2. The bugfix Olof asked for in the same
-  message — the probe timeout — landed separately as R39 (4 s per probe, 12 s
-  per sweep; app `8a5220b51`), because it needed no UI work.
+- 2026-09-23: specified, superseding F2. The bugfix Olof asked for in the
+  same message — the probe timeout — landed separately as R39 (4 s per
+  probe, 12 s per sweep; app `8a5220b51`), because it needed no UI work.
+- 2026-09-23, design pass: every state enumerated from the code (§2). The
+  first draft's diagnosis was wrong: the blank screen was the plain
+  connecting state for the full 30 s SOCKS dial (`socks5.go:99`), not the
+  20 s silent-retry loop, which cannot fire on a dial that long. Case C (a
+  dismissed picker sheet over emptiness) does not exist and was dropped. New
+  findings: the error page labels every SOCKS failure "URL format error" and
+  has no buttons at all on a phone; the picker shows a disabled button and
+  nothing else before the node's status; a re-scan shows nothing. Timing
+  thresholds fixed (§4.1), failure wording fixed (§4.4), tests rewritten
+  around checkpoints and counters rather than waits for transients (§6).
