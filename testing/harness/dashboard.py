@@ -69,6 +69,7 @@ from tls_accept import HandshakeInThread, wrap_listener
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 STATE_LOCK = threading.Lock()
+FRONT_STATUS = 0      # 0 = serve the page; 502/503/504/500 = answer that, live
 REPORTS = {}          # host -> latest report dict
 REQUESTS = {}         # host -> count of page-side requests
 PATHS = deque(maxlen=200)
@@ -188,6 +189,20 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
     def do_GET(self):
         self.count()
         path = self.path.split("?", 1)[0]
+        # A 5xx on a LIVE connection, which is a different failure from every
+        # other mode here. The others close, reset or blackhole, and all of
+        # those raise an NSURLError the app can see. `tailscale serve`'s
+        # reverse proxy has no error handler, so a stopped Kiro Crew answers
+        # 502 with an empty body on a healthy port 443: TLS completes, no
+        # NSURLError exists, and until F4 D10 the app committed that emptiness
+        # as the document. Reproducing it needs a server that answers, so it
+        # could not be tested with any mode the harness already had.
+        if FRONT_STATUS and path in ("/", "/index.html"):
+            self.send_response(FRONT_STATUS)
+            # Go's httputil.ReverseProxy default error handler sends no body.
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/ws":
             return self.ws()
         if path == "/events":
@@ -211,6 +226,16 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.count()
+        # POST /__mode?front=502 makes the document answer 5xx on a live
+        # connection; front=0 restores it. Deliberately only the document, so
+        # /__state and /__report keep working while the front is "down" and a
+        # test can still read what happened.
+        if self.path.split("?", 1)[0] == "/__mode":
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            global FRONT_STATUS
+            FRONT_STATUS = int((q.get("front") or ["0"])[0])
+            return self.body(json.dumps({"front": FRONT_STATUS}).encode(),
+                             "application/json")
         if self.path != "/__report":
             return self.body(b"not found", "text/plain", 404)
         n = int(self.headers.get("Content-Length") or 0)

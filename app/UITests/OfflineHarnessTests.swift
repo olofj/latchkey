@@ -158,6 +158,48 @@ final class OfflineHarnessTests: XCTestCase {
         try await assertZeroRequests(host: "dash.localtest.me")
     }
 
+    // MARK: - A 5xx on a live connection (F4 D10)
+
+    /// A gateway that answers **502 on a healthy port** must show the error
+    /// page, not commit an empty body as the document.
+    ///
+    /// This is the shape production actually produces and no other test here
+    /// covers: `tailscale serve`'s reverse proxy has no error handler, so a
+    /// stopped Kiro Crew answers 502 while TLS completes normally. Every other
+    /// failure mode in this harness — close, reset, blackhole — raises an
+    /// `NSURLError` the app can see. This one raises nothing at all, which is
+    /// why the blank screen went unnoticed: before F4 D10 the delegate allowed
+    /// every response without looking at its status.
+    func testAGatewayAnswering502ShowsTheErrorPageInsteadOfABlankScreen() async throws {
+        // Registered BEFORE the mode is set, and as a teardown block rather
+        // than a `defer` with a detached Task: the restore must be awaited, or
+        // a failure here leaves the harness answering 502 and every later test
+        // in this file fails for the wrong reason.
+        addTeardownBlock {
+            try? await Self.post("\(Self.dashboardControl)/__mode?front=0")
+        }
+        try await Self.post("\(Self.dashboardControl)/__mode?front=502")
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        defer { app.terminate() }
+        try assertErrorPage(app, "a 502 on a live port must not commit as the page")
+        // Pin the cause. Without this the test would pass on any failure —
+        // including the transport failures the other modes produce, which are
+        // exactly what this test exists to distinguish itself from.
+        let stopped = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] %@", "isn't running")).firstMatch
+        XCTAssertTrue(stopped.waitForExistence(timeout: 5),
+                      "the page should say Kiro Crew is not running behind the gateway")
+        let reassurance = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] %@", "tailnet and the gateway are fine")).firstMatch
+        XCTAssertTrue(reassurance.exists,
+                      "and should say the tailnet is not the problem, so the owner does not debug grants")
+        // The connection really was made and really was answered: this is not
+        // a dial that failed.
+        let connects = try await journalConnects()
+        XCTAssertTrue(connects.contains { $0.host == "dash.tail-scale.ts.net" && $0.port == 443 },
+                      "the load must have reached the server through the proxy; got \(connects)")
+    }
+
     // MARK: - The error page (coverage lost with the address bar in M1)
 
     /// A certificate that does not name the host fails the load onto the
