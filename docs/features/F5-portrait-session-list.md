@@ -478,10 +478,17 @@ vendored-tree change.
   - Written by the previous version: the key is absent → decoded as `nil`,
     treated as `[]`; the list is seeded with the current `homePageURL`'s origin
     on first use, so an upgrade shows one known gateway, the current one.
-    Declared optional precisely so the existing `Codable` synthesis keeps
-    reading old files without a custom `init(from:)`.
-  - Read by an older build: an unknown key is ignored by the synthesised
-    decoder; a downgrade loses the list and nothing else.
+    **Superseded 2026-09-23:** this used to say "declared optional precisely so
+    the existing `Codable` synthesis keeps reading old files without a custom
+    `init(from:)`". There **is** a custom `init(from:)` now —
+    `WorkspaceDefinition` grew one when the review found that any decode failure
+    silently orphaned the tsnet node identity. Optionality alone no longer buys
+    compatibility: **this field must be added to `CodingKeys` and to
+    `init(from:)` explicitly**, defaulting to `nil`. Omitting it means the key is
+    never read at all, which looks identical to an upgrade working.
+    `app/scripts/test-workspace-store.swift` is where the new row goes.
+  - Read by an older build: an unknown key is ignored by the decoder; a
+    downgrade loses the list and nothing else.
   - Contents: origins only, ≤ 8, no ordering beyond most-recent-first. A
     reset (R32 "delete this workspace") deletes the file and the list with it.
 - Backup exclusion (R5) is unchanged: `workspaces.json` holds an origin today

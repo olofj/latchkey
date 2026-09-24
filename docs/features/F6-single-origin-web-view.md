@@ -724,7 +724,18 @@ this app does not use anywhere (`SettingsViewModel` reads and writes the
 definition, and `BackupExclusion` notes the Keychain is unused too). Optional
 so a definition written by an older build decodes with the key absent, which
 reads as `true` and matches Olof's decision; an older build reading a newer
-definition ignores the key. Because the value selects which rules compile, it is
+definition ignores the key.
+
+**Optional is necessary but no longer sufficient (2026-09-23).**
+`WorkspaceDefinition` now has a hand-written `init(from:)`, added because the
+review found that *any* decode failure silently orphaned the tsnet node
+identity. A new field is therefore only read if it is added to **`CodingKeys`
+and `init(from:)`** — declaring it optional and relying on synthesis would
+compile, decode nothing, and look exactly like a working upgrade. Add a row to
+`app/scripts/test-workspace-store.swift` asserting the flag survives a round
+trip and that its absence reads as `true`.
+
+Because the value selects which rules compile, it is
 part of the rule-list identifier (§4.1a), so flipping it recompiles rather than
 reusing the previous list.
 
