@@ -173,9 +173,13 @@ if ! build -allowProvisioningUpdates; then
 fi
 
 APP_PATH="$DERIVED/Build/Products/Release-iphoneos/Latchkey.app"
-echo "::: install"
+# Launch what was just installed, by the id in its own Info.plist, not a
+# literal: with Local.xcconfig setting another id, a literal built and
+# installed fine and then failed to launch, blaming the developer profile.
+BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$APP_PATH/Info.plist")
+echo "::: install $BUNDLE_ID"
 xcrun devicectl device install app --device "$DEVICE" "$APP_PATH"
-echo "::: launch"
-xcrun devicectl device process launch --device "$DEVICE" net.lixom.latchkey \
+echo "::: launch $BUNDLE_ID"
+xcrun devicectl device process launch --device "$DEVICE" "$BUNDLE_ID" \
     || echo "(not launched: the first time, trust the developer profile on the phone --" \
             "Settings → General → VPN & Device Management -- then open Latchkey)"
