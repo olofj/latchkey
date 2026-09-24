@@ -120,9 +120,15 @@ def tailnet_patterns(names):
 def ip_patterns(ips):
     r"""Word-bounded patterns, one RFC 5737 placeholder each.
 
-    The `\b` at the end is load-bearing: without it, scrubbing `192.0.2.3`
-    would also rewrite the first ten characters of `192.0.2.4` and leave a
+    The `\b` at the end is load-bearing: without it, scrubbing `203.0.113.5`
+    would also rewrite the first eleven characters of `203.0.113.50` and leave a
     mangled address behind.
+
+    Both examples are RFC 5737 documentation addresses, and that is not decoration.
+    The first version of this docstring made the point with the real address it had
+    just removed, so the next run scrubbed the example and left the near-miss --
+    itself an unreviewed address, in the same /24 as the owner's -- sitting in the
+    one file whose job is to explain why that must not happen.
     """
     out = []
     for n, ip in enumerate(ips, start=1):

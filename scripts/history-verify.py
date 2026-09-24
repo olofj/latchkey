@@ -75,6 +75,10 @@ TSNET_ALLOWED = {
     # against the pre-scrub tree: it reads the same there, so it is someone's
     # invention and not a name the scrub mangled into looking invented.
     b"testgoblin.ts.net",
+    # Invented, in an earlier commit's version of a comment in this very file,
+    # illustrating the mixed-case spelling that got through two scrubs. Kept
+    # rather than scrubbed: it never named anyone's network.
+    b"mixed-case.ts.net",
     # The owner's own machine, used DELIBERATELY as the canonical example gateway
     # in fourteen files, including strings the user sees ("Connecting to
     # byskebox…") and the GitHub issue template. It is a node name, not a tailnet:
@@ -133,8 +137,11 @@ def ip_class_is_fine(text):
         return None
     if addr in ipaddress.ip_network("100.64.0.0/10"):
         return True                     # tsnet-side; the owner said these may stay
-    if addr in ipaddress.ip_network("192.0.2.0/24"):
-        return True                     # RFC 5737, what the scrub substitutes
+    if any(addr in ipaddress.ip_network(net) for net in
+           ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")):
+        return True                     # RFC 5737: what the scrub substitutes, and
+                                        # what every worked example must be written
+                                        # in, so that scrubbing cannot mangle one
     return (addr.is_private or addr.is_loopback or addr.is_multicast
             or addr.is_reserved or addr.is_unspecified
             or addr in ipaddress.ip_network("0.0.0.0/8"))
