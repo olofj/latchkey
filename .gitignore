@@ -9,7 +9,6 @@ testing/harness/*.log
 # The aperture-plus fork is its own git repository (branch main; `upstream` is a
 # read-only fetch source), not a submodule of this one. It has no remote of its
 # own, so it exists only where it was built. See docs/DECISIONS.md.
-app/
 
 # Offline harness runtime state (pidfiles, logs, the proxy journal).
 testing/harness/.run/
