@@ -117,24 +117,42 @@ final class SettingsViewModel: ObservableObject {
             .store(in: &observers)
     }
 
+    /// Why the last Gateway entry was refused, for the field to show; nil
+    /// once an entry is accepted or the field is left alone.
+    @Published private(set) var gatewayError: String?
+
     /// Applies what is in the Gateway field (M5): on Return and when Settings
     /// closes, never per keystroke. Per-keystroke writes let a cleared field
     /// mean "no gateway" and swap the first-run picker in under Settings (M5
     /// review). An empty or unusable entry keeps the current gateway.
-    /// Normalized like the picker's manual entry: a bare name is qualified
-    /// with the tailnet's suffix, and the scheme is always https -- the old
-    /// URL-bar normalization produced http://, which ATS now blocks (R28).
+    /// Normalized AND checked by the same gate as the picker's manual entry
+    /// (`GatewayCandidates.manualGateway`): a bare name is qualified with the
+    /// tailnet's suffix, the scheme is always https -- the old URL-bar
+    /// normalization produced http://, which ATS now blocks (R28) -- and a
+    /// host the tailnet does not carry is refused. Settings once skipped
+    /// that check, so a typed public host loaded direct, became the trusted
+    /// origin, and would have received a pasted token.
     func commitGateway() {
         let current = workspace.homePage.url
+        // An untouched field is not a request; Settings closing must not
+        // re-judge the current gateway against a rule set that may be gone.
+        guard homePage != current else { gatewayError = nil; return }
         let suffix = workspace.model.localStatus?.CurrentTailnet?.MagicDNSSuffix
-        guard let origin = GatewayCandidates.manualOrigin(homePage, suffix: suffix) else {
-            if homePage != current { homePage = current }
-            return
+        switch GatewayCandidates.manualGateway(homePage, suffix: suffix, policy: workspace.model.proxyPolicy) {
+        case .failure(.notAHost):
+            // Cleared or unusable: keep the current gateway, quietly.
+            homePage = current
+        case .failure(let refusal):
+            logger.log("Settings: gateway \(LogRedaction.scrub(homePage)) refused: \(refusal)")
+            gatewayError = refusal.message
+            homePage = current
+        case .success(let origin):
+            gatewayError = nil
+            if homePage != origin { homePage = origin }
+            guard origin != current else { return }
+            logger.log("Settings: gateway \(LogRedaction.scrub(current)) -> \(origin)")
+            workspace.selectGateway(origin)
         }
-        if homePage != origin { homePage = origin }
-        guard origin != current else { return }
-        logger.log("Settings: gateway \(LogRedaction.scrub(current)) -> \(origin)")
-        workspace.selectGateway(origin)
     }
 
     /// A gateway chosen in Settings' picker.

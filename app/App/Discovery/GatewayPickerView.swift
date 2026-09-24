@@ -96,7 +96,7 @@ struct GatewayPickerView: View {
                         .onSubmit(useManual)
                         .accessibilityIdentifier("gateway-manual-field")
                     Button("Use this gateway", action: useManual)
-                        .disabled(GatewayCandidates.manualOrigin(manual, suffix: suffix) == nil)
+                        .disabled(!GatewayCandidates.isPlausibleGatewayName(manual, suffix: suffix))
                         .accessibilityIdentifier("gateway-manual-use")
                     if let manualError {
                         Text(manualError)
@@ -156,17 +156,19 @@ struct GatewayPickerView: View {
 
     private var suffix: String? { model.localStatus?.CurrentTailnet?.MagicDNSSuffix }
 
+    /// Only a host the tailnet carries: anything else would load direct, off
+    /// the tailnet, and become the sign-in origin (M5 review). The check is
+    /// `GatewayCandidates.manualGateway`'s, shared with Settings → Gateway,
+    /// and it fails closed -- the version that lived here let a host that
+    /// did not re-parse, or a missing policy, through.
     private func useManual() {
-        guard let origin = GatewayCandidates.manualOrigin(manual, suffix: suffix) else { return }
-        // Only a host the tailnet carries: anything else would load direct,
-        // off the tailnet, and become the sign-in origin (M5 review).
-        if let host = URL(string: origin)?.host(), let policy = model.proxyPolicy,
-           policy.matchingRule(for: host) == nil {
-            manualError = "\(host) isn't on your tailnet. Enter the name of a computer on it, like gateway or gateway.<tailnet>.ts.net."
-            return
+        switch GatewayCandidates.manualGateway(manual, suffix: suffix, policy: model.proxyPolicy) {
+        case .success(let origin):
+            manualError = nil
+            onSelect(origin)
+        case .failure(let refusal):
+            manualError = refusal.message
         }
-        manualError = nil
-        onSelect(origin)
     }
 
 }

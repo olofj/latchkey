@@ -61,18 +61,68 @@ expect(GatewayCandidates.authProbeIsKiroCrew(status: 403, authRequiredHeader: "t
 expect(!GatewayCandidates.authProbeIsKiroCrew(status: 403, authRequiredHeader: nil), "a bare 403 is not KiroCrew's")
 expect(!GatewayCandidates.authProbeIsKiroCrew(status: 200, authRequiredHeader: nil), "an open /api/auth/me is not a KiroCrew denial")
 
-print("== manual entry")
+print("== manual entry: the gate (M5.3, M5 review)")
+// The live policy, as TSNetManager builds it: the MagicDNS suffix, each
+// peer's FQDN and short name. `shared` is a node another tailnet shared in,
+// so its FQDN is under a different suffix and only its own rule carries it.
 let sfx = "tail-scale.ts.net"
-expect(GatewayCandidates.manualOrigin("dash", suffix: sfx) == "https://dash.tail-scale.ts.net", "a bare name is qualified")
-expect(GatewayCandidates.manualOrigin("  Dash.Tail-Scale.ts.net.  ", suffix: sfx) == "https://dash.tail-scale.ts.net",
+let status = IpnState.Status(
+    SelfStatus: IpnState.PeerStatus(HostName: "latchkey-iphone", DNSName: "latchkey-iphone.tail-scale.ts.net."),
+    CurrentTailnet: IpnState.TailnetStatus(MagicDNSSuffix: sfx),
+    Peer: ["d": IpnState.PeerStatus(HostName: "dash", DNSName: "dash.tail-scale.ts.net."),
+           "s": IpnState.PeerStatus(HostName: "shared", DNSName: "shared.example.ts.net.")])
+let policy = TailnetProxyPolicy.make(from: status)
+typealias Refusal = GatewayCandidates.ManualEntryRefusal
+extension Result where Failure == Refusal {
+    var failureMessage: String? { if case .failure(let r) = self { return r.message }; return nil }
+}
+func gate(_ raw: String, suffix: String? = sfx, policy p: TailnetProxyPolicy? = policy) -> Result<String, Refusal> {
+    GatewayCandidates.manualGateway(raw, suffix: suffix, policy: p)
+}
+
+expect(gate("dash") == .success("https://dash.tail-scale.ts.net"), "a bare name is qualified, and the suffix rule carries it")
+expect(gate("  Dash.Tail-Scale.ts.net.  ") == .success("https://dash.tail-scale.ts.net"),
        "trimmed, lowercased, trailing dot dropped")
-expect(GatewayCandidates.manualOrigin("http://dash.tail-scale.ts.net:5476/x?y", suffix: sfx) == "https://dash.tail-scale.ts.net",
+expect(gate("http://dash.tail-scale.ts.net:5476/x?y") == .success("https://dash.tail-scale.ts.net"),
        "always https, no port, path or query (R26)")
-expect(GatewayCandidates.manualOrigin("https://gw.example.ts.net/", suffix: sfx) == "https://gw.example.ts.net",
-       "another tailnet's FQDN is taken as typed")
-expect(GatewayCandidates.manualOrigin("dash", suffix: nil) == "https://dash", "no suffix known: left bare")
-expect(GatewayCandidates.manualOrigin("", suffix: sfx) == nil && GatewayCandidates.manualOrigin("a b", suffix: sfx) == nil,
-       "nothing, or not a host")
+expect(gate("dash", suffix: nil) == .success("https://dash"), "no suffix known: left bare, carried by the short-name rule")
+expect(gate("shared.example.ts.net") == .success("https://shared.example.ts.net"),
+       "a node shared in from another tailnet is carried by its own FQDN rule")
+expect(gate("") == .failure(.notAHost) && gate("a b") == .failure(.notAHost), "nothing, or not a host")
+
+// The Settings hole: a public host typed there loaded direct, became the
+// trusted origin, and would have received a pasted token.
+expect(gate("evil.example") == .failure(.offTailnet(host: "evil.example")),
+       "a public host is refused, whichever field it was typed into: \(gate("evil.example"))")
+expect(gate("https://gw.example.ts.net/") == .failure(.offTailnet(host: "gw.example.ts.net")),
+       "another tailnet's FQDN is refused unless this tailnet carries it (it used to be taken as typed)")
+expect(gate("evil.example").failureMessage
+       == "evil.example isn't on your tailnet. Enter the name of a computer on it, like gateway or gateway.<tailnet>.ts.net.",
+       "the picker's wording, kept: \(gate("evil.example").failureMessage ?? "nil")")
+
+// Fail closed. The picker's own check let a nil policy, or a host that did
+// not re-parse, straight through.
+expect(gate("dash", policy: nil) == .failure(.tailnetNotReady), "no policy: nothing is accepted")
+expect(gate("dash", policy: .ipRangesOnly) == .failure(.tailnetNotReady),
+       "the bootstrap policy (no peer data yet) accepts nothing, and says why rather than 'not on your tailnet'")
+expect(gate("evil.example", policy: nil) == .failure(.tailnetNotReady), "no policy: not even a refusal that names a rule")
+expect((gate("dash", policy: nil).failureMessage ?? "").contains("moment"), "the not-ready wording says to try again")
+
+// Every acceptance is of the very host the origin names: no origin comes
+// out whose host the policy does not carry.
+for raw in ["dash", "DASH.tail-scale.ts.net", "https://shared.example.ts.net:8443/path", "latchkey-iphone",
+            "gw_1", "dash..", "xn--80ak6aa92e", "evil.example", "shared", "not on tailnet"] {
+    if case .success(let origin) = gate(raw) {
+        let host = URLComponents(string: origin)?.host ?? ""
+        expect(origin == "https://\(host)" && policy.matchingRule(for: host) != nil,
+               "\(raw) -> \(origin): accepted only because the policy carries \(host)")
+    }
+}
+expect(GatewayCandidates.isPlausibleGatewayName("dash", suffix: sfx)
+       && GatewayCandidates.isPlausibleGatewayName("evil.example", suffix: sfx)
+       && !GatewayCandidates.isPlausibleGatewayName("", suffix: sfx)
+       && !GatewayCandidates.isPlausibleGatewayName("a b", suffix: sfx),
+       "plausibility enables the button; it says nothing about the tailnet")
 
 print(failures == 0 ? "\(checks)/\(checks) gateway candidate checks passed" : "\(failures) of \(checks) gateway candidate checks FAILED")
 exit(failures == 0 ? 0 : 1)

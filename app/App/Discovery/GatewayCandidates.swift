@@ -6,10 +6,12 @@
 //  Latchkey
 //
 //  Which tailnet peers are worth probing for a KiroCrew gateway, and how to
-//  tell a gateway when one answers (PLAN M5.1/5.2, revision R26). Foundation
-//  only — no TailscaleKit — so scripts/test-gateway-candidates.sh compiles it
-//  on the host. `GatewayPeer.init(peer:)` (GatewayDiscovery.swift) is the only
-//  bridge from the node's status.
+//  tell a gateway when one answers (PLAN M5.1/5.2, revision R26) -- and the
+//  one gate a gateway the owner TYPED passes through (`manualGateway`), from
+//  whichever field. No TailscaleKit: scripts/test-gateway-candidates.sh
+//  compiles it on the host with the real TailnetProxyPolicy and the proxy
+//  tests' stubs. `GatewayPeer.init(peer:)` (GatewayDiscovery.swift) is the
+//  only bridge from the node's status.
 //
 //  R26's filters, and why:
 //   - Online, not Expired: an offline node cannot answer, and a probe to it
@@ -109,10 +111,59 @@ enum GatewayCandidates {
 
     // MARK: - Manual entry (M5.3)
 
-    /// `https://<host>` from what the user typed: a bare name is qualified
-    /// with the tailnet's MagicDNS suffix, any path or query is dropped, and
-    /// the scheme is always https (R26).
-    static func manualOrigin(_ raw: String, suffix: String?) -> String? {
+    /// Why a typed gateway was refused; `message` is what the owner reads.
+    enum ManualEntryRefusal: Error, Equatable, Sendable {
+        /// Nothing, or not a host name (spaces, unparseable).
+        case notAHost
+        /// The split-tunnel rule set has no peer data yet, so nothing can be
+        /// checked -- and so nothing is accepted.
+        case tailnetNotReady
+        /// No rule carries `host`: it would load direct.
+        case offTailnet(host: String)
+
+        var message: String {
+            switch self {
+            case .notAHost:
+                return "Enter the name of a computer on your tailnet, like gateway or gateway.<tailnet>.ts.net."
+            case .tailnetNotReady:
+                return "The tailnet's peer list hasn't arrived yet, so this name can't be checked. Try again in a moment."
+            case .offTailnet(let host):
+                return "\(host) isn't on your tailnet. Enter the name of a computer on it, like gateway or gateway.<tailnet>.ts.net."
+            }
+        }
+    }
+
+    /// THE gate for a gateway the owner typed, whichever field it was typed
+    /// into: the picker's manual entry, Settings → Gateway, and any field
+    /// added later. Returns `https://<host>` only when `policy` -- the live
+    /// split-tunnel rule set -- carries `host`. Anything else would load
+    /// direct, off the tailnet, and become the sign-in origin a pasted token
+    /// is sent to (M5 review). The picker had this check and Settings did
+    /// not; now neither can have it alone, because the normaliser that
+    /// builds the origin is private to this gate.
+    ///
+    /// Fails closed: the rule is checked against the very host the origin is
+    /// built from (no re-parse that could come back nil and skip it), and
+    /// with no policy, or one without peer data yet, nothing is accepted.
+    static func manualGateway(_ raw: String, suffix: String?,
+                              policy: TailnetProxyPolicy?) -> Result<String, ManualEntryRefusal> {
+        guard let host = manualHost(raw, suffix: suffix) else { return .failure(.notAHost) }
+        guard let policy, policy.hasPeerData else { return .failure(.tailnetNotReady) }
+        guard policy.matchingRule(for: host) != nil else { return .failure(.offTailnet(host: host)) }
+        return .success("https://\(host)")
+    }
+
+    /// Whether `raw` could name a gateway at all -- for enabling a button.
+    /// No promise about the tailnet: `manualGateway` decides that.
+    static func isPlausibleGatewayName(_ raw: String, suffix: String?) -> Bool {
+        manualHost(raw, suffix: suffix) != nil
+    }
+
+    /// The host from what the user typed: a bare name is qualified with the
+    /// tailnet's MagicDNS suffix, any scheme, port, path or query is dropped
+    /// (the scheme is always https, R26). Private on purpose: an origin for
+    /// the app to load comes only from `manualGateway`, checked.
+    private static func manualHost(_ raw: String, suffix: String?) -> String? {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         if let range = text.range(of: "://") { text = String(text[range.upperBound...]) }
@@ -124,6 +175,6 @@ enum GatewayCandidates {
         if !host.contains("."), let suffix, !suffix.isEmpty {
             host += "." + suffix.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         }
-        return "https://\(host)"
+        return host
     }
 }
