@@ -145,6 +145,10 @@ if ! sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1;
     SANDBOX_FLAGS=("OTHER_SWIFT_FLAGS=\$(inherited) -disable-sandbox")
 fi
 DERIVED=build/DeviceDerivedData
+# The build log goes under build/, which nothing has created on a fresh clone
+# (it is gitignored): without this the redirect below died with a bare "No
+# such file or directory" where every other check here explains itself.
+mkdir -p build || { echo "error: cannot create app/build for the build log and derived data" >&2; exit 1; }
 build() {  # extra xcodebuild arguments
     xcodebuild build -project Latchkey.xcodeproj -scheme Latchkey -configuration Release \
         -destination "platform=iOS,id=$DEVICE" -derivedDataPath "$DERIVED" \
