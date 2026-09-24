@@ -73,9 +73,13 @@ echo "::: rewritten: $BEFORE_COUNT commits -> $AFTER_COUNT"
 
 # --- verify, and say so in terms of what was supposed to happen --------------
 fail=0
+# Against the REWRITTEN branch only. `--all` reaches the backup tag and
+# refs/original/, which still point at the old history on purpose, so verifying
+# across them reports every scrubbed name as still present -- a false failure on
+# a scrub that worked, which is exactly what the first run produced.
 check_absent() {  # label, pattern
     local n
-    n=$(git grep -I -l "$2" $(git rev-list --all) -- 2>/dev/null | wc -l | tr -d ' ')
+    n=$(git grep -I -l "$2" $(git rev-list HEAD) -- 2>/dev/null | wc -l | tr -d ' ')
     if [[ "$n" != "0" ]]; then
         echo "  FAIL: $1 still present in $n blob(s)" >&2
         fail=1
@@ -91,7 +95,7 @@ done
 
 # The other direction: what must have SURVIVED. A scrub that ate Kiro Crew
 # would pass every check above and break discovery on every tailnet.
-kept=$(git grep -I -l "KiroCrew" $(git rev-list --all) -- 2>/dev/null | wc -l | tr -d ' ')
+kept=$(git grep -I -l "KiroCrew" $(git rev-list HEAD) -- 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$kept" == "0" ]]; then
     echo "  FAIL: KiroCrew is gone from history; it is a different product and" >&2
     echo "        discovery matches on its manifest name" >&2

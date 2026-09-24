@@ -81,7 +81,14 @@ def scrub(text):
     for i, keep in enumerate(PRESERVE):
         text = text.replace(f"\x00P{i}\x00", keep)
     if REAL_TAILNET:
+        # The full MagicDNS domain FIRST, then the bare first label. The label
+        # alone appears in greps, comments and guard patterns -- the first run
+        # of this scrub replaced only the full domain and left 304 blobs
+        # carrying the bare name, which is no less identifying.
         text = text.replace(REAL_TAILNET, PLACEHOLDER)
+        label = REAL_TAILNET.split(".")[0]
+        if label and label != REAL_TAILNET:
+            text = text.replace(label, PLACEHOLDER.split(".")[0])
     return text
 
 
