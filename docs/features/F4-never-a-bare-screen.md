@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | **spec — design pass 2026-09-23: every root-view state enumerated from the code, the blank screen's code path identified; amended the same day with a second, faster path to the same screen (D10: a 5xx committed as the document) and the response rule that closes it (§4.13); ready to build** |
 | **Requested** | 2026-09-23, by Olof: "I entered byskebox manually, screen went blank. Not a great UI experience if it's stuck loading something." On discovery: "Is it giving up too quickly?" and "Did a couple more 'Search again' and nothing showed up." Later the same day: "The UI has some blank screens where you don't know what's going on, such as when there's no gateway available and all you have is the gear in the top right. That should be improved." and "Make sure the UI indicates the scan is going on." |
-| **Revision** | one rule: a main-frame HTTP **5xx is refused** and shown as a failure instead of committing as the document (§4.13); every 2xx/3xx/4xx commits exactly as today, including KiroCrew's own `403` + `X-Auth-Required`. The retry policy (20 s, 1 s cadence), the `about:blank` fallback (R3), the discovery timeouts (R39) and the SOCKS dial timeout are all unchanged; this makes them visible. One label is corrected (a SOCKS failure is not a "URL format error"), which is a fix, not a policy change, and lands as its own commit ahead of this feature (§4.3). |
+| **Revision** | one rule: a main-frame HTTP **5xx is refused** and shown as a failure instead of committing as the document (§4.13); every 2xx/3xx/4xx commits exactly as today, including KiroCrew's own `403` + `X-Auth-Required`. The retry policy (20 s, 1 s cadence), the `about:blank` fallback (R3), the discovery timeouts (R39) and the SOCKS dial timeout are all unchanged; this makes them visible. One label is corrected (a SOCKS failure is not a "URL format error"), which is a fix, not a policy change, and landed as its own commit ahead of this feature (`8b0933d`, §4.3). |
 | **Supersedes** | F2 (the connecting state). F2's four tests are carried over as tests 1, 3 and 12 below; its identifier `page-loading` is **not** used — `page-connecting` is. |
 | **Touches** | `App/Browser` (`BrowserView`, `BrowserViewModel`, `DashboardRootView`, `NavigationPolicy.swift` gains a `ResponsePolicy`, new `PageState.swift`, `PageFailureText.swift`), `App/Discovery` (`GatewayDiscovery`, `GatewayPickerView`), `App/Tailnet Status/StatusView`, `TSNet/TSNetModel` + `TSNet/SocksLogProxy` (one published field, existing files), `testing/harness/socks5stub.py` (a stall mode), `testing/harness/fake_gateway.py` and `testing/harness/dashboard.py` (a 502 front and a 403 document mode, §6), the L1 offline, L2 discovery and session suites, two host tests |
 
@@ -219,7 +219,7 @@ picker until a gateway is chosen (`:190-203`), else the page. Verdict:
 | D3 | Gateway **not in the tailnet**: `about:blank` fallback + banner | `HomePageAvailability.swift:34, 95`; `DashboardRootView.swift:348-351, 449-480` | banner over a blank body | "No KiroCrew gateway with this name is in your tailnet." | Find, Change | the peer appears (`:395-402`) or another gateway is chosen | thin — one line over a blank page |
 | D4 | **Connecting**: main-frame load in flight, nothing committed | `BrowserViewModel.swift:361-373` → `didCommit :707` | blank `WKWebView` + gear | none | gear | `didCommit`, or a failure: 30 s (dropped SYNs, `socks5.go:99`), 120 s (accepted, never answers, `:372`), or WebKit's own TLS timeout | **bare — Olof's screen** |
 | D5 | Connecting through **silent startup retries** | `BrowserViewModel.swift:378-400` | as D4 | none (a log line per retry, `:393`) | gear | commit, or the 20 s deadline (`:349`) → D6 | **bare** |
-| D6 | **Failed**: `NavErrorPage` | `BrowserView.swift:55-111`; `BrowserViewModel.swift:516-535` | icon, title, category, escaped URL, message | "Unable to Load Page" / "URL format error" (for **every** SOCKS failure, `:553-558` — becoming "Connection error" in the label fix that lands ahead of this feature, §4.3) / "bad URL [NSURLErrorDomain -1000]" | **none** (⌘R only, `DashboardRootView.swift:291`) | ⌘R, a gateway switch, a relay restart (`:262-266`), R7 | **misleading, and a dead end on a phone** |
+| D6 | **Failed**: `NavErrorPage` | `BrowserView.swift:55-111`; `BrowserViewModel.swift:516-535` | icon, title, category, escaped URL, message | "Unable to Load Page" / "URL format error" (for **every** SOCKS failure, `:553-558` — corrected in `8b0933d`, which already gives `.retrieval` §3.2's title "Couldn't reach <host>"; §4.3) / "bad URL [NSURLErrorDomain -1000]" | **none** (⌘R only, `DashboardRootView.swift:291`) | ⌘R, a gateway switch, a relay restart (`:262-266`), R7 | **misleading, and a dead end on a phone** |
 | D7 | Failed: unknown / ambiguous short name | `BrowserViewModel.swift:494-514` | as D6 | "No device named “x” exists in this tailnet…" / "More than one…" | none | as D6 | thin — good text, no button |
 | D8 | **Painted** page; the page's own states, the token sheet, node banners, expiry warnings, return-to-dashboard | `DashboardRootView.swift:225-239, 338-367, 423-443`; `TokenEntrySheet` | web content | the page's | the page's | — | fine; **must never be covered by D4** |
 | D9 | Content process died | `BrowserViewModel.swift:883-905` | reload in place; after the budget, D6 with its own message (`:888`) | "The dashboard page stopped repeatedly…" | none | reload / ⌘R | fine text, needs D6's buttons |
@@ -438,11 +438,15 @@ through a new `app/scripts/test-page-failure-text.sh` on the pattern of
   `proxyReply` looked up as in §4.5.
 - `categorize` (`:553-558`): `-1000` is `.retrieval` unless it came from
   `reportURLParseFailure`, which sets `.urlFormat` itself. The comment at
-  `:405-406` already states why. This one line lands as its own fix ahead of
-  the rest of F4; until the page is rebuilt (§3.2) the `.retrieval` label is
-  today's **"Connection error"** (`BrowserView.swift:115-124`), so from that
-  commit on a SOCKS failure reads "Connection error" and never "URL format
-  error". Test 5 pins the function either way.
+  `:405-406` already states why. This landed as its own fix ahead of the
+  rest of F4 (`8b0933d`), and it took §3.2's titles with it:
+  `NavErrorKind.caption(host:)` reads **"Couldn't reach <host>"** for
+  `.retrieval` and **"Latchkey can't open this address"** for
+  `.urlFormat`, with the host from `BrowserViewModel.displayHost(of:)`. So a
+  SOCKS failure already reads "Couldn't reach byskebox" and never "URL
+  format error"; the rebuilt page (§3.2) keeps those exact words as
+  `nav-error-title` and adds the cause, the next step and the buttons. Test 5
+  pins the function either way.
 - `decidePolicyFor navigationResponse` (`:744-754`): the `RESP-LOG` hook
   stays; then
   `ResponsePolicy.decide(isMainFrame: navigationResponse.isForMainFrame, statusCode: (response as? HTTPURLResponse)?.statusCode, authRequired: http?.value(forHTTPHeaderField: "X-Auth-Required")?.lowercased() == "true")`
@@ -898,6 +902,9 @@ Only Olof can answer these; nothing in §4 waits on them.
   its wording (§4.2, §4.4), the `handlePolicyInterruption` ordering and the
   no-silent-retry rule (§4.3), tests 15–18 and the harness change (§6),
   criteria 11–12 (§7), question 7 (§8). The `categorize` label fix (-1000 is
-  `.retrieval` unless from the parse path) is landing as its own commit
-  ahead of this feature; §4.3 states the same rule, and the interim label
-  is "Connection error" (`BrowserView.swift:115-124`).
+  `.retrieval` unless from the parse path) landed as `8b0933d` while this
+  amendment was being written, and already uses §3.2's titles ("Couldn't
+  reach <host>" / "Latchkey can't open this address") through
+  `NavErrorKind.caption(host:)`; §4.3 states the same rule. An earlier
+  draft of this entry called the interim label "Connection error"; that was
+  the label before `8b0933d`, not after.
