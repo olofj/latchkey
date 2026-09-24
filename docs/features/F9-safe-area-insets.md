@@ -2,10 +2,95 @@
 
 | | |
 |---|---|
-| **Status** | **fault located: the KiroCrew frontend's CSS, not Latchkey.** §1's mechanism is false and §4 must not be built. The page is told the correct 62pt inset and its own rule discards it outside an installed PWA. See §9, 2026-09-24 "the page is told 62 and throws it away" |
+| **Status** | **decided — build §0.** The web view stops being drawn under the island. §1's mechanism is false, §4 is superseded, and "the frontend's CSS is at fault" was the wrong conclusion from the right measurements — see §0 |
 | **Requested** | 2026-09-24, by Olof, from the first TestFlight install on his iPhone 14: "the page doesn't render well on my iPhone 14, it bleeds too high into the island" (screenshot attached to the request) |
 | **Revision** | none — this restores documented behaviour rather than changing it |
 | **Touches** | `app/App/Browser/BrowserView.swift`, `app/App/Browser/RawWebView.swift`, `testing/harness/dashboard.py`, `scripts/test-offline.sh` |
+
+## 0. The decision, which supersedes §1–§4
+
+**Latchkey stops drawing the web view under the Dynamic Island.** The web view is
+laid out inside the top safe area, as it already is at the bottom.
+
+Olof's call, 2026-09-24, on being shown the "it's the frontend's CSS" conclusion:
+*"I disagree. It doesn't know it's being rendered on a phone. Don't draw the
+webpage at the top of the screen under the island."*
+
+He is right, and the reasoning matters more than the verdict, because the
+measurements in §9 were correct and the conclusion drawn from them was not.
+
+**The page's `display-mode` guard is not a bug; it is the page stating its
+assumption.** `--safe-area-top` is defined only under `display-mode: standalone`
+or `fullscreen` — that is the frontend saying "when I am not an installed web
+app, something else is above me, and the inset is not mine to handle." That
+assumption is ordinary and widely held. Latchkey is the unusual party: it draws a
+page edge to edge with no chrome at all, which is precisely the case the page
+told us it does not handle. We then concluded the page was at fault for not
+handling it.
+
+**`viewport-fit=cover` looked like consent and is not.** The same stylesheet shows
+the page only accepts responsibility for insets as an installed app. Reading the
+meta tag as permission to clip it ignores what the CSS next to it says.
+
+**Depending on the gateway's CSS is fragile.** Correct rendering would then vary
+with the version each gateway happens to run — sitting badly beside F7, whose
+whole premise is that this works on someone else's tailnet. We control Latchkey;
+we do not control every deployment of the dashboard.
+
+**The bottom edge already behaves this way.** §9 measured the web view reporting a
+bottom inset of 0 while the window reports 34: it already stops short of the home
+indicator. This change makes the top consistent with the bottom rather than
+introducing a new behaviour.
+
+What this costs, stated plainly so nobody re-litigates it later: the page no
+longer bleeds to the physical top edge, and the soft scroll-edge effect
+(`scrollView.topEdgeEffect.style = .soft`) has less to feather, since less content
+passes under the status bar. That was listed as a reason *not* to do this in §3.
+It is outranked by content being unreadable, and §3's bullet is withdrawn.
+
+### 0.1 Design
+
+1. **`app/App/Browser/BrowserView.swift`** — remove
+   `.ignoresSafeArea(.container, edges: .top)` from the web view. That is the
+   whole functional change: the web view's frame then starts at the safe-area
+   top, its own `safeAreaInsets.top` becomes 0, WebKit reports
+   `env(safe-area-inset-top)` as 0, and the page draws its header at its own
+   y=0 — which is now below the island. The page needs no cooperation, and works
+   whatever CSS the gateway ships.
+
+2. **The reclaimed strip must not read as a letterbox.** Tint it with the page's
+   own background rather than the app's chrome colour, so the result looks like
+   one surface and not a bar above a page. `RawWebView.applyThemeBackground`
+   already tracks the colour scheme; `WKWebView.underPageBackgroundColor` (and
+   the page's `themeColor` where it has one) is the closer match. If the page's
+   colour is unavailable, `Color.platformSystemBackground` is an acceptable
+   fallback — it is what shows today before the first paint.
+
+3. **The GeometryReader added during the investigation is not needed** and should
+   go with the instrumentation, unless a test wants it. Nothing in this design
+   reads the insets: it stops overriding the layout and lets UIKit place the view.
+
+4. **Leave `contentInsetAdjustmentBehavior` alone** (§3 still holds): automatic
+   adjustment is what insets ordinary pages, and F10's plain probe pins it.
+
+### 0.2 How it is tested
+
+The probe infrastructure already exists — `/__inset-cover`, `/__inset-plain` and
+`/__inset-product` in `testing/harness/dashboard.py`, with
+`testInsetProbesReportWhatThePageIsTold` in L1 (commits `f697cfe`, `42647c0`).
+The assertions **invert**, and that is the point:
+
+| | before | after |
+|---|---|---|
+| cover probe's `env(safe-area-inset-top)` | 62px | **0px** |
+| the web view's frame `minY` | 0 | **== the window's safe-area top** |
+
+Both are numbers already being collected. A test that asserted "the page is told
+62" must become "the page is told 0, because nothing is above it any more" —
+rewrite it rather than deleting it, and say so in the commit.
+
+Shown able to fail: restore `.ignoresSafeArea(.container, edges: .top)` and the
+cover probe reports 62 again with the frame at y=0.
 
 ## 1. Why
 
@@ -73,10 +158,12 @@ hidden than it is today.
 - **Not** injecting CSS into the dashboard to reposition its header. It works
   correctly given correct insets; patching another product's DOM would couple us
   to its internals, which we only do for the documented manifest literal.
-- **Not** abandoning edge-to-edge by dropping `.ignoresSafeArea` outright. That
-  would fix the clipping by letterboxing the page inside a band of app
-  background — correct but a visible downgrade, and it would make the soft edge
-  effect pointless. Kept as the fallback if §4's approach cannot be made exact.
+- ~~**Not** abandoning edge-to-edge by dropping `.ignoresSafeArea` outright.~~
+  **WITHDRAWN 2026-09-24 — this is now the decision; see §0.** It was ruled out
+  here as "a visible downgrade" that would make the soft edge effect pointless.
+  That weighed a finish against legibility and got the order wrong. It also
+  assumed a letterbox; §0.1 removes that by tinting the reclaimed strip with the
+  page's own background, so the result reads as one surface.
 - **Not** changing `contentInsetAdjustmentBehavior`. Automatic adjustment is what
   gives *ordinary* (non-cover) pages their inset viewport, and test 2 pins it.
 
