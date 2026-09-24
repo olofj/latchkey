@@ -55,8 +55,16 @@ trap teardown EXIT
 # change there always reruns it). SELFTEST=always forces it.
 VENDORED="$APP/ThirdParty/libtailscale/tailscale-patched"
 SELFTEST_STAMP="$TSNET/.run/selftest.sha"
-SELFTEST_HASH=$( { cat "$TSNET"/*.go "$TSNET"/go.mod "$TSNET"/go.sum "$TSNET"/Makefile
-                   git -C "$APP" rev-parse HEAD:ThirdParty/libtailscale/tailscale-patched; } | shasum -a 256 | cut -d' ' -f1)
+# HEAD:PATH resolves PATH from the repository ROOT whatever -C says, and app/
+# stopped being its own repository on 2026-09-23; the leading ./ makes it
+# relative to app/ wherever app/ sits. A hash this command could not compute
+# is no basis for skipping anything, so its failure is fatal and says why
+# rather than surfacing as a bare git error two lines into the preflight.
+VENDORED_TREE=$(git -C "$APP" rev-parse "HEAD:./ThirdParty/libtailscale/tailscale-patched") \
+    || { echo "error: cannot hash the vendored tailscale tree (git's message is above), so whether" >&2
+         echo "       the harness self-test may be skipped is undecidable. Not guessing." >&2; exit 1; }
+SELFTEST_HASH=$(cat "$TSNET"/*.go "$TSNET"/go.mod "$TSNET"/go.sum "$TSNET"/Makefile <(echo "$VENDORED_TREE") \
+                | shasum -a 256 | cut -d' ' -f1)
 if [[ "${SELFTEST:-auto}" != always && -z "$(git -C "$APP" status --porcelain -- "$VENDORED")" \
       && -f "$SELFTEST_STAMP" && "$(cat "$SELFTEST_STAMP")" == "$SELFTEST_HASH" ]]; then
     say "tsnet harness self-test: skipped (unchanged since it last passed; SELFTEST=always forces it)"
