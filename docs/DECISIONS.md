@@ -2844,3 +2844,36 @@ change, then install.
 - The real tailnet name and two host addresses remain in **git history** (17 and
   1 commit each). The working tree is clean; rewriting history is Olof's call and
   is cheapest before the first push.
+
+## 2026-09-23 — two ways a green suite can mean nothing
+
+Both found in one evening, both while verifying work that had already been
+committed. Recorded together because they are the same mistake at two levels:
+a check that cannot fail, and a check whose subject was not there.
+
+**A control call that does nothing must fail the test that made it.** The new
+502 test posted `/__mode?front=502` to the control port; the handler had been
+written on the *dashboard's* handler, which a UI test can only reach through the
+app's SOCKS proxy. It answered 404. Each suite had its own private `get`/`post`
+pair, and all three checked the status on GET and none on POST — so the switch
+silently did nothing and the test asserted against a healthy dashboard. It
+failed, which is the only reason this surfaced; had the app's behaviour been
+wrong the other way it would have passed while proving nothing. `post` now
+throws on any non-2xx, from one shared implementation, and `make check` drives
+the 5xx switch from the control port the tests actually use. This is the third
+instance of the review's systemic finding — a protection written once and not
+carried to the sibling path — and the second where the sibling was a copy of the
+same helper.
+
+**The harnesses are a singleton, so a suite and a harness-touching agent cannot
+overlap.** `make -C testing/tsnet-harness up` (and its `check`) begin with
+`down`, which calls `../harness harness-down` and kills the shared fake
+dashboard by PID — deliberately, because both need the same ports (M3 review).
+A subagent running the tsnet harness self-test therefore tore down a live
+`test-offline.sh` between its two test phases: phase 1 passed all ten tests,
+phase 2's `setUp` got `Connection refused` on :8480, and the run failed in a way
+that looked like a regression in the change under test. The evidence is
+unambiguous once looked at — the run's own `dashboard.log` had been truncated
+and carried `gw.` peer requests from the *other* harness. Parallel agents are
+fine; parallel agents that start a harness are not. Serialise suite runs against
+them, or give the agent its own port set.

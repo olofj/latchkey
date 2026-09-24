@@ -25,7 +25,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | designed; ready to build |
 | [F5](F5-portrait-session-list.md) | The instance chips collide in portrait (bug report) | designed; two independent halves (CSS rule, gateway switcher) |
 | [F6](F6-single-origin-web-view.md) | The web view loads the gateway, four named CDNs, and nothing else | designed; ready to build (CDN widgets allowlisted, fonts still blocked) |
-| [F7](F7-portable-discovery.md) | Discovery works on someone else's tailnet, and never overstates what it checked | spec — behaviour changes from the portability review |
+| [F7](F7-portable-discovery.md) | Discovery works on someone else's tailnet, and never overstates what it checked | building — §4.1–4.4 in, host-tested; the five suite tests need harness support (§6) |
 
 ## Still open, not yet answered
 
