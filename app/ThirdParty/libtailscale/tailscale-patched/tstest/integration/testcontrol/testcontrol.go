@@ -98,6 +98,18 @@ type Server struct {
 	// useful for non-streaming requests.
 	HoldMapRequest func(*tailcfg.MapRequest) (done func())
 
+	// AuthPath, if non-nil, returns the path under BaseURL of the interactive
+	// login page a node is sent to when RequireAuth applies. Each call must
+	// return a fresh path, and it must begin with "/auth/", which is how
+	// CompleteAuth finds the path inside a URL. nil means "/auth/" followed
+	// by 20 lower-case hex characters.
+	//
+	// Latchkey: a login link's shape is control's to choose and the client
+	// logs it as received, so a redaction test against a fixture with one
+	// fixed shape passes by construction; the L2 harness issues hostile
+	// ones (testing/tsnet-harness, -auth-path).
+	AuthPath func() string
+
 	// AllOnline, if true, marks every peer entry in MapResponses as
 	// Online=true. This is a coarse stand-in for the per-node
 	// online/offline tracking that production control servers do based
@@ -1110,6 +1122,12 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	authURL := ""
 	if requireAuth {
 		authPath := fmt.Sprintf("/auth/%s", rands.HexString(20))
+		if s.AuthPath != nil {
+			authPath = s.AuthPath()
+			if !strings.HasPrefix(authPath, "/auth/") {
+				panic(fmt.Sprintf("testcontrol: AuthPath returned %q; it must begin with /auth/", authPath))
+			}
+		}
 		s.addAuthPath(authPath, nk)
 		authURL = s.BaseURL() + authPath
 	}
