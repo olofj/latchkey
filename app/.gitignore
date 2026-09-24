@@ -16,6 +16,10 @@ Packages/**/.swiftpm/
 TODO.md
 TODO.workspaces.md
 
-# The owner's Apple Team ID for `make device` (DEVICE-CHECK.md); the project
-# leaves DEVELOPMENT_TEAM blank on purpose.
+# Your signing team and bundle id, read by Latchkey.xcconfig so Xcode's Run
+# and `make device` agree (docs/SETUP.md §3). The project itself carries no
+# team and defaults the bundle id to the author's.
+/Local.xcconfig
+# The older home of the Team ID for `make device` alone; still read as a
+# fallback when Local.xcconfig has no DEVELOPMENT_TEAM.
 /.dev-team

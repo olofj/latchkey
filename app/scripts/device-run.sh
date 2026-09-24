@@ -21,6 +21,14 @@ if [[ -z "$TEAM" ]]; then
     echo "error: no team: set DEVELOPMENT_TEAM, or put the Team ID in app/.dev-team" >&2
     exit 1
 fi
+# The bundle id is a build setting from Latchkey.xcconfig (default) or
+# Local.xcconfig (yours), which an xcconfig outranks in xcodebuild's layering,
+# so an exported value changes nothing here -- and must not: Xcode's Run never
+# sees the shell, and two ids would mean two apps and a second, empty node.
+if [[ -n "${LATCHKEY_BUNDLE_ID:-}" ]]; then
+    echo "note: LATCHKEY_BUNDLE_ID in the environment is ignored; the bundle id comes" \
+         "from app/Local.xcconfig so that Xcode and this script install the same app" >&2
+fi
 
 DEVICES_JSON=$(mktemp)
 trap 'rm -f "$DEVICES_JSON"' EXIT

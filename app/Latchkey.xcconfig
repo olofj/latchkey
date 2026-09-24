@@ -1,0 +1,26 @@
+// Identity settings for the Latchkey and LatchkeyUITests targets, read as
+// their base configuration so Xcode's Run and xcodebuild (`make device`)
+// resolve the SAME values. An environment variable could not do that:
+// xcodebuild imports the shell's environment as build settings and Xcode.app
+// inherits no shell at all, so an exported LATCHKEY_BUNDLE_ID gave the two
+// different bundle ids -- two apps on the phone, one of them with an empty
+// container, i.e. a fresh Tailscale node. An xcconfig outranks the
+// environment, so an export is ignored once this file is in place.
+//
+// The default MUST stay net.lixom.latchkey: the bundle id decides the app
+// container, and the container holds the tsnet node's identity. The product
+// was renamed Latchkey -> Latchkey without changing it, on purpose
+// (AGENTS.md, DECISIONS.md 2026-09-23).
+LATCHKEY_BUNDLE_ID = net.lixom.latchkey
+
+// Your own identity goes in Local.xcconfig next to this file (gitignored;
+// optional; docs/SETUP.md §3):
+//
+//   DEVELOPMENT_TEAM = ABCDE12345
+//   LATCHKEY_BUNDLE_ID = com.example.latchkey
+//
+// Both are fixed at the FIRST install. Changing the bundle id afterwards
+// installs a second app with an empty container (a new node); changing the
+// team makes iOS refuse the install until the app is removed, which deletes
+// the node. Run the app's own Reset before either.
+#include? "Local.xcconfig"

@@ -40,6 +40,7 @@
 		C22045AD2EF45E7000242E27 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; name = Info.plist; path = Latchkey/Info.plist; sourceTree = "<group>"; };
 		C25B4D752EF5F507000539A5 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		F10000020000000000000002 /* LatchkeyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LatchkeyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1000010000000000000000C /* Latchkey.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Latchkey.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -108,6 +109,7 @@
 			isa = PBXGroup;
 			children = (
 				C22045AD2EF45E7000242E27 /* Info.plist */,
+				F1000010000000000000000C /* Latchkey.xcconfig */,
 				C25B4D752EF5F507000539A5 /* README.md */,
 				C20F24752EF19A5900F57D67 /* App */,
 				C20F24932EF1B4A700F57D67 /* TSNet */,
@@ -264,6 +266,7 @@
 /* Begin XCBuildConfiguration section */
 		A8E5F6FD46796ED43D965C3F /* Testing */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F1000010000000000000000C /* Latchkey.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -306,6 +309,7 @@
 		};
 		BCA86639663E6E5EF41A985D /* Testing */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F1000010000000000000000C /* Latchkey.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -324,6 +328,7 @@
 		};
 		C20F247F2EF19A5C00F57D67 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F1000010000000000000000C /* Latchkey.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -366,6 +371,7 @@
 		};
 		C20F24802EF19A5C00F57D67 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F1000010000000000000000C /* Latchkey.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -599,6 +605,7 @@
 		};
 		F100000A000000000000000A /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F1000010000000000000000C /* Latchkey.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -617,6 +624,7 @@
 		};
 		F100000B000000000000000B /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F1000010000000000000000C /* Latchkey.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
