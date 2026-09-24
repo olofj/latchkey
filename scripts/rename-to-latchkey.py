@@ -68,6 +68,12 @@ SUBS = [
     ("Latchkey", "Latchkey"),
     ("Latchkey", "Latchkey"),
     ("Latchkey", "Latchkey"),
+    # Mixed-case spellings that occur in Go identifiers. `Latchkey` (capital K,
+    # lowercase r) was missed on the first vendored pass and survived as
+    # `TestLatchkeyLocalLog...`; --check skipped the vendored tree, so only a
+    # hand grep caught it. Both are listed now and --check covers that tree.
+    ("Latchkey", "Latchkey"),
+    ("Latchkey", "Latchkey"),
     ("LATCHKEY", "LATCHKEY"),
     ("LATCHKEY", "LATCHKEY"),
     # The compile flag. It has no NOMAD/ROAM in it, so it needs its own rule.
@@ -99,8 +105,8 @@ DELETE = [
 EXTENSIONS = {".swift", ".plist", ".xcscheme", ".pbxproj", ".sh", ".py", ".md",
               ".json", ".js", ".go", ".yml", ".yaml", ".xcconfig", ".entitlements",
               ".html", ".css", ".txt", ".cnf", ".mod", ".h", ".c", ".m"}
-NAMED = {"Makefile", "makefile", ".gitignore", "LICENSE", "AGENTS.md", "README",
-         "CLAUDE.md"}
+NAMED = {"Makefile", "makefile", ".gitignore", "LICENSE", "NOTICE", "AGENTS.md",
+         "README", "CLAUDE.md"}
 SKIP_DIRS = {".git", "build", "DerivedData", ".run", "node_modules", "__pycache__"}
 
 # The vendored tree is upstream source with OUR files added to it. Only the
@@ -130,7 +136,7 @@ def rewrite_body(body):
     return body
 
 
-def run(root, apply):
+def run(root, apply, vendored_only=False):
     changed, vendored_hits = [], []
     for path in target_files(root):
         rel = os.path.relpath(path, root)
@@ -143,8 +149,9 @@ def run(root, apply):
         new = rewrite_body(body)
         if new == body:
             continue
-        if rel.startswith(VENDORED):
-            vendored_hits.append(rel)
+        if rel.startswith(VENDORED) != vendored_only:
+            if rel.startswith(VENDORED):
+                vendored_hits.append(rel)
             continue
         changed.append(rel)
         if apply:
@@ -152,8 +159,10 @@ def run(root, apply):
     return changed, vendored_hits
 
 
-def moves(root, apply):
+def moves(root, apply, vendored_only=False):
     done = []
+    if vendored_only:
+        MOVES.clear()
     for src, dst in MOVES:
         if src == dst:
             continue
@@ -172,7 +181,7 @@ def moves(root, apply):
             if renamed == name:
                 continue
             rel = os.path.relpath(os.path.join(dirpath, name), root)
-            if rel.startswith(VENDORED):
+            if rel.startswith(VENDORED) != vendored_only:
                 continue
             if any(rel == s for s, _ in MOVES) or rel in DELETE:
                 continue
@@ -183,6 +192,30 @@ def moves(root, apply):
     return done
 
 
+def all_text_files(root):
+    """Every file that is plausibly text, regardless of extension.
+
+    Deliberately WIDER than `target_files`: the rewriter is driven by an
+    extension list, so anything outside it is silently not rewritten. If the
+    checker shared that list it would be blind in exactly the same places --
+    which is what happened to `app/NOTICE`, a file with no extension that kept
+    the old name through a passing --check.
+    """
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for name in filenames:
+            p = os.path.join(dirpath, name)
+            try:
+                with open(p, "rb") as fh:
+                    if b"\x00" in fh.read(4096):
+                        continue          # binary
+            except OSError:
+                continue
+            out.append(p)
+    return out
+
+
 def check(root):
     """Bidirectional. Neither an old name left behind nor a preserved one eaten."""
     bad = []
@@ -191,10 +224,9 @@ def check(root):
     # substitutions HAD reached inside it. Derived, so a new PRESERVE entry is
     # covered automatically.
     corrupted = {rewrite_body(k): k for k in PRESERVE if rewrite_body(k) != k}
-    for path in target_files(root):
+    for path in all_text_files(root):
         rel = os.path.relpath(path, root)
-        if rel.startswith(VENDORED) or rel.endswith("rename-to-latchkey.py") \
-           or rel.endswith("rename-to-latchkey.py"):
+        if rel.endswith("rename-to-latchkey.py"):
             continue
         try:
             body = open(path, encoding="utf-8").read()
@@ -221,6 +253,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--check", action="store_true")
+    # R16: a vendored-tree change is its own commit, so its pass is its own run.
+    ap.add_argument("--vendored", action="store_true",
+                    help="rename ONLY inside app/ThirdParty (our added files there)")
     ap.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     a = ap.parse_args()
 
@@ -231,9 +266,9 @@ def main():
         print(f"{'FAILED: ' + str(len(bad)) + ' problem(s)' if bad else 'check passed'}")
         return 1 if bad else 0
 
-    changed, vendored = run(a.root, a.apply)
-    mv = moves(a.root, a.apply)
-    gone = [d for d in DELETE if os.path.exists(os.path.join(a.root, d))]
+    changed, vendored = run(a.root, a.apply, a.vendored)
+    mv = moves(a.root, a.apply, a.vendored)
+    gone = [] if a.vendored else [d for d in DELETE if os.path.exists(os.path.join(a.root, d))]
     if a.apply:
         for d in gone:
             subprocess.run(["git", "-C", a.root, "rm", "-q", d], check=True)
