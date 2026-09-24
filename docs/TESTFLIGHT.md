@@ -29,13 +29,16 @@ loop; the two installs coexist only if they use different bundle ids.
    # ASC_KEY_PATH=<elsewhere>.p8   optional
    ```
 
-   The key is what makes this work from a plain shell: Xcode's Apple ID
-   sign-in is not readable from the command line ("No Accounts"), but
-   xcodebuild's `-authenticationKey*` flags provision without it, and
-   `altool` uploads with it.
+   The key is what lets `altool` upload from a plain shell: Xcode's Apple ID
+   sign-in is not readable from the command line ("No Accounts"). It does **not**
+   let `xcodebuild` provision there — an earlier version of this page claimed it
+   did, and 2026-09-24 disproved it. See "Why a local certificate is not enough".
 5. **An Apple Distribution certificate in the login keychain.** Xcode →
    Settings → Accounts → your team → Manage Certificates… → + → Apple
-   Distribution. See "Why a local certificate" below.
+   Distribution.
+6. **An App Store provisioning profile for the bundle id, already on disk.** The
+   certificate alone is not enough, and this is the step that is easy to miss
+   because nothing creates it for you from a shell. See below.
 
 ## What `make tf` does
 
@@ -47,7 +50,8 @@ loop; the two installs coexist only if they use different bundle ids.
 - Refuses to continue unless the archive carries **both** privacy manifests
   (below): App Store Connect reports a missing one only by email after upload.
 - Exports with `ExportOptions.AppStore.plist` and uploads with
-  `xcrun altool --upload-package`.
+  `xcrun altool --upload-package`. The export is the step that needs signing
+  assets this machine may not have — see "Why a local certificate is not enough".
 
 ## Privacy manifests
 
@@ -74,7 +78,7 @@ nm -u app/ThirdParty/libtailscale/swift/build/Build/Products/Release-iphonefat/T
 
 A symbol from a new category (`statfs` → DiskSpace) needs its own entry.
 
-## Why a local certificate
+## Why a local certificate is not enough
 
 From a shell outside the logged-in GUI session (an agent's, KiroCrew's),
 `xcodebuild -exportArchive` cannot reach `com.apple.dt.Xcode.ITunesSoftwareService`
@@ -84,6 +88,74 @@ cannot use Xcode's cloud-managed distribution signing, so the export needs an
 Apple Distribution certificate already in the keychain. `altool` does not use
 that service, which is why the upload goes through it (measured 2026-09-24:
 `altool --list-apps` with the API key lists the app record).
+
+**And the certificate is necessary but not sufficient.** Signing also needs an
+App Store *provisioning profile*, and cloud signing is what would create one —
+so the same missing service blocks it. Measured 2026-09-24, with the Apple
+Distribution certificate present in the keychain the whole time:
+
+```
+error: exportArchive Cloud signing permission error
+    You haven't been given access to cloud-managed distribution certificates.
+error: exportArchive No profiles for 'net.lixom.latchkey' were found
+```
+
+The first line is misleading — the account holder cannot lack access to their
+own team's certificates. It is what cloud signing says after failing to
+authenticate, and the second line is the real consequence.
+
+So `make tf` cannot currently finish from a non-GUI shell on a machine that has
+never distributed this bundle id. It archives (that part works), then stops at
+the export. Two ways out, neither yet implemented:
+
+* **Distribute the archive from Xcode once.** Xcode has the Apple ID session,
+  mints the profile, uploads, and leaves the profile on disk — after which the
+  CLI export has what it needs. Requires a human at the GUI, once per bundle id.
+* **Create the profile through the App Store Connect REST API** (`POST
+  /v1/profiles`, type `IOS_APP_STORE`) and export with `signingStyle: manual`.
+  Removes the GUI dependency entirely. Needs an ES256 JWT, and neither PyJWT nor
+  `cryptography` is installed here.
+
+## Troubleshooting
+
+**"There are no archives to select" in Xcode's Organizer.** `make tf` passes
+`-archivePath app/build/Latchkey-appstore.xcarchive`, and Organizer only lists
+archives under `~/Library/Developer/Xcode/Archives/<date>/`. The archive is real
+and complete; Organizer simply does not look there. Copy it across to make the
+Xcode fallback available:
+
+```
+cp -R app/build/Latchkey-appstore.xcarchive \
+   ~/Library/Developer/Xcode/Archives/$(date +%F)/"Latchkey $(date +%F' '%H.%M).xcarchive"
+```
+
+**"You are not enrolled in the Apple Developer Program" when you are.** Xcode
+caches each account's team list in `com.apple.dt.Xcode.plist` under
+`IDEProvisioningTeamByIdentifier`, *including whether the team is free*, and does
+not refresh it when the enrollment changes. Enrolling after Xcode has already
+seen the same Apple ID leaves this behind:
+
+```
+teamID   = DX33PQ7J4A
+teamName = Olof Johansson (Personal Team)
+teamType = Personal Team
+isFreeProvisioningTeam = true
+```
+
+Distribute App reads that and refuses, reporting Xcode's cache as Apple's
+answer. **Xcode → Settings → Accounts → sign out, then sign back in**, which
+re-fetches the team list; "Download Manual Profiles" refreshes profiles, not
+team metadata, and does not clear it.
+
+Seen 2026-09-24, hours after enrolling. The certificate dates are the tell, and
+worth checking before believing the message — a free team cannot hold an Apple
+Distribution certificate at all:
+
+```
+$ security find-certificate -c "Apple Distribution: <name>" -p | openssl x509 -noout -subject -dates
+subject=UID=DX33PQ7J4A, CN=Apple Distribution: ... , OU=DX33PQ7J4A
+notBefore=Sep 24 17:15:21 2026 GMT        # hours old: the enrollment is real
+```
 
 ## Export compliance
 
