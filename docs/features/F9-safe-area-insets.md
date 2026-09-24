@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | spec |
+| **Status** | **diagnosis reopened** — §1's mechanism was measured and is false. Do not build §4. See §9 |
 | **Requested** | 2026-09-24, by Olof, from the first TestFlight install on his iPhone 14: "the page doesn't render well on my iPhone 14, it bleeds too high into the island" (screenshot attached to the request) |
 | **Revision** | none — this restores documented behaviour rather than changing it |
 | **Touches** | `app/App/Browser/BrowserView.swift`, `app/App/Browser/RawWebView.swift`, `testing/harness/dashboard.py`, `scripts/test-offline.sh` |
@@ -160,10 +160,61 @@ against the inset that device actually reports, so it does not hard-code 59.
   examined.
 - **Owner action:** none until a build exists. Then: install the TestFlight
   build and confirm criterion 4, in portrait and landscape.
-- The iPhone 14 has a Dynamic Island; the simulator L1 boots (`iPhone 17`) does
-  too, so the geometry is representative. A device with a **notch** rather than
-  an island is not covered by either.
+- **Corrected 2026-09-24.** This said "the iPhone 14 has a Dynamic Island". It
+  does not: the plain 14 has a notch (~47pt) and only the 14 Pro has the island.
+  Olof confirmed he is on a **14 Pro** (59pt), so L1's `iPhone 17` simulator
+  (62pt measured) is representative in kind, differing only in magnitude. Had he
+  been on a plain 14, the simulator would have been reproducing different
+  geometry from the bug report — which is why the question was worth asking
+  rather than assuming from the model name.
 
 ## 9. Log
 
 Opened 2026-09-24 from the first TestFlight install.
+
+### 2026-09-24 — the confirmation step ran, and §1 is false
+
+§8 made the measurement a gate. It was right to. From 42 `safe-area:` lines in
+`app/build/offline-logs/20260924-135534/unified.log`, steady state:
+
+| | WKWebView's own | The window's | The GeometryReader's |
+|---|---|---|---|
+| top | **62** | 62 | 62 |
+| bottom | 0 | 34 | 34 |
+
+**`.ignoresSafeArea(.container, edges: .top)` does not zero the insets.** UIKit
+hands WebKit a correct 62pt top inset. The mechanism in §1 — SwiftUI zeroing the
+subtree, WebKit computing `env(safe-area-inset-top)` from a zero — is disproved
+on the one edge the bug report is about.
+
+**§4 would have made it worse.** The prediction was that the GeometryReader would
+report 0; it reports 62, the same as the view. Feeding that into
+`additionalSafeAreaInsets` adds a correct inset to a correct inset: 124pt, half
+the page pushed off the bottom. It would have "fixed" the screenshot by
+overcorrecting and passed any test that only asserted "not zero".
+
+**A separate finding, not the reported bug.** The web view reports a bottom inset
+of 0 while the window reports 34, and `BrowserView`'s slot ends 34pt above the
+screen edge — so the web view never reaches under the home indicator.
+`DashboardRootView.swift:213` says "The page owns the full screen, including the
+bottom safe area". That is false as measured. It needs its own spec.
+
+### What to measure next, and the dependency it exposes
+
+UIKit is telling WebKit the truth, so the next question is what the **page** is
+told: its computed `env(safe-area-inset-top)`. That is exactly test A's probe
+(§6). Two outcomes:
+
+- **reads 62** — the fault is above UIKit: the page's own CSS, or
+  `interactive-widget=resizes-content`, which the real frontend sets and this
+  spec has never examined.
+- **reads 0 despite the 62pt view inset** — the likely cause is WebKit's
+  automatic content-inset adjustment, which §3 currently rules out of scope. The
+  spec would have to change rather than be worked around.
+
+**This makes F10 a prerequisite for F9, discovered by measurement rather than
+argument.** L1 cannot reproduce the bug today: the fake dashboard's viewport tag
+is `width=device-width` (`testing/harness/dashboard.py:89`), so it never asks for
+edge-to-edge and can never be clipped by an island. F10 §4.2's fixture parity —
+the fake must be no more forgiving than the product — has to land before the next
+measurement means anything.
