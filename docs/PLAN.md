@@ -308,6 +308,14 @@ future server-side helpers out of the fork's history. **Revised:** `app/` is its
 own git repository, gitignored by the parent — they are two repositories, and a
 milestone is committed in each. Neither has a remote; commits are local.
 
+**Revised again, 2026-09-23 — this is now history.** The two repositories were
+collapsed into one, `origin` = `github.com/olofj/latchkey` (private), branch
+`main`. `app/` is an ordinary directory; the app's 272 commits were rewritten to
+carry the `app/` prefix so `git log -- app/ThirdParty/libtailscale` still yields
+the complete vendored delta. Nothing moved on disk. See the DECISIONS entry of
+that date for the one cost: cherry-picking from upstream now needs
+`git apply --directory=app`.
+
 ### 4.2 Fork strategy
 
 **Revised (R16, D2).** The original sequence here — clone, rename `origin` to

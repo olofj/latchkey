@@ -38,7 +38,7 @@ grants — that is one environment, not a requirement.
 | `docs/DECISIONS.md` | Append-only log of decisions, with the evidence for each. |
 | `docs/DEVICE-CHECK.md` | The author's device bring-up runbook (environment-specific). |
 | `testing/harness/` | Offline test harness: a stub SOCKS5 proxy and a fake dashboard, so the WebKit proxy path can be tested with no Tailscale account. |
-| `app/` | The app itself, a fork of aperture-plus. Its own git repository. |
+| `app/` | The app itself, a fork of aperture-plus. |
 
 ## Quick start
 

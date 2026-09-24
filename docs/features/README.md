@@ -42,17 +42,22 @@ depends on guessing them:
    regardless (F3 §4.3).
 2. **Build order** — F4 and F6 together in one reinstall, since both touch
    `App/Browser` and both need the device to matter?
-3. **GitHub** — two private repos (`latchkey`, `latchkey-app`), with Olof
-   running the pushes (a policy here blocks the agent from pushing)?
+3. ~~**GitHub** — two private repos, with Olof running the pushes?~~
+   **Answered 2026-09-23: one private repo**,
+   [olofj/latchkey](https://github.com/olofj/latchkey). The two
+   repositories were collapsed into it, `app/` becoming a directory rather
+   than a nested repository. Olof still runs the pushes — a policy here blocks
+   the agent from pushing.
 
 ## Bugs
 
 A bug is a report, not a spec, and it should cost Olof one message to file.
 
-- **Where:** a GitHub issue on the parent repo (both repos' faults, one
-  tracker), templates in `../../.github/ISSUE_TEMPLATE/`. Until the repos are
-  pushed, a message in the session does the same job and the issue is opened
-  afterwards.
+- **Where:** a GitHub issue on
+  [olofj/latchkey](https://github.com/olofj/latchkey), templates in
+  `../../.github/ISSUE_TEMPLATE/`. One repository now, so one tracker and no
+  question about which. Until the first push lands, a message in the session
+  does the same job and the issue is opened afterwards.
 - **What a report needs:** what happened, which gateway and port, and any log
   lines. The app's own log is Settings → Diagnostics → Logs, the node's is
   Settings → Node log, and while the phone is plugged in and

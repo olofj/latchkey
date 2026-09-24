@@ -36,7 +36,9 @@ of the two pinned commits; all matched. Identical blob hashes mean identical
 bytes.
 
 Every Latchkey modification to this tree is a **later, separate commit**, so
-`git log -- ThirdParty/libtailscale` lists exactly what differs from upstream.
+`git log -- app/ThirdParty/libtailscale` lists exactly what differs from upstream.
+(The `app/` prefix dates from 2026-09-23, when the app's repository was
+collapsed into the parent and its history rewritten to keep this recipe true.)
 
 ## Diffing against upstream
 

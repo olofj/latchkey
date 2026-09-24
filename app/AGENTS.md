@@ -53,7 +53,7 @@ non-goals, not omissions.
   lives in `ThirdParty/libtailscale/`, with the patched tailscale tree at
   `ThirdParty/libtailscale/tailscale-patched/`. The first commit touching it
   is a pristine, import-only copy; every change since is its own commit, so
-  `git log -- ThirdParty/libtailscale` is the complete delta from upstream.
+  `git log -- app/ThirdParty/libtailscale` is the complete delta from upstream.
   Keep it that way: never fold a vendored-tree change into an unrelated
   commit. Provenance and diff recipes are in `ThirdParty/VENDORED.md`.
 - **The old product name survives in three places on purpose. Do not tidy
@@ -94,25 +94,40 @@ be shown able to fail, and the spec says how.
 
 ## Git workflow
 
-Single-developer repositories with no outside contributors, so:
+Single developer, no outside contributors, so:
 
-- **Commit directly to `main`** — here in `app/`, and in the parent repo
-  (whose one branch is `master`). No topic branches, no pull requests, no
-  merge commits of our own. If that changes, this section changes with it.
-- `app/` and the parent are **two separate git repositories** (the parent
-  gitignores `app/`). A milestone usually touches both: code here, docs and
-  the offline harness there. Commit each one.
+- **One repository**, rooted at the parent (`..`), on branch **`main`**.
+  `app/` is a directory in it, not a repository — it stopped being one on
+  2026-09-23, when the two were collapsed. Commit directly to `main`: no
+  topic branches, no pull requests, no merge commits of our own. A change
+  that touches code here and docs there is now **one** commit.
+- **`origin` is `github.com/olofj/latchkey`** (private). Commits are local
+  until pushed, and **a policy here blocks the agent from pushing** — Olof
+  runs the push.
 - `upstream` is tailscale/aperture-plus, kept only as a read-only fetch
-  source. Local `main` does not track it. Upstream is tracked by
-  **cherry-pick only** (revision R16) — never a merge. After the pbxproj
-  rewrites, the project rename and the vendoring, a merge would come back as
-  a wall of modify/delete conflicts, and merge compares tips rather than
-  commits, so careful commit hygiene here does not make it easier. Review
-  upstream commits touching `TSNet/` or the vendored tree and bring over the
-  ones worth having; record the last upstream SHA reviewed in
+  source. `main` does not track it. Upstream is tracked by **cherry-pick
+  only** (revision R16) — never a merge. After the pbxproj rewrites, the
+  project rename and the vendoring, a merge would come back as a wall of
+  modify/delete conflicts, and merge compares tips rather than commits, so
+  careful commit hygiene here does not make it easier. Review upstream
+  commits touching `TSNet/` or the vendored tree and bring over the ones
+  worth having; record the last upstream SHA reviewed in
   `../docs/DECISIONS.md`.
-- There are no remotes of our own: commits are local, and there is nothing to
-  push to.
+- **Cherry-picking from upstream now needs a path shift.** Upstream's paths
+  are repo-root-relative (`TSNet/…`); ours live under `app/`. So
+  `git cherry-pick` no longer applies cleanly — use:
+
+  ```sh
+  git -c core.quotepath=false format-patch -1 --stdout <upstream-sha> \
+      | git apply --directory=app --3way
+  ```
+
+  then commit with the original author and a note of the upstream SHA. This
+  is the one real cost of the collapse; everything else got simpler.
+- **The vendored delta is `git log -- app/ThirdParty/libtailscale`** (note the
+  prefix). The app's 272 commits were rewritten to carry `app/` when the
+  repositories were collapsed, precisely so this path-limited log still
+  returns the complete delta — it reports 32 commits, as it did before.
 - New code goes in `App/`, not `TSNet/` — `TSNet/` is the upstream-shared
   layer that cherry-picks land in, and new files there also need a
   `membershipExceptions` pbxproj edit.

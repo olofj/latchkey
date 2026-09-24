@@ -2659,3 +2659,52 @@ filters hiding a gateway silently, the sweep abandoning candidates past ~24, and
 the picker claiming it checked `candidateCount` when it probed fewer — are
 specified in F7 rather than changed here, because the spec-first rule applies to
 behaviour even when the change is small.
+
+## 2026-09-23 — One repository: the app's history is rewritten under `app/`, not grafted
+
+**Decision:** collapse the two git repositories into one, rooted here, on branch
+**`main`**, with `origin` = `github.com/olofj/latchkey` (private). `app/` is
+now an ordinary directory. Olof's ask, after creating the repo.
+
+**Why the history was rewritten rather than merged as-is.** The obvious move is
+`git merge --allow-unrelated-histories` on the app's branch. That preserves the
+commits but records them against their **original, unprefixed paths** — so
+`git log -- app/ThirdParty/libtailscale` would return nothing before today, and
+R16's promise that *"`git log -- ThirdParty/libtailscale` is the complete delta
+from upstream"* would quietly stop being true. The provenance would still exist
+but no documented command would find it.
+
+So all 272 app commits were rewritten with `git filter-branch --index-filter` to
+carry the `app/` prefix, then merged with `--allow-unrelated-histories`. After
+it, `git log -- app/ThirdParty/libtailscale` reports **32 commits**, the same
+delta as before. 329 commits total (55 + 272 + 2).
+
+`git-filter-repo` and `git subtree` are both absent on this Mac, so
+`filter-branch` was the tool; it is deprecated, not wrong, and this is a
+one-shot.
+
+**What did not change: anything on disk.** `app/` stayed exactly where it was,
+so every script, `Makefile`, relative path and doc reference kept working
+untouched. The collapse is purely a git-level change, which is why it was safe
+to do in one pass. The app's ignored artefacts (4.2 GB of build output, the
+xcframework, `.dev-team`) were moved aside and back by **rename**, never copied.
+
+**The one real cost: cherry-picking from upstream.** Upstream's paths are
+root-relative; ours are under `app/`, so `git cherry-pick <upstream-sha>` no
+longer applies. The recipe is now
+`git format-patch -1 --stdout <sha> | git apply --directory=app --3way`,
+recorded in `../app/AGENTS.md`. Upstream tracking stays cherry-pick-only (R16).
+
+**Also:** `master` → `main` (matching the app's own convention and GitHub's
+default); the parent's `.gitignore` no longer ignores `app/`; `upstream` is
+re-added on the unified repo. A `.git` backup of both original repositories was
+taken first and kept at `/tmp/kn-collapse-backup/`, and the app's pre-collapse
+working copy at `~/src/kn-app-aside` — neither is needed once the
+first push succeeds.
+
+**Evidence:** all 3030 tracked app files byte-identical to the pre-collapse copy
+(`cmp` per file); working tree clean; both histories reachable by path-limited
+log; `make test-policy` green and the quick tier re-run after the collapse.
+
+**Still true and worth restating:** a policy here blocks the agent from pushing,
+so Olof performs the first upload to `origin` himself.
