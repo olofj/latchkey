@@ -147,10 +147,25 @@ func runSelftest(h *harness, caFile string) error {
 	if !strings.HasPrefix(st2.AuthURL, h.baseURL+"/auth/") {
 		return fmt.Errorf("AuthURL = %q, want a %s/auth/ URL", st2.AuthURL, h.baseURL)
 	}
+	// The link's shape is the harness's to choose (-auth-path, authpath.go):
+	// by default hostile to every rule the project wrote for one, so the
+	// app's redaction is really tested. /state lists each link issued, so a
+	// scan of the app's container can look for the literal secret.
+	seg := strings.TrimPrefix(st2.AuthURL, h.baseURL+"/auth/")
+	if h.opts.authPath == "hostile" && !isHostileAuthSegment(seg) {
+		return fmt.Errorf("AuthURL = %q with -auth-path hostile, but the link would satisfy the old rules", st2.AuthURL)
+	}
+	listed := false
+	for _, l := range h.snapshot().LoginLinks {
+		listed = listed || l.Path == "/auth/"+seg
+	}
+	if !listed {
+		return fmt.Errorf("/state does not list the issued login link %q", "/auth/"+seg)
+	}
 	if err := stays(ctx, p2, "NeedsLogin", 2*time.Second); err != nil {
 		return err
 	}
-	ok("NeedsLogin, and it stays there until the login page is visited")
+	ok("NeedsLogin with a %s login link, listed in /state; it stays there until the login page is visited", h.opts.authPath)
 
 	step("visiting the login URL completes the login")
 	resp, err := http.Get(st2.AuthURL)

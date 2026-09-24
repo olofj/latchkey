@@ -31,10 +31,16 @@
 //   - The login page testcontrol lacks. With RequireAuth the node's
 //     BrowseToURL is <control>/auth/<id>; visiting it completes that login,
 //     as a browser that already has an identity-provider session would.
+//     The <id> is hostile by default -- mixed case, hyphens, a length that
+//     varies -- because its shape is control's to choose and a fixture that
+//     always fitted the app's redaction rule proved nothing (authpath.go;
+//     -auth-path hex restores upstream's 20 lower-case hex).
 //
 //   - A plain-HTTP API for the tests (default 127.0.0.1:8491):
 //
-//     GET  /state     control URL, mode, nodes, logins, journal
+//     GET  /state     control URL, mode, nodes, logins, loginLinks (every
+//     login path control issued this generation: the literal
+//     secrets a scan of the app's container must not find), journal
 //     POST /reset     ?auth=1 (RequireAuth) &machine=1 (RequireMachineAuth)
 //     &gw=0 (leave the gw peer out of this generation):
 //     a fresh control plane and fresh peers, returning once the
@@ -78,7 +84,7 @@
 // second app node, which TailnetHarnessTests treats as a failure.
 //
 //	tsnet-harness [-control 127.0.0.1:8490] [-api 127.0.0.1:8491] \
-//	              [-dashboard 127.0.0.1:8443] [-state DIR] [-v]
+//	              [-dashboard 127.0.0.1:8443] [-state DIR] [-auth-path hostile|hex] [-v]
 //	tsnet-harness -selftest -ca ca.pem     (host-side self-test; see selftest.go)
 package main
 
@@ -141,6 +147,7 @@ type options struct {
 	slowPeer      bool
 	stateDir      string
 	verbose       bool
+	authPath      string // shape of the login links control issues: hostile or hex (authpath.go)
 }
 
 // Mode is the control plane's login policy and peer set, set per reset.
@@ -158,6 +165,14 @@ type loginEvent struct {
 	Path      string    `json:"path"`
 	Completed bool      `json:"completed"`
 	At        time.Time `json:"at"`
+}
+
+// loginLink is a login path control issued to a node: the secret a scan of
+// the app's container must not find (authpath.go).
+type loginLink struct {
+	Gen  int       `json:"generation"`
+	Path string    `json:"path"`
+	At   time.Time `json:"at"`
 }
 
 type connEvent struct {
@@ -195,6 +210,7 @@ type harness struct {
 	ctl     *testcontrol.Server
 	peers   []*peer
 	logins  []loginEvent
+	links   []loginLink
 	journal []connEvent
 	// The device-check rehearsal, per generation. jailed: for each node the
 	// purgatory policy has been applied to, which harness peers drop its
@@ -213,9 +229,13 @@ func main() {
 	flag.BoolVar(&o.slowPeer, "slow-peer", false, "add a peer that accepts on :443 and never answers")
 	flag.StringVar(&o.stateDir, "state", "", "tsnet state root; each run gets a fresh subdirectory (default: the system temp dir)")
 	flag.BoolVar(&o.verbose, "v", false, "log tsnet and control-plane output")
+	flag.StringVar(&o.authPath, "auth-path", "hostile", "shape of the login links control issues: hostile (mixed case, hyphens, varying length) or hex (upstream's 20 lower-case hex)")
 	flag.BoolVar(&selftest, "selftest", false, "run the host-side self-test and exit")
 	flag.StringVar(&caFile, "ca", "", "test CA (PEM) the self-test trusts for the dashboard")
 	flag.Parse()
+	if o.authPath != "hostile" && o.authPath != "hex" {
+		log.Fatalf("-auth-path %q: want hostile or hex", o.authPath)
+	}
 
 	// A fresh directory per process under the state root: generations are
 	// numbered from 1 each run, and a node that found an earlier run's state
@@ -374,7 +394,7 @@ func (h *harness) reset(m Mode) error {
 
 	h.mu.Lock()
 	old := h.peers
-	h.peers, h.ctl, h.logins, h.journal = nil, nil, nil, nil
+	h.peers, h.ctl, h.logins, h.links, h.journal = nil, nil, nil, nil, nil
 	h.jailed = map[key.NodePublic]map[key.NodePublic]bool{}
 	h.gen++
 	gen := h.gen
@@ -406,6 +426,16 @@ func (h *harness) reset(m Mode) error {
 		HoldMapRequest: func(req *tailcfg.MapRequest) func() {
 			h.holdMapRequest(gen, req.NodeKey)
 			return nil
+		},
+		// The login links control issues are hostile by default (-auth-path,
+		// authpath.go), and each is recorded for GET /state. testcontrol
+		// calls this outside its own lock.
+		AuthPath: func() string {
+			p := h.newAuthPath()
+			h.mu.Lock()
+			h.links = append(h.links, loginLink{Gen: gen, Path: p, At: time.Now()})
+			h.mu.Unlock()
+			return p
 		},
 	}
 	h.mu.Lock()
@@ -561,6 +591,7 @@ type state struct {
 	Mode       Mode         `json:"mode"`
 	Nodes      []nodeInfo   `json:"nodes"`
 	Logins     []loginEvent `json:"logins"`
+	LoginLinks []loginLink  `json:"loginLinks"`
 	Journal    []connEvent  `json:"journal"`
 }
 
@@ -572,14 +603,20 @@ func (h *harness) snapshot() state {
 		Control:    h.baseURL,
 		Mode:       h.mode,
 		Logins:     []loginEvent{},
+		LoginLinks: []loginLink{},
 		Journal:    []connEvent{},
 		Nodes:      []nodeInfo{},
 	}
-	// reset() clears both lists, but an old peer's straggler can append after
-	// that; its generation gives it away.
+	// reset() clears these lists, but an old peer's straggler can append
+	// after that; its generation gives it away.
 	for _, e := range h.logins {
 		if e.Gen == h.gen {
 			st.Logins = append(st.Logins, e)
+		}
+	}
+	for _, l := range h.links {
+		if l.Gen == h.gen {
+			st.LoginLinks = append(st.LoginLinks, l)
 		}
 	}
 	for _, e := range h.journal {
