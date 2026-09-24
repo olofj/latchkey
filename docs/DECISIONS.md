@@ -2834,9 +2834,17 @@ change, then install.
 
 ### Left open, deliberately
 
-- `TSNetManager.startTailscale` calls `fatalError` when the node cannot be
+- ~~`TSNetManager.startTailscale` calls `fatalError` when the node cannot be
   created, so an unopenable state dir is a crash loop whose only exit is
-  deleting the app — which is identity loss. Needs a design, not a quick guard.
+  deleting the app — which is identity loss. Needs a design, not a quick guard.~~
+  **Specced 2026-09-23 as [F8](features/F8-node-start-failure.md); still to
+  build.** Writing it found a **second** trap on the same fault, firing earlier:
+  `WorkspaceManager.init`'s `fatalError` when `TailscaleLogging.setup` throws, on
+  a directory in the same unwritable tree. Fixing only the reported one would
+  have left the crash loop intact for precisely the case that motivated the fix.
+  It also cannot merely be caught: the filch that redacts tsnet's Go stderr is
+  what failed, so a logging failure has to *prevent* node creation rather than be
+  reported and ignored.
 - A relay with a dead upstream surfaces as `-1009`, which
   `SocksRelayRecovery.isTransportFailure` does not classify. By design (the
   status poll repairs it), recorded so the next reader does not treat it as a
