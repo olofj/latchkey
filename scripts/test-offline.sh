@@ -11,7 +11,9 @@
 #                  (not fail) when the host's own Tailscale is up
 #   2. certs       mint the test CA + leaf if needed
 #   3. simulator   boot it, trust the test CA
-#   4. harness     start the fake dashboard + stub proxy (controlled per test)
+#   4. harness     self-test the harness host-side (make check: R10's curl
+#                  mechanics, the silent-client lesson, page_check.js), then
+#                  start the fake dashboard + stub proxy (controlled per test)
 #   5. tests       xcodebuild test-without-building, OfflineHarnessTests
 #   6. R1 check    no sign-in token anywhere in the app container's logs
 #   7. teardown    stop the harness, whatever happened
@@ -77,6 +79,23 @@ teardown() {
     make -C "$HARNESS" --no-print-directory harness-down >/dev/null 2>&1 || true
 }
 trap teardown EXIT
+# The harness's own self-test first. It proves the fixtures the tests below
+# lean on -- that a blackholed CONNECT fails and a direct load of the leak
+# origin succeeds (R10's positive control), that a silent client stalls
+# nobody, that the page reconnects the way KiroCrew's does -- and until
+# 2026-09-23 nothing ran it (review): it existed, and the suite went straight
+# to harness-up. It costs about a second, so it runs every time; the cost is
+# printed so it stays honest. (The tsnet harness's self-test in
+# test-tailnet.sh is minutes, which is why that one is stamped and skipped.)
+say "harness self-test (make check)"
+T0=$(date +%s)
+make -C "$HARNESS" --no-print-directory check > "$LOG_DIR/harness-check.log" 2>&1 \
+    || { cat "$LOG_DIR/harness-check.log" >&2; echo "error: the offline harness's self-test failed" >&2; exit 1; }
+CHECKS=$(grep -c '^==>' "$LOG_DIR/harness-check.log" || true)
+if [[ "$CHECKS" -lt 1 ]]; then
+    echo "error: the harness self-test ran no checks (its log is $LOG_DIR/harness-check.log)" >&2; exit 1
+fi
+echo "    ok ($CHECKS checks in $(( $(date +%s) - T0 ))s; log: harness-check.log)"
 say "harness"
 make -C "$HARNESS" --no-print-directory harness-up
 
