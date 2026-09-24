@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +16,10 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/client/local"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 )
@@ -287,6 +291,9 @@ func runSelftest(h *harness, caFile string) error {
 		}
 	}
 	if err := selftestRehearsal(ctx, h, api, caFile); err != nil {
+		return err
+	}
+	if err := selftestSynthetic(ctx, h, api); err != nil {
 		return err
 	}
 
@@ -767,4 +774,357 @@ func journalHas2(h *harness, peer, fromIP string) bool {
 		}
 	}
 	return false
+}
+
+// selftestSynthetic covers the peer sets F7 §6 needs (synthetic.go):
+// synthetic candidates the app's filter would accept, an OS and an owner
+// set on a real peer that hold against that peer's own Hostinfo re-sends,
+// and a reset that clears all of it. Each is a check the F7 suite would
+// otherwise fail for a reason that looks like an app bug.
+func selftestSynthetic(ctx context.Context, h *harness, api string) error {
+	step("/peers: synthetic peers the app's filter would accept, listed by a node within seconds")
+	if _, err := apiPost(api + "/reset"); err != nil {
+		return err
+	}
+	probe, _, err := h.probe(ctx, "probe-synthetic", "Running")
+	if err != nil {
+		return err
+	}
+	defer probe.Close()
+	lc, _ := probe.LocalClient()
+	full, err := lc.Status(ctx)
+	if err != nil {
+		return err
+	}
+	selfUser := full.Self.UserID
+	dash := peerNamed(full, "dash")
+	if dash == nil {
+		return fmt.Errorf("dash is not among the probe's peers")
+	}
+	realOS, realUser, before := dash.OS, dash.UserID, len(full.Peer)
+	if selfUser == 0 || realUser != selfUser {
+		return fmt.Errorf("the probe's owner is %d and dash's %d; the owner checks below need AllNodesSameUser", selfUser, realUser)
+	}
+	out, err := apiPost(api + "/peers?n=3")
+	if err != nil {
+		return err
+	}
+	var added struct {
+		Added     int
+		Hostnames []string
+	}
+	json.Unmarshal(out, &added)
+	if added.Added != 3 || len(added.Hostnames) != 3 {
+		return fmt.Errorf("/peers?n=3 answered %s", out)
+	}
+	var peers map[string]*ipnstate.PeerStatus
+	var missing []string
+	for end := time.Now().Add(15 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if full, err = lc.Status(ctx); err != nil {
+			continue
+		}
+		peers, missing = peersByHost(full), nil
+		for _, n := range added.Hostnames {
+			if peers[n] == nil {
+				missing = append(missing, n)
+			}
+		}
+		if len(missing) == 0 {
+			break
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("the probe never listed synthetic peers %v; its peers: %v", missing, keys(peersSeen(full)))
+	}
+	if got := len(full.Peer); got != before+3 {
+		return fmt.Errorf("the probe lists %d peers, want %d + 3", got, before)
+	}
+	// One check per rule of GatewayCandidates.exclusion (R26): a peer that
+	// fails one here is dropped by the app before it is a candidate, and
+	// the F7 suite would see a small tailnet and no truncation.
+	for _, n := range added.Hostnames {
+		p := peers[n]
+		if want := n + "." + MagicDNSSuffix + "."; p.DNSName != want {
+			return fmt.Errorf("synthetic peer %s has DNSName %q, want %q: the app drops a peer with no MagicDNS name before any filter", n, p.DNSName, want)
+		}
+		if !p.Online {
+			return fmt.Errorf("synthetic peer %s is reported offline", n)
+		}
+		if p.Expired || p.ShareeNode {
+			return fmt.Errorf("synthetic peer %s is reported expired=%v sharee=%v", n, p.Expired, p.ShareeNode)
+		}
+		if !slices.Contains([]string{"linux", "macos", "windows"}, strings.ToLower(p.OS)) {
+			return fmt.Errorf("synthetic peer %s reports OS %q, not a server OS", n, p.OS)
+		}
+		if p.UserID != selfUser {
+			return fmt.Errorf("synthetic peer %s reports owner %d, the probe %d: the app would call it another owner", n, p.UserID, selfUser)
+		}
+	}
+	// And /state, which is how a UI test waits for them instead of sleeping.
+	for _, n := range added.Hostnames {
+		var ni nodeInfo
+		for _, x := range h.snapshot().Nodes {
+			if x.Hostname == n {
+				ni = x
+			}
+		}
+		if !ni.Synthetic || !ni.HarnessPeer || ni.OS != "linux" || ni.UserID != int64(selfUser) || len(ni.Addresses) != 1 {
+			return fmt.Errorf("/state lists %s as %+v", n, ni)
+		}
+		if a, _ := netip.ParseAddr(ni.Addresses[0]); !syntheticRange.Contains(a) || controlPool.Contains(a) || clientsRange.Contains(a) {
+			return fmt.Errorf("%s has address %s, want one in %s and outside %s and %s", n, ni.Addresses[0], syntheticRange, controlPool, clientsRange)
+		}
+	}
+	ok("%v: named, online, linux, owner %d; /state lists them as synthetic harness peers", added.Hostnames, selfUser)
+
+	step("a synthetic peer has nothing behind it: a connection stalls until the client gives up, as a probe would")
+	addr, cred, _, err := probe.Loopback()
+	if err != nil {
+		return err
+	}
+	proxy := "socks5h://tsnet:" + cred + "@" + addr
+	start := time.Now()
+	out2, err := curl("-k", "-m", "2", "--proxy", proxy, "https://"+added.Hostnames[0]+"."+MagicDNSSuffix+"/")
+	if err == nil {
+		return fmt.Errorf("synthetic peer %s answered: %.100q", added.Hostnames[0], out2)
+	}
+	if time.Since(start) < 1500*time.Millisecond {
+		return fmt.Errorf("the connection to %s failed fast (%v), not by stalling: %.100q -- a sweep would race through such peers and never truncate", added.Hostnames[0], time.Since(start), out2)
+	}
+	ok("stalled until the client gave up (%v)", time.Since(start).Round(100*time.Millisecond))
+
+	step("/peers, /peer-os and /peer-owner refuse what a test could not mean")
+	for _, bad := range []struct{ query, want string }{
+		{"/peers?n=abc", "n must be"},
+		{"/peers?n=0", "n must be"},
+		{"/peers?n=201", "n must be"},
+		{"/peers?n=198", "already this generation"}, // 3 + 198 > 200
+		{"/peers?name=Not_A_Label", "DNS label"},
+		{"/peer-os?hostname=dash", "os are required"},
+		{"/peer-owner?hostname=dash&user=0", "0 is what the app"},
+		{"/peer-owner?hostname=dash&user=me", "user=ID"},
+	} {
+		_, err := apiPost(api + bad.query)
+		if err == nil {
+			return fmt.Errorf("accepted %s", bad.query)
+		}
+		if !strings.Contains(err.Error(), bad.want) {
+			return fmt.Errorf("refused %s for the wrong reason: %v (want %q)", bad.query, err, bad.want)
+		}
+	}
+	if code := apiStatus(api + "/peer-os?hostname=nobody&os=linux"); code != http.StatusNotFound {
+		return fmt.Errorf("/peer-os for an unknown hostname: %d, want 404", code)
+	}
+	ok("refused, each for its reason; unknown hostname 404")
+
+	step("/peer-os: dash reports the OS it was given, and keeps it after re-sending its own Hostinfo")
+	if out, err := apiPost(api + "/peer-os?hostname=dash&os=synology"); err != nil || !strings.Contains(string(out), `"updated": 1`) {
+		return fmt.Errorf("peer-os: %v %s", err, out)
+	}
+	if err := waitPeer(ctx, lc, "dash", func(p *ipnstate.PeerStatus) bool { return p.OS == "synology" }); err != nil {
+		return fmt.Errorf("the probe never saw dash as synology: %w", err)
+	}
+	// Could fail: a node re-sends its Hostinfo whenever its netinfo or prefs
+	// change, and testcontrol stores what it is sent. Force one, and require
+	// control's copy, then the probe's, to still carry the override.
+	if err := resendHostinfo(ctx, h, "dash"); err != nil {
+		return err
+	}
+	n := h.controlNode("dash")
+	if n == nil {
+		return fmt.Errorf("dash is gone from control")
+	}
+	if got := n.Hostinfo.OS(); got != "synology" {
+		return fmt.Errorf("after dash re-sent its Hostinfo, control holds OS %q, want synology: the override did not stick", got)
+	}
+	if st, err := lc.Status(ctx); err != nil {
+		return err
+	} else if d := peerNamed(st, "dash"); d == nil {
+		return fmt.Errorf("dash is gone from the probe's peers")
+	} else if d.OS != "synology" {
+		return fmt.Errorf("after dash re-sent its Hostinfo the probe sees OS %q, want synology", d.OS)
+	}
+	ok("synology, before and after a Hostinfo re-send (dash's own is %s)", realOS)
+
+	step("/peer-owner: dash reports a non-zero owner that is not the probe's own, held the same way")
+	if out, err := apiPost(api + "/peer-owner?hostname=dash&user=777"); err != nil || !strings.Contains(string(out), `"updated": 1`) {
+		return fmt.Errorf("peer-owner: %v %s", err, out)
+	}
+	// Verified, not assumed: the app reads a peer's owner off its node entry,
+	// and an owner it could not see would arrive as 0, which exclusion()
+	// treats as unknown -- no exclusion at all.
+	if err := waitPeer(ctx, lc, "dash", func(p *ipnstate.PeerStatus) bool { return p.UserID == 777 }); err != nil {
+		return fmt.Errorf("the probe never saw dash owned by 777: %w", err)
+	}
+	if err := resendHostinfo(ctx, h, "dash"); err != nil {
+		return err
+	}
+	if n := h.controlNode("dash"); n == nil {
+		return fmt.Errorf("dash is gone from control")
+	} else if n.User != 777 {
+		return fmt.Errorf("after dash re-sent its Hostinfo, control holds owner %d, want 777", n.User)
+	}
+	st, err := lc.Status(ctx)
+	if err != nil {
+		return err
+	}
+	if d := peerNamed(st, "dash"); d == nil {
+		return fmt.Errorf("dash is gone from the probe's peers")
+	} else if d.UserID == 0 || d.UserID == selfUser || d.UserID != 777 {
+		return fmt.Errorf("dash reports owner %d (the probe's is %d), want 777", d.UserID, selfUser)
+	}
+	ok("owner 777 (the probe's is %d), held across a Hostinfo re-send", selfUser)
+
+	step("/reset clears the synthetic peers and the overrides")
+	if _, err := apiPost(api + "/reset"); err != nil {
+		return err
+	}
+	p2, _, err := h.probe(ctx, "probe-synthetic-reset", "Running")
+	if err != nil {
+		return err
+	}
+	defer p2.Close()
+	lc2, _ := p2.LocalClient()
+	// The new dash registered with its own Hostinfo; an override that
+	// outlived the generation would be applied at its next re-send, so
+	// force one before looking.
+	if err := resendHostinfo(ctx, h, "dash"); err != nil {
+		return err
+	}
+	st2, err := lc2.Status(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range st2.Peer {
+		if strings.HasPrefix(p.HostName, "peer-") {
+			return fmt.Errorf("synthetic peer %s survived the reset", p.HostName)
+		}
+	}
+	for _, x := range h.snapshot().Nodes {
+		if x.Synthetic {
+			return fmt.Errorf("/state still lists %s as synthetic", x.Hostname)
+		}
+	}
+	d := peerNamed(st2, "dash")
+	if d == nil {
+		return fmt.Errorf("dash is not among the new probe's peers")
+	}
+	if d.OS != realOS {
+		return fmt.Errorf("after a reset dash reports OS %q, want its own %q: the override outlived the generation", d.OS, realOS)
+	}
+	if d.UserID == 0 || d.UserID != st2.Self.UserID {
+		return fmt.Errorf("after a reset dash reports owner %d, the probe %d: the override outlived the generation", d.UserID, st2.Self.UserID)
+	}
+	if out, err = apiPost(api + "/peers?n=1"); err != nil {
+		return err
+	}
+	added.Hostnames = nil
+	json.Unmarshal(out, &added)
+	if strings.Join(added.Hostnames, ",") != "peer-00" {
+		return fmt.Errorf("after a reset /peers named its first peer %v, want peer-00: the numbering outlived the generation", added.Hostnames)
+	}
+	ok("gone; dash is %s again, owned by %d; numbering restarts at peer-00", d.OS, d.UserID)
+	return nil
+}
+
+// peerNamed is the peer whose hostname is host, or nil.
+func peerNamed(st *ipnstate.Status, host string) *ipnstate.PeerStatus {
+	for _, p := range st.Peer {
+		if p.HostName == host {
+			return p
+		}
+	}
+	return nil
+}
+
+func peersByHost(st *ipnstate.Status) map[string]*ipnstate.PeerStatus {
+	m := map[string]*ipnstate.PeerStatus{}
+	for _, p := range st.Peer {
+		m[p.HostName] = p
+	}
+	return m
+}
+
+func peersSeen(st *ipnstate.Status) map[string]bool {
+	m := map[string]bool{}
+	for _, p := range st.Peer {
+		m[p.HostName] = true
+	}
+	return m
+}
+
+// waitPeer polls the node's status until host satisfies want.
+func waitPeer(ctx context.Context, lc *local.Client, host string, want func(*ipnstate.PeerStatus) bool) error {
+	var last *ipnstate.PeerStatus
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if st, err := lc.Status(ctx); err == nil {
+			if last = peerNamed(st, host); last != nil && want(last) {
+				return nil
+			}
+		}
+	}
+	if last == nil {
+		return fmt.Errorf("timed out; %s never listed", host)
+	}
+	return fmt.Errorf("timed out; %s last reported OS %q owner %d", host, last.OS, last.UserID)
+}
+
+// resendHostinfo makes the harness peer name send control a fresh copy of
+// its own Hostinfo, as it does by itself whenever its netinfo or prefs
+// change. ShieldsUp is a Hostinfo field, so setting it and clearing it
+// again sends two, and control's stored copy shows each has been
+// processed; the peer ends as it began.
+func resendHostinfo(ctx context.Context, h *harness, name string) error {
+	srv := h.peerServer(name)
+	if srv == nil {
+		return fmt.Errorf("no harness peer %s", name)
+	}
+	lc, err := srv.LocalClient()
+	if err != nil {
+		return err
+	}
+	for _, up := range []bool{true, false} {
+		if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{Prefs: ipn.Prefs{ShieldsUp: up}, ShieldsUpSet: true}); err != nil {
+			return err
+		}
+		seen := false
+		for end := time.Now().Add(5 * time.Second); time.Now().Before(end) && !seen; time.Sleep(100 * time.Millisecond) {
+			if n := h.controlNode(name); n != nil && n.Hostinfo.ShieldsUp() == up {
+				seen = true
+			}
+		}
+		if !seen {
+			return fmt.Errorf("control never received %s's Hostinfo with ShieldsUp=%v: the re-send this check depends on did not happen", name, up)
+		}
+	}
+	return nil
+}
+
+// peerServer is the harness's own node named name, or nil.
+func (h *harness) peerServer(name string) *tsnet.Server {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, p := range h.peers {
+		if p.name == name {
+			return p.srv
+		}
+	}
+	return nil
+}
+
+// controlNode is control's stored entry (a clone) for the first node named
+// hostname, or nil: what every peer's next netmap will say about it.
+func (h *harness) controlNode(hostname string) *tailcfg.Node {
+	h.mu.Lock()
+	ctl := h.ctl
+	h.mu.Unlock()
+	if ctl == nil {
+		return nil
+	}
+	for _, n := range ctl.AllNodes() {
+		if n.Hostinfo.Hostname() == hostname {
+			return n
+		}
+	}
+	return nil
 }

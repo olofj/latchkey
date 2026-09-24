@@ -64,6 +64,18 @@
 //     harness peer, an address in use (the node's own included) or
 //     in testcontrol's own pool, a name that fits more than one
 //     node (409) or none (404)
+//     POST /peers     ?n=N (default 1, at most 200 a generation) &name=PREFIX
+//     (default peer) &os=OS (default linux): add N synthetic peers,
+//     PREFIX-00 upward -- entries in control's table with no node
+//     behind them, so a probe to one stalls. What lets a suite
+//     present a large tailnet, and a truncated sweep, without N
+//     real nodes (F7 §6; synthetic.go). Returns their hostnames
+//     POST /peer-os   ?hostname=NAME&os=OS: the OS that node reports, held
+//     against its own Hostinfo re-sends until the next reset -- gw
+//     as a NAS, which discovery declines (F7 §6)
+//     POST /peer-owner ?hostname=NAME&user=ID: that node's owner, held the
+//     same way -- gw as a colleague's. ID is non-zero: 0 reaches
+//     the app as "unknown", which is not another owner
 //     GET  /healthz   200 once the first reset has completed
 //
 // The harness sets the same no-log-upload knob as the app (decision D1):
@@ -89,6 +101,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -96,6 +109,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -216,6 +230,11 @@ type harness struct {
 	// purgatory policy has been applied to, which harness peers drop its
 	// traffic.
 	jailed map[key.NodePublic]map[key.NodePublic]bool // node => peer => jailed
+	// F7 §6 (synthetic.go), per generation: the synthetic peers by key and
+	// the next slot to name one from; the overrides on real ones by hostname.
+	synthetic  map[key.NodePublic]bool
+	syntheticN int
+	overrides  map[string]override
 }
 
 func main() {
@@ -396,6 +415,7 @@ func (h *harness) reset(m Mode) error {
 	old := h.peers
 	h.peers, h.ctl, h.logins, h.links, h.journal = nil, nil, nil, nil, nil
 	h.jailed = map[key.NodePublic]map[key.NodePublic]bool{}
+	h.synthetic, h.syntheticN, h.overrides = map[key.NodePublic]bool{}, 0, map[string]override{}
 	h.gen++
 	gen := h.gen
 	h.mode = m
@@ -421,10 +441,11 @@ func (h *harness) reset(m Mode) error {
 		Logf:      h.logf("control"),
 		// The purgatory policy reaches a node that joins later (the app, in
 		// the device-check rehearsal) from its first map request, and holds
-		// that request until it has: see holdMapRequest. testcontrol calls
-		// this outside its own lock, which SetJailed takes.
+		// that request until it has; the OS and owner overrides are
+		// re-asserted on each one: see holdMapRequest. testcontrol calls
+		// this outside its own lock, which SetJailed and UpdateNode take.
 		HoldMapRequest: func(req *tailcfg.MapRequest) func() {
-			h.holdMapRequest(gen, req.NodeKey)
+			h.holdMapRequest(gen, req)
 			return nil
 		},
 		// The login links control issues are hostile by default (-auth-path,
@@ -582,6 +603,13 @@ type nodeInfo struct {
 	// Jailed: the harness's peers drop this node's traffic (purgatory, and
 	// its address is outside clientsRange).
 	Jailed bool `json:"jailed"`
+	// OS and UserID as the node's peers see them: what /peer-os and
+	// /peer-owner change, and what discovery filters on (R26). Synthetic:
+	// a /peers node -- HarnessPeer too, because the UI tests take the one
+	// node that is not the harness's for the app's.
+	OS        string `json:"os"`
+	UserID    int64  `json:"userID"`
+	Synthetic bool   `json:"synthetic"`
 }
 
 type state struct {
@@ -635,6 +663,7 @@ func (h *harness) snapshot() state {
 			jailed[k] = jailed[k] || j
 		}
 	}
+	synthetic := maps.Clone(h.synthetic)
 	h.mu.Unlock()
 	if ctl != nil {
 		for _, n := range ctl.AllNodes() {
@@ -644,8 +673,11 @@ func (h *harness) snapshot() state {
 				MachineAuthorized: n.MachineAuthorized,
 				KeyExpired:        !n.KeyExpiry.IsZero() && n.KeyExpiry.Before(time.Now()),
 				Jailed:            jailed[n.Key],
+				OS:                n.Hostinfo.OS(),
+				UserID:            int64(n.User),
+				Synthetic:         synthetic[n.Key],
 			}
-			ni.HarnessPeer = ours[ni.Hostname]
+			ni.HarnessPeer = ours[ni.Hostname] || ni.Synthetic
 			for _, a := range n.Addresses {
 				ni.Addresses = append(ni.Addresses, a.Addr().String())
 			}
@@ -726,15 +758,20 @@ func (h *harness) updateWhere(match func(*tailcfg.Node) bool, change func(*tailc
 var controlPool = netip.MustParsePrefix("100.64.0.0/16")
 
 // holdMapRequest runs on each map request, before testcontrol serves it
-// (see reset): with purgatory on, a node the policy has not been applied to
-// yet -- one that just joined -- is jailed at every harness peer first.
-// Synchronous, and it has to be: the map request that carries a node's
-// endpoints is what wakes its peers, and a jail applied afterwards (an
-// earlier version's goroutine) left a window in which the peers saw the
-// node unjailed. Bounded, so a reset can never wait on it: applyPurgatory
-// makes no blocking call (SetJailed's wake-up is a lossy send) and takes no
-// lock a testcontrol lock's holder takes.
-func (h *harness) holdMapRequest(gen int, k key.NodePublic) {
+// (see reset). First the OS and owner overrides are re-asserted
+// (enforceOverrides: the request is about to overwrite the node's stored
+// Hostinfo, so this is the one place they can hold). Then, with purgatory
+// on, a node the policy has not been applied to yet -- one that just
+// joined -- is jailed at every harness peer. Synchronous, and it has to
+// be: the map request that carries a node's endpoints is what wakes its
+// peers, and a jail applied afterwards (an earlier version's goroutine)
+// left a window in which the peers saw the node unjailed. Bounded, so a
+// reset can never wait on it: neither step makes a blocking call
+// (SetJailed's and UpdateNode's wake-ups are lossy sends) or takes a lock
+// a testcontrol lock's holder takes.
+func (h *harness) holdMapRequest(gen int, req *tailcfg.MapRequest) {
+	h.enforceOverrides(gen, req)
+	k := req.NodeKey
 	h.mu.Lock()
 	_, applied := h.jailed[k]
 	ours := slices.ContainsFunc(h.peers, func(p *peer) bool { return p.key == k })
@@ -770,11 +807,13 @@ func (h *harness) applyPurgatory() {
 	defer h.purgatoryMu.Unlock()
 	h.mu.Lock()
 	ctl, peers, on, gen := h.ctl, h.peers, h.mode.Purgatory, h.gen
+	// Synthetic peers are the harness's too: nothing behind them to jail,
+	// and each SetJailed pushes netmaps to everyone.
+	ours := maps.Clone(h.synthetic)
 	h.mu.Unlock()
 	if ctl == nil {
 		return
 	}
-	ours := map[key.NodePublic]bool{}
 	for _, p := range peers {
 		ours[p.key] = true
 	}
@@ -832,11 +871,11 @@ func (h *harness) move(hostname string, to netip.Addr) (status int, err error) {
 	}
 	h.mu.Lock()
 	ctl, peers := h.ctl, h.peers
+	ours := maps.Clone(h.synthetic)
 	h.mu.Unlock()
 	if ctl == nil {
 		return http.StatusServiceUnavailable, errors.New("control plane is resetting")
 	}
-	ours := map[key.NodePublic]bool{}
 	for _, p := range peers {
 		ours[p.key] = true
 	}
@@ -961,6 +1000,62 @@ func (h *harness) apiMux() *http.ServeMux {
 			return
 		}
 		reply(w, http.StatusOK, map[string]any{"moved": 1})
+	})
+	mux.HandleFunc("POST /peers", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		n := 1
+		if s := q.Get("n"); s != "" {
+			v, err := strconv.Atoi(s)
+			if err != nil || v < 1 || v > maxSynthetic {
+				reply(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("n must be a number from 1 to %d", maxSynthetic)})
+				return
+			}
+			n = v
+		}
+		prefix := cmp.Or(q.Get("name"), "peer")
+		if !validLabel(prefix) {
+			reply(w, http.StatusBadRequest, map[string]any{"error": "name must be a DNS label: lower-case letters, digits and hyphens, at most 60"})
+			return
+		}
+		names, status, err := h.addPeers(n, prefix, cmp.Or(q.Get("os"), "linux"))
+		if err != nil {
+			reply(w, status, map[string]any{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, map[string]any{"added": len(names), "hostnames": names})
+	})
+	mux.HandleFunc("POST /peer-os", func(w http.ResponseWriter, r *http.Request) {
+		name, os := r.URL.Query().Get("hostname"), r.URL.Query().Get("os")
+		if name == "" || os == "" {
+			reply(w, http.StatusBadRequest, map[string]any{"error": "hostname and os are required"})
+			return
+		}
+		n, status, err := h.setPeerOS(name, os)
+		if err != nil {
+			reply(w, status, map[string]any{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, map[string]any{"updated": n})
+	})
+	mux.HandleFunc("POST /peer-owner", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("hostname")
+		user, err := strconv.ParseInt(r.URL.Query().Get("user"), 10, 64)
+		if name == "" || err != nil || user < 0 {
+			reply(w, http.StatusBadRequest, map[string]any{"error": "hostname and user=ID (a positive integer) are required"})
+			return
+		}
+		if user == 0 {
+			// The one value that would make a test worthless: exclusion()
+			// reads 0 as owner unknown, which excludes nothing.
+			reply(w, http.StatusBadRequest, map[string]any{"error": "user=0 is what the app reads as owner unknown, not as another owner"})
+			return
+		}
+		n, status, err := h.setPeerOwner(name, tailcfg.UserID(user))
+		if err != nil {
+			reply(w, status, map[string]any{"error": err.Error()})
+			return
+		}
+		reply(w, http.StatusOK, map[string]any{"updated": n})
 	})
 	return mux
 }
