@@ -248,6 +248,18 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	    https://dash.localtest.me:$(DASH_PORT)/__report >/dev/null; \
 	curl -s $$DCTL/__state | $(PY) -c "import json, sys, time; r = json.load(sys.stdin)['reports']['dash.localtest.me']; \
 	    assert abs(r['received_at'] - time.time()) < 5 and r['received_seq'] >= 1, r"; echo "    ok"; \
+	echo "==> F4 D10: /__mode?front=502 answers 5xx on a LIVE connection, from the control port"; \
+	curl -sS --fail -X POST "$$DCTL/__mode?front=502" | grep -q '"front": *502'; \
+	code=$$(curl -s -o /tmp/front502.body -w '%{http_code}' --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/); \
+	if [ "$$code" != "502" ]; then echo "FAIL: front=502 served $$code, not 502" >&2; exit 1; fi; \
+	if [ -s /tmp/front502.body ]; then echo "FAIL: the 502 carried a body; ReverseProxy sends none" >&2; exit 1; fi; \
+	curl -s $$DCTL/__state | grep -q '"front": *502'; \
+	curl -sS --fail -X POST "$$DCTL/__mode?front=0" >/dev/null; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; \
+	rm -f /tmp/front502.body; echo "    ok (and front=0 restores the page)"; \
+	echo "==> ...and a bad front value is refused rather than silently ignored"; \
+	code=$$(curl -s -o /dev/null -w '%{http_code}' -X POST "$$DCTL/__mode?front=200"); \
+	if [ "$$code" != "400" ]; then echo "FAIL: front=200 answered $$code, not 400" >&2; exit 1; fi; echo "    ok"; \
 	echo "==> M6: /__ws_push reaches an open WebSocket and /__drop_ws cuts it, as a gateway restart does"; \
 	$(PY) -c "from dashboard import ws_drop_probe; ws_drop_probe($(DASH_PORT), $(DASH_CONTROL_PORT), 'ca.pem')"; echo "    ok"; \
 	echo "==> M6.4: the page reconnects as KiroCrew's does (1 s doubling to 10 s, reset on open, refetch)"; \

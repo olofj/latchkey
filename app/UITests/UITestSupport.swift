@@ -10,6 +10,52 @@
 
 import XCTest
 
+/// The harnesses' plain-HTTP control ports, over loopback.
+///
+/// One implementation, because there were three: each suite had its own private
+/// `get`/`post` pair, `get` checked the status code in all three and `post`
+/// checked it in none. A `POST /__mode?front=502` aimed at the wrong server
+/// therefore returned 404, threw nothing, and the test that depended on it
+/// asserted against a perfectly healthy dashboard — then hung for two minutes
+/// waiting for an error page that was never going to appear. A control call
+/// that does nothing must fail the test that made it.
+enum HarnessControl {
+    /// Thrown for any non-2xx. Carries the URL because the usual cause is a
+    /// path or a port that does not exist on the server being asked.
+    struct BadStatus: Error, CustomStringConvertible {
+        let method: String
+        let url: String
+        let status: Int
+        let body: String
+        var description: String {
+            "\(method) \(url) answered \(status), not 2xx"
+                + (body.isEmpty ? "" : ": \(body.prefix(200))")
+        }
+    }
+
+    static func get(_ url: String, timeout: TimeInterval = 5) async throws -> Data {
+        try await send("GET", url, timeout: timeout)
+    }
+
+    @discardableResult
+    static func post(_ url: String, timeout: TimeInterval = 5) async throws -> Data {
+        try await send("POST", url, timeout: timeout)
+    }
+
+    private static func send(_ method: String, _ url: String,
+                             timeout: TimeInterval) async throws -> Data {
+        var request = URLRequest(url: URL(string: url)!, timeoutInterval: timeout)
+        request.httpMethod = method
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200...299).contains(status) else {
+            throw BadStatus(method: method, url: url, status: status,
+                            body: String(decoding: data, as: UTF8.self))
+        }
+        return data
+    }
+}
+
 extension XCUIElement {
     /// Scrolls `container` until this element is on screen. Settings opens as
     /// a half sheet, and Forms and Lists build their rows lazily: a row below

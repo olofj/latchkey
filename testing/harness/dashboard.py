@@ -226,16 +226,6 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.count()
-        # POST /__mode?front=502 makes the document answer 5xx on a live
-        # connection; front=0 restores it. Deliberately only the document, so
-        # /__state and /__report keep working while the front is "down" and a
-        # test can still read what happened.
-        if self.path.split("?", 1)[0] == "/__mode":
-            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
-            global FRONT_STATUS
-            FRONT_STATUS = int((q.get("front") or ["0"])[0])
-            return self.body(json.dumps({"front": FRONT_STATUS}).encode(),
-                             "application/json")
         if self.path != "/__report":
             return self.body(b"not found", "text/plain", 404)
         n = int(self.headers.get("Content-Length") or 0)
@@ -373,7 +363,7 @@ class Control(BaseHTTPRequestHandler):
             return self.reply({"error": "not found"}, 404)
         with STATE_LOCK:
             return self.reply({"reports": REPORTS, "requests": REQUESTS, "paths": list(PATHS),
-                               "ws_open": len(WS_OPEN)})
+                               "ws_open": len(WS_OPEN), "front": FRONT_STATUS})
 
     def do_POST(self):
         if self.path == "/__reset":
@@ -382,13 +372,33 @@ class Control(BaseHTTPRequestHandler):
                 REQUESTS.clear()
                 PATHS.clear()
             return self.reply({"ok": True})
+        # POST /__mode?front=502 makes the document answer 5xx on a live
+        # connection; front=0 restores it. Deliberately only the document, so
+        # /__state and /__report keep working while the front is "down" and a
+        # test can still read what happened.
+        #
+        # It belongs HERE, on the plain-HTTP control port, and not on the
+        # dashboard itself: a UI test reaches the dashboard only through the
+        # app's SOCKS proxy, so a switch served over TLS on :8443 is one the
+        # test cannot operate. It was written on the dashboard handler first;
+        # every test posted it to the control port, got a 404, and asserted
+        # against a perfectly healthy server. The Makefile's `check` now proves
+        # the switch works from this port, and the tests' own `post()` now fails
+        # on a non-2xx instead of shrugging at one.
+        path, _, query = self.path.partition("?")
+        if path == "/__mode":
+            want = urllib.parse.parse_qs(query).get("front", ["0"])[0]
+            if not re.fullmatch(r"0|5[0-9][0-9]", want):
+                return self.reply({"error": "front must be 0 or a 5xx status"}, 400)
+            global FRONT_STATUS
+            FRONT_STATUS = int(want)
+            return self.reply({"ok": True, "front": FRONT_STATUS})
         if self.path == "/__drop_ws":
             with STATE_LOCK:
                 open_now = list(WS_OPEN)
             for h in open_now:
                 h.drop()
             return self.reply({"ok": True, "dropped": len(open_now)})
-        path, _, query = self.path.partition("?")
         if path == "/__ws_push":
             text = urllib.parse.parse_qs(query).get("text", [""])[0]
             if not re.fullmatch(r"[A-Za-z0-9-]{1,32}", text):

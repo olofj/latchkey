@@ -453,19 +453,16 @@ final class OfflineHarnessTests: XCTestCase {
         }
     }
 
+    // Both go through HarnessControl (UITestSupport.swift), which fails on any
+    // non-2xx. The copy that used to live here checked the status on GET and
+    // not on POST, so a control call to an endpoint that did not exist was
+    // silently a no-op.
     private static func get(_ url: String) async throws -> Data {
-        var request = URLRequest(url: URL(string: url)!, timeoutInterval: 5)
-        request.httpMethod = "GET"
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-        return data
+        try await HarnessControl.get(url)
     }
 
     @discardableResult
     private static func post(_ url: String) async throws -> Data {
-        var request = URLRequest(url: URL(string: url)!, timeoutInterval: 5)
-        request.httpMethod = "POST"
-        let (data, _) = try await URLSession.shared.data(for: request)
-        return data
+        try await HarnessControl.post(url)
     }
 }
