@@ -218,3 +218,23 @@ is `width=device-width` (`testing/harness/dashboard.py:89`), so it never asks fo
 edge-to-edge and can never be clipped by an island. F10 §4.2's fixture parity —
 the fake must be no more forgiving than the product — has to land before the next
 measurement means anything.
+
+### 2026-09-24 — the probe ran: the page is told 62
+
+F10 §4.2 landed, and with it §6's two probes (served at `/__inset-cover` and
+`/__inset-plain`, and at `/` via `POST /__mode?root=`, because the app loads only
+an origin). `testInsetProbesReportWhatThePageIsTold`, L1 on the iPhone 17
+simulator, `app/build/offline-logs/20260924-152840/suite.log`:
+
+| probe | top | right | bottom | left | innerHeight |
+|---|---|---|---|---|---|
+| cover (`viewport-fit=cover`) | **62px** | 0px | 0px | 0px | 840 |
+| plain (no `viewport-fit`) | 0px | 0px | 0px | 0px | 778 |
+
+**WebKit passes the truth through.** A cover page is told the real 62pt top
+inset; an ordinary page gets a viewport 62pt shorter and `env()` of 0 — WebKit
+insets it once, as §6 test B wants. So the fault is not in UIKit or WebKit's
+inset plumbing: it is above them, in the real page's CSS or in
+`interactive-widget=resizes-content`, which the cover probe does not declare.
+The bottom inset of 0 on the cover page is §9's separate finding again (the web
+view stops 34pt short of the home indicator), seen now from the page's side.

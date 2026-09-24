@@ -171,3 +171,24 @@ able to fail — which for a test is the only evidence that it works.
 
 Opened 2026-09-24, from Olof's observation that F9 should not have needed his
 eyes.
+
+### 2026-09-24 — §4.2 landed, red first
+
+`app/scripts/test-fixture-parity.swift`, in `make test-policy`. It reads the
+fake's `PAGE` literal and the installed `index.html` **plus the stylesheets it
+links**: the product's `index.html` mentions `env()` only inside an HTML
+comment, and its 25 CSS uses live in `assets/src-*.css`, so a check on
+`index.html` alone would have been fooled either way. Against the old fake:
+
+```
+  real: viewport "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover", 25 env(safe-area-inset-*) in its CSS
+  fake: viewport "width=device-width", 0 env(safe-area-inset-*) in its CSS
+  FAIL: viewport-fit: product cover, fake (absent) -- the fake must ask for the same layout the product does
+  FAIL: interactive-widget: product resizes-content, fake (absent) -- it decides what the keyboard does to the layout viewport
+  FAIL: env(safe-area-inset-*): product uses it 25x, fake 0x -- the fake must consume the insets the way the product does
+fixture-parity: 3 FAILED
+```
+
+The fake now carries the product's viewport verbatim and pads its body by
+`env(safe-area-inset-*)`. No existing L1 test moved (14/14, 210 s). F9 §6's
+probes landed alongside; their first measurement is in F9 §9.

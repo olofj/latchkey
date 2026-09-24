@@ -18,12 +18,20 @@ Page routes (HTTPS):
   POST /__report    the page's self-report; stored per Host, stamped with the
                     time it was received (M6: "after the resume" needs a clock
                     the frozen app cannot have run)
+  GET  /__inset-cover, /__inset-plain
+                    F9 §6's probes: report their computed env(safe-area-inset-*)
+                    and viewport size to POST /__inset-report, with and without
+                    viewport-fit=cover
 
 Control routes (plain HTTP, 127.0.0.1:<control-port>):
   GET  /__state     {"reports": {host: latest report}, "requests": {host: n},
                      "paths": [recent "HOST METHOD PATH | USER-AGENT" lines],
-                     "ws_open": n}
-  POST /__reset     clear all of the above
+                     "ws_open": n, "insets": {probe: latest inset report},
+                     "root": "page"|"cover"|"plain"}
+  POST /__reset     clear all of the above (not the modes)
+  POST /__mode?front=502|0, ?root=cover|plain|page
+                    answer the document 5xx on a live connection; or serve an
+                    inset probe at / (the app loads only an origin)
   POST /__drop_ws   close every open WebSocket server-side, as a gateway
                     restart does; the page must reconnect by itself (M6.4)
   POST /__ws_push?text=T  send T as a text frame down every open WebSocket;
@@ -75,6 +83,8 @@ REQUESTS = {}         # host -> count of page-side requests
 PATHS = deque(maxlen=200)
 REPORT_SEQ = 0        # every stored report gets the next number
 WS_OPEN = set()       # the handlers of WebSocket connections currently open
+INSETS = {}           # probe name ("cover"/"plain") -> latest inset report
+ROOT_PROBE = ""       # "" = / serves the page; "cover"/"plain" = that probe
 
 
 def host_of(handler):
@@ -85,8 +95,17 @@ def host_of(handler):
     return h.rsplit(":", 1)[0] if ":" in h else h
 
 
+# The viewport is the shipped frontend's, verbatim, and the body insets itself
+# by env(safe-area-inset-*) as the frontend's chrome does (F10 §4.2). With the
+# old bare `width=device-width` the fake never asked for edge-to-edge, so it
+# could never be clipped by the Dynamic Island and L1 could not see F9.
+# app/scripts/test-fixture-parity.swift fails when the two drift apart.
 PAGE = """<!doctype html><meta charset=utf-8>
-<meta name=viewport content="width=device-width">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover" />
+<style>
+body { margin: 0; padding: calc(8px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right))
+       calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left)); }
+</style>
 <title>FAKE DASHBOARD</title>
 <h1 id=title>FAKE DASHBOARD</h1>
 <p id=wsstate>ws:idle</p><p id=sse>sse:idle</p><p id=echo></p>
@@ -169,6 +188,52 @@ setInterval(report, 1000);
 </script>"""
 
 
+# F9 §6's probe pages: each reports the env(safe-area-inset-*) values WebKit
+# computed for it, and its viewport size, to POST /__inset-report, and the
+# control port shows the latest per probe under /__state's "insets". Numbers
+# the page was told, not pixels off the screen. `cover` asks for edge-to-edge
+# as the product does; `plain` does not, which pins the ordinary-page path
+# (WebKit insets the viewport itself and reports env() as 0).
+INSET_VIEWPORTS = {
+    "cover": "width=device-width, viewport-fit=cover",
+    "plain": "width=device-width",
+}
+INSET_PROBE = """<!doctype html><meta charset=utf-8>
+<meta name=viewport content="%(viewport)s">
+<title>INSET PROBE %(probe)s</title>
+<style>
+body { margin: 0; }
+#probe { position: fixed; visibility: hidden; padding-top: env(safe-area-inset-top);
+         padding-right: env(safe-area-inset-right); padding-bottom: env(safe-area-inset-bottom);
+         padding-left: env(safe-area-inset-left); }
+</style>
+<h1 id=title>INSET PROBE %(probe)s</h1>
+<div id=probe></div>
+<script>
+var DOC = Math.random().toString(36).slice(2), SEQ = 0;
+function report() {
+  var cs = getComputedStyle(document.getElementById('probe'));
+  var s = {
+    probe: '%(probe)s', doc: DOC, seq: ++SEQ,
+    top: cs.paddingTop, right: cs.paddingRight, bottom: cs.paddingBottom, left: cs.paddingLeft,
+    innerHeight: window.innerHeight, innerWidth: window.innerWidth,
+    clientHeight: document.documentElement.clientHeight,
+    visualViewportHeight: window.visualViewport ? window.visualViewport.height : null,
+    ts: Date.now()
+  };
+  fetch('/__inset-report', {method: 'POST', body: JSON.stringify(s),
+                            headers: {'Content-Type': 'application/json'}}).catch(function(){});
+}
+window.addEventListener('resize', report);
+report();
+setInterval(report, 1000);
+</script>"""
+
+
+def inset_probe(probe):
+    return INSET_PROBE % {"probe": probe, "viewport": INSET_VIEWPORTS[probe]}
+
+
 class Page(HandshakeInThread, BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     away_url = "https://dash.localtest.me:8443/away-target"
@@ -222,11 +287,18 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path in ("/__inset-cover", "/__inset-plain"):
+            return self.body(inset_probe(path[len("/__inset-"):]).encode(), "text/html; charset=utf-8")
+        # The app loads only a gateway's origin (GatewayAddress.persistable
+        # drops any path), so a test reaches a probe by switching what / serves
+        # from the control port: POST /__mode?root=cover.
+        if ROOT_PROBE and path in ("/", "/index.html"):
+            return self.body(inset_probe(ROOT_PROBE).encode(), "text/html; charset=utf-8")
         return self.body(PAGE.encode(), "text/html; charset=utf-8")
 
     def do_POST(self):
         self.count()
-        if self.path != "/__report":
+        if self.path not in ("/__report", "/__inset-report"):
             return self.body(b"not found", "text/plain", 404)
         n = int(self.headers.get("Content-Length") or 0)
         try:
@@ -241,7 +313,13 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             REPORT_SEQ += 1
             data["received_at"] = time.time()
             data["received_seq"] = REPORT_SEQ
-            REPORTS[host_of(self)] = data
+            if self.path == "/__report":
+                REPORTS[host_of(self)] = data
+            elif data.get("probe") in INSET_VIEWPORTS:
+                data["host"] = host_of(self)
+                INSETS[data["probe"]] = data
+            else:
+                return self.body(b"unknown probe", "text/plain", 400)
         return self.body(b'{"ok":true}', "application/json")
 
     def body(self, b, ctype, status=200):
@@ -363,14 +441,17 @@ class Control(BaseHTTPRequestHandler):
             return self.reply({"error": "not found"}, 404)
         with STATE_LOCK:
             return self.reply({"reports": REPORTS, "requests": REQUESTS, "paths": list(PATHS),
-                               "ws_open": len(WS_OPEN), "front": FRONT_STATUS})
+                               "ws_open": len(WS_OPEN), "front": FRONT_STATUS,
+                               "insets": INSETS, "root": ROOT_PROBE or "page"})
 
     def do_POST(self):
+        global FRONT_STATUS, ROOT_PROBE
         if self.path == "/__reset":
             with STATE_LOCK:
                 REPORTS.clear()
                 REQUESTS.clear()
                 PATHS.clear()
+                INSETS.clear()
             return self.reply({"ok": True})
         # POST /__mode?front=502 makes the document answer 5xx on a live
         # connection; front=0 restores it. Deliberately only the document, so
@@ -387,12 +468,21 @@ class Control(BaseHTTPRequestHandler):
         # on a non-2xx instead of shrugging at one.
         path, _, query = self.path.partition("?")
         if path == "/__mode":
-            want = urllib.parse.parse_qs(query).get("front", ["0"])[0]
+            q = urllib.parse.parse_qs(query)
+            # root=cover|plain makes / serve that inset probe (F9 §6); root=page
+            # restores the dashboard page. Independent of front=.
+            if "root" in q:
+                root = q["root"][0]
+                if root not in ("page",) + tuple(INSET_VIEWPORTS):
+                    return self.reply({"error": "root must be page, cover or plain"}, 400)
+                ROOT_PROBE = "" if root == "page" else root
+                if "front" not in q:
+                    return self.reply({"ok": True, "front": FRONT_STATUS, "root": root})
+            want = q.get("front", ["0"])[0]
             if not re.fullmatch(r"0|5[0-9][0-9]", want):
                 return self.reply({"error": "front must be 0 or a 5xx status"}, 400)
-            global FRONT_STATUS
             FRONT_STATUS = int(want)
-            return self.reply({"ok": True, "front": FRONT_STATUS})
+            return self.reply({"ok": True, "front": FRONT_STATUS, "root": ROOT_PROBE or "page"})
         if self.path == "/__drop_ws":
             with STATE_LOCK:
                 open_now = list(WS_OPEN)

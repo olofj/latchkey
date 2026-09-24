@@ -65,7 +65,7 @@ final class OfflineHarnessTests: XCTestCase {
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
         _ = try await Self.post("\(Self.proxyControl)/mode?stall=0")
         _ = try await Self.post("\(Self.proxyControl)/open")
-        _ = try await Self.post("\(Self.dashboardControl)/__mode?front=0")
+        _ = try await Self.post("\(Self.dashboardControl)/__mode?front=0&root=page")
     }
 
     // MARK: - M2.5 / M2.7: the happy path
@@ -469,6 +469,56 @@ final class OfflineHarnessTests: XCTestCase {
         XCTAssertNotEqual(report["doc"] as? String, oldDoc, "this report is from the new document")
         XCTAssertEqual(report["search"] as? String, "",
                        "the token must be gone from the address before the page's scripts run")
+    }
+
+    // MARK: - F9 §6: what the page is told about the safe area
+
+    /// The instrument F9 is blocked on: a `viewport-fit=cover` page and an
+    /// ordinary one each report the `env(safe-area-inset-*)` WebKit computed
+    /// for them, and their viewport height, to the fake dashboard. This test
+    /// only establishes that the numbers arrive and records them; F9's tests A
+    /// and B add the assertions once §9's measurement has chosen the fix.
+    func testInsetProbesReportWhatThePageIsTold() async throws {
+        addTeardownBlock { try? await Self.post("\(Self.dashboardControl)/__mode?root=page") }
+        var seen: [String: [String: Any]] = [:]
+        for probe in ["cover", "plain"] {
+            try await Self.post("\(Self.dashboardControl)/__mode?root=\(probe)")
+            let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+            // Several reports in, so layout has settled: the first can precede
+            // the web view reaching its final frame.
+            let r = try await waitForInsets(probe, timeout: 40) { ($0["seq"] as? Int ?? 0) >= 3 }
+            app.terminate()
+            for edge in ["top", "right", "bottom", "left"] {
+                let v = r[edge] as? String ?? ""
+                XCTAssertTrue(v.hasSuffix("px") && Double(v.dropLast(2)) != nil,
+                              "\(probe): env(safe-area-inset-\(edge)) is a computed length, got \(v)")
+            }
+            XCTAssertGreaterThan(r["innerHeight"] as? Int ?? 0, 0, "\(probe): a laid-out viewport")
+            seen[probe] = r
+            let line = "INSET-PROBE \(probe): top=\(r["top"] ?? "-") right=\(r["right"] ?? "-")"
+                + " bottom=\(r["bottom"] ?? "-") left=\(r["left"] ?? "-")"
+                + " innerHeight=\(r["innerHeight"] ?? "-") innerWidth=\(r["innerWidth"] ?? "-")"
+                + " clientHeight=\(r["clientHeight"] ?? "-") visualViewportHeight=\(r["visualViewportHeight"] ?? "-")"
+            print(line)
+            add(XCTAttachment(string: line))
+        }
+        XCTAssertEqual(seen.count, 2, "both probes reported")
+    }
+
+    private func waitForInsets(_ probe: String, timeout: TimeInterval,
+                               until predicate: ([String: Any]) -> Bool) async throws -> [String: Any] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var last: [String: Any] = [:]
+        while Date() < deadline {
+            let insets = try await dashboardState()["insets"] as? [String: [String: Any]] ?? [:]
+            if let r = insets[probe] {
+                last = r
+                if predicate(r) { return r }
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        XCTFail("no settled inset report from the \(probe) probe within \(Int(timeout))s; last: \(last)")
+        return last
     }
 
     // MARK: - Launch

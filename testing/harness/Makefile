@@ -260,6 +260,18 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	echo "==> ...and a bad front value is refused rather than silently ignored"; \
 	code=$$(curl -s -o /dev/null -w '%{http_code}' -X POST "$$DCTL/__mode?front=200"); \
 	if [ "$$code" != "400" ]; then echo "FAIL: front=200 answered $$code, not 400" >&2; exit 1; fi; echo "    ok"; \
+	echo "==> F9 §6: the inset probes, their viewports, /__mode?root= and /__state's insets"; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/__inset-cover | grep -q 'content="width=device-width, viewport-fit=cover"'; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/__inset-plain | grep -q 'content="width=device-width"'; \
+	curl -sS --fail -X POST "$$DCTL/__mode?root=cover" | grep -q '"root": *"cover"'; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "INSET PROBE cover"; \
+	curl -sS --fail -X POST "$$DCTL/__mode?root=page" >/dev/null; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; \
+	curl -s -X POST $$DCTL/__reset >/dev/null; \
+	curl -sS --fail --cacert ca.pem -d '{"probe":"cover","top":"62px"}' https://dash.localtest.me:$(DASH_PORT)/__inset-report >/dev/null; \
+	curl -s $$DCTL/__state | $(PY) -c "import json, sys; r = json.load(sys.stdin)['insets']['cover']; assert r['top'] == '62px' and r['received_seq'] >= 1, r"; \
+	code=$$(curl -s -o /dev/null -w '%{http_code}' --cacert ca.pem -d '{"probe":"nope"}' https://dash.localtest.me:$(DASH_PORT)/__inset-report); \
+	if [ "$$code" != "400" ]; then echo "FAIL: an unknown probe answered $$code, not 400" >&2; exit 1; fi; echo "    ok"; \
 	echo "==> M6: /__ws_push reaches an open WebSocket and /__drop_ws cuts it, as a gateway restart does"; \
 	$(PY) -c "from dashboard import ws_drop_probe; ws_drop_probe($(DASH_PORT), $(DASH_CONTROL_PORT), 'ca.pem')"; echo "    ok"; \
 	echo "==> M6.4: the page reconnects as KiroCrew's does (1 s doubling to 10 s, reset on open, refetch)"; \
