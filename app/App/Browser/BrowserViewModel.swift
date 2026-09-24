@@ -148,9 +148,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
     func makeWebView() -> WKWebView {
         if let webView { return webView }
 
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = dataStore
-        configuration.upgradeKnownHostsToHTTPS = false
+        let configuration = Self.makeWebViewConfiguration(dataStore: dataStore)
         // Before any navigation, so they run at every document start.
         PageScripts.install(into: configuration.userContentController)
         session?.install(into: configuration.userContentController, host: self)
@@ -185,6 +183,26 @@ final class BrowserViewModel: NSObject, ObservableObject {
             loadInitial()
         }
         return view
+    }
+
+    /// The configuration every dashboard web view is built from. Static and
+    /// WebKit-only so scripts/test-browser-view-model.sh can assert it on
+    /// the host; the scripts and the session bridge are installed by the
+    /// caller, which owns them.
+    static func makeWebViewConfiguration(dataStore: WKWebsiteDataStore) -> WKWebViewConfiguration {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = dataStore
+        configuration.upgradeKnownHostsToHTTPS = false
+        // D1: nothing leaves the device but traffic to the gateway. WebKit's
+        // fraudulent-website check (Safe Browsing) is ON by default and
+        // submits every main-frame navigation to the system's fraud-check
+        // service -- a non-gateway destination outside the split tunnel,
+        // from a process scripts/check-no-log-upload.sh does not watch. It
+        // sends hash prefixes, so no token leaves, but it is per-navigation
+        // egress D1 forbids, for a browser that opens exactly one origin the
+        // owner chose (R3). Off.
+        configuration.preferences.isFraudulentWebsiteWarningEnabled = false
+        return configuration
     }
 
     /// Releases the heavy page process/view when this tab is hidden. The tab's

@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Olof Johansson
+// SPDX-License-Identifier: BSD-3-Clause
+
+// Stand-ins for what App/Browser/BrowserViewModel.swift reads from TSNet and
+// TailscaleKit, so the REAL view model compiles on the host for
+// scripts/test-browser-view-model.sh: only the fields it touches, shaped as
+// TSNetModel.swift declares them. IpnState comes from
+// test-proxy-policy-stubs.swift and `logger` from test-socks-relay-stubs.swift.
+
+import Combine
+import Foundation
+import Network
+
+enum Ipn {
+    enum State: Equatable, Sendable {
+        case NoState, InUseOtherUser, NeedsLogin, NeedsMachineAuth, Stopped, Starting, Running
+    }
+}
+
+@MainActor
+final class TSNetModel: ObservableObject {
+    @Published var state: Ipn.State? = nil
+    @Published var proxyConfiguration: ProxyConfiguration?
+    @Published var localStatus: IpnState.Status?
+    @Published var proxyPolicy: TailnetProxyPolicy?
+    var proxyEndpointGeneration: UInt64 = 0
+}
+
+@MainActor
+final class AppDiagnostics: ObservableObject {
+    static let shared = AppDiagnostics()
+    @Published var webContentTerminations = 0
+    @Published var webContentAutoReloads = 0
+    @Published var webContentGaveUp = 0
+    private init() {}
+}
