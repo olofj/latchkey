@@ -144,8 +144,24 @@ def main():
                 renames.append((os.path.join(dirpath, name),
                                 os.path.join(dirpath, renamed)))
     for src, dst in sorted(renames, key=lambda p: -p[0].count(os.sep)):
-        if os.path.exists(src) and not os.path.exists(dst):
-            os.rename(src, dst)
+        if not os.path.exists(src):
+            continue
+        # COLLISIONS. Two sibling files can scrub to one name: the history has a
+        # commit holding both former renaming scripts, one per former product
+        # name, and both become `rename-to-latchkey.py`. The first version of this
+        # simply skipped a rename whose destination existed -- so the loser KEPT
+        # its old name, and `app/scripts/rename-to-<old>.py` stayed a path in the
+        # published history through two rewrites. A path is as public as a blob.
+        #
+        # Suffixing is not pretty, and it is the only option that keeps every
+        # name clean without deleting a file the commit legitimately had.
+        target, seq = dst, 1
+        stem, ext = os.path.splitext(dst)
+        while os.path.exists(target) and os.path.abspath(target) != os.path.abspath(src):
+            seq += 1
+            target = f"{stem}-{seq}{ext}"
+        if os.path.abspath(target) != os.path.abspath(src):
+            os.rename(src, target)
     return 0
 
 
