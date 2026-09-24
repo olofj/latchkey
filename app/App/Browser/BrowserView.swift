@@ -51,7 +51,10 @@ struct BrowserView: View {
 /// (U+00A0), zero-width space (U+200B), smart quotes (U+201C/201D), tabs,
 /// newlines, etc. — are visible as `\u{XXXX}` instead of silently breaking the
 /// URL. `kind` distinguishes a URL **format** error (parse/validation rejected)
-/// from a **retrieval** error (couldn't connect) via a small category label.
+/// from a **retrieval** error (couldn't connect) via a small category label,
+/// worded as F4 specifies (`NavErrorKind.caption`): a SOCKS failure, which
+/// WebKit reports as -1000 "bad URL", reads "Couldn't reach <host>", never
+/// "URL format error".
 struct NavErrorPage: View {
     let urlString: String
     let kind: NavErrorKind?
@@ -112,15 +115,13 @@ struct NavErrorPage: View {
 
     /// A short label + color for each error category, or nil for `.other`
     /// (page-closed / content-process crash — no useful category to show).
+    /// The words are `NavErrorKind.caption`'s, host-tested; only the colour
+    /// is decided here.
     private func categoryLabel(for kind: NavErrorKind) -> (text: String, color: Color)? {
-        switch kind {
-        case .urlFormat:
-            return ("URL format error", .orange)
-        case .retrieval:
-            return ("Connection error", .secondary)
-        case .other:
+        guard let text = kind.caption(host: BrowserViewModel.displayHost(of: URL(string: urlString))) else {
             return nil
         }
+        return (text, kind == .urlFormat ? .orange : .secondary)
     }
 }
 

@@ -14,6 +14,18 @@ enum NavErrorKind: Sendable, Equatable {
     case urlFormat
     case retrieval
     case other
+
+    /// The category caption on the error page, in F4's words (§3.2, §4.4):
+    /// a transport failure reads "Couldn't reach <host>", a malformed
+    /// address "Latchkey can't open this address". Nil for `.other` (a
+    /// content-process death, a policy interruption): no category helps.
+    nonisolated func caption(host: String?) -> String? {
+        switch self {
+        case .urlFormat: return "Latchkey can't open this address"
+        case .retrieval: return "Couldn't reach \(host ?? "the gateway")"
+        case .other: return nil
+        }
+    }
 }
 
 /// Browser state backed by an owned `WKWebView`. Its UIKit frame, scroll view,
@@ -537,7 +549,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let url = Self.withoutSignInToken(failedURL)
         logger.log("Navigation error for \(url.redactedForLog): \(LogRedaction.describe(error))")
         navError = (error, url)
-        navErrorMessage = Self.describe(error)
+        navErrorMessage = Self.describe(error, for: url)
         navErrorKind = Self.categorize(error)
         navErrorURLString = url.absoluteString
         // The failed page has been replaced by our trusted error document, so
@@ -561,18 +573,60 @@ final class BrowserViewModel: NSObject, ObservableObject {
         failedInitialURL = nil
     }
 
-    nonisolated static func describe(_ error: Error) -> String {
+    /// What the error page says under the caption: CFNetwork's description
+    /// and the domain/code, kept for diagnosis. Except -1000, which CFNetwork
+    /// calls "bad URL" and which is nothing of the kind: it is every SOCKS
+    /// failure reply, i.e. the tailnet could not open the connection. F4
+    /// forbids those words for a transport failure, so this says what
+    /// happened, naming the host and port, with F4 §4.4's likely cause and
+    /// what to do next. (The per-cause split -- refused, unreachable, no
+    /// answer -- needs the relay's reply and the elapsed time; F4 adds them.)
+    nonisolated static func describe(_ error: Error, for url: URL? = nil) -> String {
         let ns = error as NSError
+        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorBadURL {
+            let host = hostLabel(of: url) ?? "the gateway"
+            let port = url?.port ?? (url?.scheme?.lowercased() == "http" ? 80 : 443)
+            return "The tailnet couldn't open a connection to \(host) on port \(port). "
+                + "This usually means this device isn't allowed to reach \(host) yet, or \(host) is off. "
+                + "If it is on, try again in a moment; whoever manages the tailnet needs this device's address (Settings → Status). "
+                + "[\(ns.domain) \(ns.code)]"
+        }
         var detail = ns.localizedDescription
         if detail.isEmpty { detail = "The page could not be loaded." }
         return "\(detail) [\(ns.domain) \(ns.code)]"
     }
 
+    /// The category the error page shows. -1000 (NSURLErrorBadURL) is NOT a
+    /// format error here: it is what WebKit reports for every SOCKS failure
+    /// reply (TailnetProxyPolicy.swift's header, measured; GatewayDiscovery
+    /// and `isTransientStartupError` say the same), i.e. the proxy could not
+    /// open the connection -- so an unreachable gateway used to tell the
+    /// owner the address was malformed. The one real format error, a string
+    /// URL(string:) rejects, never arrives as an NSError from a navigation;
+    /// `reportURLParseFailure` sets `.urlFormat` itself.
     nonisolated static func categorize(_ error: Error) -> NavErrorKind {
         let ns = error as NSError
-        if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorBadURL { return .urlFormat }
         if ns.domain == NSURLErrorDomain { return .retrieval }
         return .other
+    }
+
+    /// The host as the owner knows it (F4 §3): the first DNS label of a
+    /// name -- "gateway", not "gateway.example.ts.net" -- and an IP literal
+    /// whole. Nil when the URL has no host (about:blank, a parse failure).
+    nonisolated static func hostLabel(of url: URL?) -> String? {
+        guard let host = url?.host()?.lowercased(), !host.isEmpty else { return nil }
+        let isLiteral = host.contains(":") || host.allSatisfy { $0.isNumber || $0 == "." }
+        if isLiteral { return host }
+        return String(host.split(separator: ".", maxSplits: 1).first ?? Substring(host))
+    }
+
+    /// `hostLabel` with `:<port>` appended when the port is not the scheme's
+    /// default (F4 §3, F1): what the error page's caption names.
+    nonisolated static func displayHost(of url: URL?) -> String? {
+        guard let url, let label = hostLabel(of: url) else { return nil }
+        let defaultPort = url.scheme?.lowercased() == "http" ? 80 : 443
+        if let port = url.port, port != defaultPort { return "\(label):\(port)" }
+        return label
     }
 
     func clearNavError() {
