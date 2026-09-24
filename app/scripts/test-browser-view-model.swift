@@ -49,12 +49,9 @@ expect(BrowserViewModel.categorize(NSError(domain: "WebKitErrorDomain", code: 10
 let gw = URL(string: "https://gw.tail-scale.ts.net/")!
 let text = BrowserViewModel.describe(socks, for: gw)
 expect(!text.lowercased().contains("bad url") && !text.contains("URL format"),
-       "F4: the words 'bad URL' / 'URL format' never appear for a transport failure: \(text)")
-expect(text.contains("connection to gw on port 443") && !text.contains("gw.tail-scale"),
-       "names the host as the owner knows it (first label) and the port: \(text)")
-expect(text.contains("isn't allowed to reach gw yet, or gw is off") && text.contains("Settings → Status"),
-       "F4 §4.4's likely cause and what to do next: \(text)")
-expect(text.hasSuffix("[NSURLErrorDomain -1000]"), "the code stays, for diagnosis")
+       "F4 §4.4: the words 'bad URL' / 'URL format' never appear for a transport failure: \(text)")
+expect(text == "The tailnet node couldn't open a connection to gw on port 443. [NSURLErrorDomain -1000]",
+       "states the fact the code carries -- host as the owner knows it, port, code -- and guesses no cause (F4 decides that from the relay's reply): \(text)")
 expect(BrowserViewModel.describe(socks, for: URL(string: "https://gw.tail-scale.ts.net:8443/x")!).contains("on port 8443"),
        "a non-default port is named")
 expect(BrowserViewModel.describe(socks).contains("connection to the gateway on port 443"),
@@ -64,18 +61,14 @@ let timedOut = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut,
 expect(BrowserViewModel.describe(timedOut, for: gw) == "The request timed out. [NSURLErrorDomain -1001]",
        "other codes keep CFNetwork's own text")
 
-print("== the caption, and the host as shown")
-expect(NavErrorKind.retrieval.caption(host: "gw") == "Couldn't reach gw", "F4's title for a retrieval failure")
-expect(NavErrorKind.retrieval.caption(host: nil) == "Couldn't reach the gateway", "and without a host")
-expect(NavErrorKind.urlFormat.caption(host: "gw") == "Latchkey can't open this address",
-       "F4's title for a malformed address")
-expect(NavErrorKind.other.caption(host: "gw") == nil, "no caption for .other")
-expect(BrowserViewModel.displayHost(of: gw) == "gw", "the first label")
-expect(BrowserViewModel.displayHost(of: URL(string: "https://gw.tail-scale.ts.net:8443/")) == "gw:8443",
-       "with the port when it is not the scheme's default")
-expect(BrowserViewModel.displayHost(of: URL(string: "http://gw:80/")) == "gw", "the default port is not shown")
-expect(BrowserViewModel.displayHost(of: URL(string: "https://10.0.0.7/")) == "10.0.0.7", "an IP literal is kept whole")
-expect(BrowserViewModel.displayHost(of: URL(string: "about:blank")) == nil, "no host, no caption host")
+print("== the caption (F4 §4.3: today's words until the page is rebuilt), and the host label")
+expect(NavErrorKind.retrieval.caption == "Connection error", "a SOCKS failure reads as a connection failure")
+expect(NavErrorKind.urlFormat.caption == "URL format error", "a real format error keeps its label")
+expect(NavErrorKind.other.caption == nil, "no caption for .other")
+expect(BrowserViewModel.hostLabel(of: gw) == "gw", "the first label")
+expect(BrowserViewModel.hostLabel(of: URL(string: "https://gw.tail-scale.ts.net:8443/")) == "gw", "the port is not part of the label")
+expect(BrowserViewModel.hostLabel(of: URL(string: "https://10.0.0.7/")) == "10.0.0.7", "an IP literal is kept whole")
+expect(BrowserViewModel.hostLabel(of: URL(string: "about:blank")) == nil, "no host, no label")
 
 print("== through the view model itself")
 // The real paths that set the page's kind and message; the failure report

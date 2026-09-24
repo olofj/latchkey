@@ -15,14 +15,16 @@ enum NavErrorKind: Sendable, Equatable {
     case retrieval
     case other
 
-    /// The category caption on the error page, in F4's words (§3.2, §4.4):
-    /// a transport failure reads "Couldn't reach <host>", a malformed
-    /// address "Latchkey can't open this address". Nil for `.other` (a
-    /// content-process death, a policy interruption): no category helps.
-    nonisolated func caption(host: String?) -> String? {
+    /// The category caption on the error page: today's words, as F4 §4.3
+    /// specifies for the label fix that lands ahead of the page rebuild
+    /// (§3.2 replaces them with "Couldn't reach <host>" and "Latchkey
+    /// can't open this address"). Nil for `.other` (a content-process
+    /// death, a policy interruption): no category helps. Here rather than
+    /// in the view so the host test can pin which words a SOCKS failure gets.
+    nonisolated var caption: String? {
         switch self {
-        case .urlFormat: return "Latchkey can't open this address"
-        case .retrieval: return "Couldn't reach \(host ?? "the gateway")"
+        case .urlFormat: return "URL format error"
+        case .retrieval: return "Connection error"
         case .other: return nil
         }
     }
@@ -576,20 +578,17 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// What the error page says under the caption: CFNetwork's description
     /// and the domain/code, kept for diagnosis. Except -1000, which CFNetwork
     /// calls "bad URL" and which is nothing of the kind: it is every SOCKS
-    /// failure reply, i.e. the tailnet could not open the connection. F4
-    /// forbids those words for a transport failure, so this says what
-    /// happened, naming the host and port, with F4 §4.4's likely cause and
-    /// what to do next. (The per-cause split -- refused, unreachable, no
-    /// answer -- needs the relay's reply and the elapsed time; F4 adds them.)
+    /// failure reply, i.e. the tailnet node could not open the connection.
+    /// F4 §4.4 forbids those words for a transport failure, so this states
+    /// the one fact the code carries -- which host and port could not be
+    /// connected to -- and no more: WHY (refused, unreachable, no answer)
+    /// is the relay's reply to tell, and F4 adds it with the evidence.
     nonisolated static func describe(_ error: Error, for url: URL? = nil) -> String {
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorBadURL {
             let host = hostLabel(of: url) ?? "the gateway"
             let port = url?.port ?? (url?.scheme?.lowercased() == "http" ? 80 : 443)
-            return "The tailnet couldn't open a connection to \(host) on port \(port). "
-                + "This usually means this device isn't allowed to reach \(host) yet, or \(host) is off. "
-                + "If it is on, try again in a moment; whoever manages the tailnet needs this device's address (Settings → Status). "
-                + "[\(ns.domain) \(ns.code)]"
+            return "The tailnet node couldn't open a connection to \(host) on port \(port). [\(ns.domain) \(ns.code)]"
         }
         var detail = ns.localizedDescription
         if detail.isEmpty { detail = "The page could not be loaded." }
@@ -618,15 +617,6 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let isLiteral = host.contains(":") || host.allSatisfy { $0.isNumber || $0 == "." }
         if isLiteral { return host }
         return String(host.split(separator: ".", maxSplits: 1).first ?? Substring(host))
-    }
-
-    /// `hostLabel` with `:<port>` appended when the port is not the scheme's
-    /// default (F4 §3, F1): what the error page's caption names.
-    nonisolated static func displayHost(of url: URL?) -> String? {
-        guard let url, let label = hostLabel(of: url) else { return nil }
-        let defaultPort = url.scheme?.lowercased() == "http" ? 80 : 443
-        if let port = url.port, port != defaultPort { return "\(label):\(port)" }
-        return label
     }
 
     func clearNavError() {
