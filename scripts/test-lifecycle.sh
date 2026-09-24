@@ -79,7 +79,7 @@ trap teardown EXIT
 VENDORED="$APP/ThirdParty/libtailscale/tailscale-patched"
 SELFTEST_STAMP="$TSNET/.run/selftest.sha"
 SELFTEST_HASH=$( { cat "$TSNET"/*.go "$TSNET"/go.mod "$TSNET"/go.sum "$TSNET"/Makefile
-                   git -C "$APP" rev-parse HEAD:ThirdParty/libtailscale/tailscale-patched; } | shasum -a 256 | cut -d' ' -f1)
+                   git -C "$APP" rev-parse HEAD:./ThirdParty/libtailscale/tailscale-patched; } | shasum -a 256 | cut -d' ' -f1)
 if [[ "${SELFTEST:-auto}" != always && -z "$(git -C "$APP" status --porcelain -- "$VENDORED")" \
       && -f "$SELFTEST_STAMP" && "$(cat "$SELFTEST_STAMP")" == "$SELFTEST_HASH" ]]; then
     say "tsnet harness self-test: skipped (unchanged since it last passed; SELFTEST=always forces it)"

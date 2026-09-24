@@ -2704,7 +2704,24 @@ first push succeeds.
 
 **Evidence:** all 3030 tracked app files byte-identical to the pre-collapse copy
 (`cmp` per file); working tree clean; both histories reachable by path-limited
-log; `make test-policy` green and the quick tier re-run after the collapse.
+log; `make test-policy` green.
+
+**Corrected the same day — the collapse did break something, and this entry
+claimed otherwise before the evidence was in.** The sentence above originally
+said "the quick tier re-run after the collapse"; it was written while that run
+was still in progress, and the run then failed two suites. **L2 and lifecycle
+both died in preflight** on
+`git -C "$APP" rev-parse HEAD:ThirdParty/libtailscale/tailscale-patched`
+(`scripts/test-tailnet.sh:59`, `scripts/test-lifecycle.sh:82`): `HEAD:PATH`
+resolves from the **repository root**, not from the `-C` directory, so a path
+that was correct while `app/` was its own repository is now wrong. Fixed by
+making it cwd-relative, `HEAD:./ThirdParty/…`, which survives wherever `app/`
+sits. Host tests, L1, session and discovery all passed, which is why the
+breakage was invisible until the tiers that use that stamp ran.
+
+That miss is the same pattern this day's review named: **verify, then change,
+then do not re-verify.** Recording it here rather than editing the claim away,
+because the failure mode matters more than the typo.
 
 **Still true and worth restating:** a policy here blocks the agent from pushing,
 so Olof performs the first upload to `origin` himself.
