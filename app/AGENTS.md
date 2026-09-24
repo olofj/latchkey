@@ -53,7 +53,12 @@ non-goals, not omissions.
   lives in `ThirdParty/libtailscale/`, with the patched tailscale tree at
   `ThirdParty/libtailscale/tailscale-patched/`. The first commit touching it
   is a pristine, import-only copy; every change since is its own commit, so
-  `git log -- app/ThirdParty/libtailscale` is the complete delta from upstream.
+  `git log -- app/ThirdParty/libtailscale` is the complete delta from upstream
+  — read from the import commit (`R16: vendor libtailscale as plain source
+  (import only)`) upward. Below it the same log lists 18 older entries that
+  are submodule-pointer bumps from before R16 (mode `160000`, no source), not
+  delta; `ThirdParty/VENDORED.md`'s `git diff <import> -- …` recipe is the
+  exact instrument because it starts at the pristine import.
   Keep it that way: never fold a vendored-tree change into an unrelated
   commit. Provenance and diff recipes are in `ThirdParty/VENDORED.md`.
 - **The old product name survives in three places on purpose. Do not tidy
@@ -127,7 +132,11 @@ Single developer, no outside contributors, so:
 - **The vendored delta is `git log -- app/ThirdParty/libtailscale`** (note the
   prefix). The app's 272 commits were rewritten to carry `app/` when the
   repositories were collapsed, precisely so this path-limited log still
-  returns the complete delta — it reports 32 commits, as it did before.
+  returns the complete delta — it reports 32 commits, as it did before. Of
+  those, 13 are the delta (above the import commit), one is the import, and
+  the 18 below it are pre-R16 submodule-pointer bumps that only moved a
+  gitlink; `git diff <import> -- app/ThirdParty/libtailscale` (the
+  `VENDORED.md` recipe) shows the delta and nothing else.
 - New code goes in `App/`, not `TSNet/` — `TSNet/` is the upstream-shared
   layer that cherry-picks land in, and new files there also need a
   `membershipExceptions` pbxproj edit.
@@ -194,16 +203,23 @@ device build.
     pinned to that bundle and refuses to run against another.
   - `scripts/test-discovery.sh` — M5: gateway discovery on the L2 harness,
     with a real-looking gateway peer, a non-gateway page, a dead peer and a
-    peer that never answers. It also enforces R26's timing budget from the
-    app's own log.
+    peer that never answers. It also enforces the discovery timing budget
+    from the app's own log — R26's instrument with R39's numbers (4 s per
+    probe, 12 s per sweep, `App/Discovery/GatewayDiscovery.swift:65-68`): a
+    sweep must take 4–15 s, and the first gateway must show within 5 s of
+    the picker (`scripts/test-discovery.sh:166-169`).
+  - `scripts/test-lifecycle.sh` — M6: lifecycle hardening on the L2 harness:
+    the app's sockets damaged through its own chaos hooks, then its process
+    frozen with SIGSTOP from the host while backgrounded; about 4 min.
 
   Each takes `--build`. Each fails unless every test in its file passed; a
   stale build that runs nothing is not a pass. Add coverage there, not to
   the tailnet-dependent suite.
 - **`scripts/test-all.sh` runs them by tier.** The default quick tier (about
-  4–5 min) is host tests, the vendored Go tests, L1 and L2, plus session or
-  discovery only when code they exercise changed since the last full pass.
-  `--full` (about 13 min) runs everything, including the inherited tests
+  4–5 min) is host tests, the vendored Go tests, L1 and L2, plus session,
+  discovery or lifecycle only when code they exercise changed since the last
+  full pass (they take about 6, 1.5 and 4 min). `--full` (about 17 min,
+  `scripts/test-all.sh:12`) runs everything, including the inherited tests
   (`scripts/test-inherited.sh`), and records what it passed. Use quick while
   iterating and `--full` before every milestone or review commit.
 - The fake servers handshake TLS per connection (`testing/harness/
@@ -247,7 +263,11 @@ network loss, blackhole the stub proxy.
   one HTTPS gateway with a real certificate, and discovery probes HTTPS only
   (R26). The LocalAPI and SOCKS traffic is loopback, which ATS does not
   cover. Do not add `NSAllowsArbitraryLoads` back to reach a plain-HTTP
-  gateway: `chonk`'s `:5476` is out of v1 (D4).
+  gateway: there is none to reach. Every gateway is an HTTPS origin behind
+  `tailscale serve` — chonk included, since D4 was superseded on 2026-09-23
+  (`../docs/DECISIONS.md`) — and a dashboard's bare loopback listener
+  (`:5476`) is never a target: a plain-http origin fails KiroCrew's own
+  `/api/ws` origin check, which is why R26 dropped that probe.
 - One-shot surgery scripts live in `scripts/strip-*.py`, `scripts/prune-*.py`
   and `scripts/repoint-*.py`. They are kept as the record of what was removed
   from upstream and why. Upstream is tracked by cherry-pick only (R16), so

@@ -19,7 +19,8 @@ target, and no virtualization.
 Modifications are copyright (c) 2026 Olof Johansson and are released under the
 same BSD 3-Clause License.
 
-It also vendors, as git submodules:
+It also vendors, as plain source committed in this repository (git submodules
+upstream; imported as source here, see ThirdParty/VENDORED.md):
 
     tailscale/libtailscale   ThirdParty/libtailscale
     tailscale/tailscale      ThirdParty/libtailscale/tailscale-patched (patched)

@@ -163,13 +163,13 @@ Run the suites by tier from the parent repository:
 
 ```bash
 ../scripts/test-all.sh            # quick, about 4–5 min: while iterating
-../scripts/test-all.sh --full     # about 13 min: before a milestone or review commit
+../scripts/test-all.sh --full     # about 17 min: before a milestone or review commit
 ../scripts/test-all.sh --build    # build for testing once, in the first simulator suite
 ```
 
 Quick runs the host tests, the vendored Go tests, L1 and L2, and adds the
-session and discovery suites only when code they exercise changed since the
-last full pass. Full runs everything and records the commits it passed, which
+session, discovery and lifecycle suites only when code they exercise changed
+since the last full pass. Full runs everything and records the commits it passed, which
 is what quick compares against. Every simulator suite fails unless every test
 in its file passed: a stale build that runs nothing is not a pass.
 
@@ -180,14 +180,17 @@ in its file passed: a stale build that runs nothing is not a pass.
 | L1 offline | `../scripts/test-offline.sh` | The real app and WKWebView against a stub SOCKS5 proxy and a fake dashboard, including the anti-leak tests; <3 min |
 | L2 tailnet | `../scripts/test-tailnet.sh` | The app's real tsnet node against a host-side fake control plane: login, approval, key expiry, MagicDNS, diagnostics; <5 min |
 | M4 session | `../scripts/test-session.sh` | The dashboard session against KiroCrew's real, pinned frontend served by the fake gateway; ~6 min |
-| M5 discovery | `../scripts/test-discovery.sh` | Gateway discovery on the L2 harness with a real-looking gateway, a non-gateway, a dead peer and one that never answers, plus R26's timing budget; ~1.5 min |
+| M5 discovery | `../scripts/test-discovery.sh` | Gateway discovery on the L2 harness with a real-looking gateway, a non-gateway, a dead peer and one that never answers, plus the discovery timing budget (R39's numbers: a sweep takes 4–15 s, the first gateway shows within 5 s); ~1.5 min |
+| M6 lifecycle | `../scripts/test-lifecycle.sh` | Recovery on the L2 harness: the app's sockets damaged through its own chaos hooks, then its process frozen with SIGSTOP from the host while backgrounded; ~4 min |
 | inherited | `../scripts/test-inherited.sh` | The three upstream XCUITests that need no tailnet; full tier only |
 | L4 real tailnet | `make test-ios-ui` | The rest of the inherited XCUITest suite: needs a tailnet and an auth key at `~/.aperture-ios-authkey` |
 
 Each simulator script takes `--build`; without it the last test build is
 reused. On failure they leave a screenshot, the harness logs and the xcresult
-under `build/offline-logs/`, `build/tailnet-logs/`, `build/discovery-logs/`
-or `build/uitest-logs/`, one directory per run. Two more, run by hand:
+under `build/<suite>-logs/` — `offline-logs`, `tailnet-logs`, `session-logs`,
+`discovery-logs`, `lifecycle-logs`, `inherited-logs` — one directory per run
+(the tailnet-dependent `make test-ios-ui` writes `build/uitest-logs/` via
+`scripts/run-uitests.sh`). Two more, run by hand:
 `make test-lock-resume` freezes the app process and asserts a prompt resume;
 `../scripts/check-no-log-upload.sh` watches the app's sockets for Tailscale's
 log service, which the vendored library must never contact. After a KiroCrew
