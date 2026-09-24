@@ -24,6 +24,10 @@ final class TSNetModel: ObservableObject {
     @Published var localStatus: IpnState.Status?
     @Published var proxyPolicy: TailnetProxyPolicy?
     var proxyEndpointGeneration: UInt64 = 0
+    /// The relay's last refused CONNECT (F4 §4.5). Here so the host test can
+    /// plant one and check that the page only believes a reply that is for its
+    /// own host, port and load.
+    @Published var lastProxyFailure: ProxyReply?
 }
 
 @MainActor

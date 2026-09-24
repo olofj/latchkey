@@ -117,13 +117,23 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
     private var refusals: UInt64 = 0
     private var evictions: UInt64 = 0
 
+    /// Called with every CONNECT the tailnet proxy refused (F4 §4.5). A
+    /// callback, not a reference to `TSNetModel`, for the same reason
+    /// `onListenerFailed` is one: this relay runs on its own queue and is
+    /// deliberately usable without the app around it (its 99 host checks
+    /// construct it directly). F4 §4.5 said to publish on the model from here;
+    /// the owner does that, one hop away.
+    private let onProxyReply: (@Sendable (ProxyReply) -> Void)?
+
     init(upstreamHost: String, upstreamPort: UInt16,
          capacity: SocksRelayCapacity = SocksRelayCapacity(),
-         onListenerFailed: (@Sendable (SocksLogProxy) -> Void)? = nil) {
+         onListenerFailed: (@Sendable (SocksLogProxy) -> Void)? = nil,
+         onProxyReply: (@Sendable (ProxyReply) -> Void)? = nil) {
         self.upstreamHost = upstreamHost
         self.upstreamPort = upstreamPort
         self.capacity = capacity
         self.onListenerFailed = onListenerFailed
+        self.onProxyReply = onProxyReply
     }
 
     /// How long a listener may take to reach `.ready` before it is given up
@@ -627,6 +637,12 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
                     logger.log("socks[\(s.id)] OK \(s.target) — tailnet proxy connected (\(ms)ms)")
                 } else {
                     logger.log("socks[\(s.id)] FAILED \(s.target) — tailnet proxy could not connect: \(Self.replyName(rep)) (reply \(rep), \(ms)ms). WebKit will report this as \"invalid URL\" (-1000).")
+                    // The reply name is what the error page needs and what
+                    // WebKit destroys (F4 §4.5). `s.target` is the host:port
+                    // WebKit asked for, verbatim, which is how the page matches
+                    // this reply to its own load.
+                    onProxyReply?(ProxyReply(target: s.target, reply: Self.replyName(rep),
+                                             elapsed: .milliseconds(ms), at: Date()))
                 }
                 s.pendingServer.removeAll(keepingCapacity: false)
                 s.serverPhase = .done

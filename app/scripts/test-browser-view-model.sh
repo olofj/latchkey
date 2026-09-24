@@ -24,6 +24,7 @@ if ! xcrun swiftc -O -swift-version 6 -strict-concurrency=complete -default-isol
         App/Browser/PageScripts.swift App/Browser/PageScriptSources.swift App/Browser/PopupCatcher.swift \
         App/Browser/GatewayAddress.swift App/Browser/NavigationPolicy.swift \
         App/Browser/TailnetHostnameQualifier.swift App/Browser/ContentProcessRecovery.swift \
+        App/Browser/PageState.swift App/Browser/PageFailureText.swift \
         App/Session/SessionManager.swift App/Session/TokenInput.swift App/Session/DashboardSignOut.swift \
         App/Network/SocksRelayPolicy.swift App/Logging/LogRedaction.swift App/TestHooks.swift \
         scripts/test-proxy-policy-stubs.swift scripts/test-socks-relay-stubs.swift \

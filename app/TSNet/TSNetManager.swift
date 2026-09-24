@@ -508,6 +508,12 @@ final class TSNetManager {
                 let relay = SocksLogProxy(upstreamHost: ip, upstreamPort: upstreamPort,
                                           onListenerFailed: { [weak self] failed in
                     Task { @MainActor [weak self] in self?.relayListenerFailed(failed) }
+                }, onProxyReply: { [weak self] reply in
+                    // One hop to the main actor, where the page reads it (F4
+                    // §4.5). Last-one-wins is correct: a sweep's twelve refusals
+                    // are all for hosts the page is not loading, and the page
+                    // matches on target and time before believing any of them.
+                    Task { @MainActor [weak self] in self?.model.lastProxyFailure = reply }
                 })
                 if let localPort = relay.start() {
                     socksLogProxy = relay

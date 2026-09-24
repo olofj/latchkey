@@ -41,6 +41,19 @@ final class TSNetModel: ObservableObject {
     var proxyEndpointGeneration: UInt64 = 0
     /// Test-only state for the TCP-shutdown chaos recovery XCUITest.
     @Published var tcpChaosTestStatus: String?
+    /// The last SOCKS CONNECT the tailnet proxy REFUSED, as the logging relay
+    /// saw it (F4 §4.5). The only place the difference between "connection
+    /// refused", "host unreachable" and "general failure" survives: WebKit
+    /// collapses every one of them into `-1000`, so without this the page cannot
+    /// tell "nothing is listening there" from "this device has no grant".
+    ///
+    /// Failures only, and in memory only — it is read by the error page and
+    /// Settings → Status → Page, and nothing writes it to disk (D1).
+    ///
+    /// `ProxyReply` is declared in `App/Network/SocksRelayPolicy.swift` rather
+    /// than here, where F4 §4.5 first put it: three host tests compile that file
+    /// already, and one target means `TSNet/` can name the type regardless.
+    @Published var lastProxyFailure: ProxyReply?
 
     var wantRunning: Bool {
         if let prefs = prefs {

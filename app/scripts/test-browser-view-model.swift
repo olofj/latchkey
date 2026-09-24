@@ -85,5 +85,62 @@ vm.reportURLParseFailure("https://gw\u{200B}.tail-scale.ts.net/")
 expect(vm.navErrorKind == .urlFormat, ".urlFormat is still reachable, only for input URL(string:) rejects")
 expect(vm.navErrorMessage?.contains("format error") == true, "with the parse failure's own text")
 
+print("== pageState (F4 §4.3): the failure it publishes beside the old fields")
+// A parse failure is the one real format error, and it had no load in flight,
+// so it must not borrow the previous load's clock.
+if case .failed(let f) = vm.pageState {
+    expect(f.cause == .badAddress, "a parse failure is .badAddress: \(f.cause.logName)")
+    expect(f.elapsed == .zero, "and carries no elapsed time, having never dialled: \(f.elapsed)")
+} else {
+    expect(false, "a parse failure publishes a failed page state, got \(vm.pageState.logName)")
+}
+
+// The relay's reply is only believed when it is about THIS load. Each of the
+// three conditions is checked on its own, because getting any of them wrong
+// gives the owner a confident and wrong explanation -- the failure mode this
+// whole mechanism exists to avoid.
+func stateAfterSocksFailure(_ reply: ProxyReply?, on vm: BrowserViewModel,
+                            model: TSNetModel) -> PageState.Failure? {
+    model.lastProxyFailure = reply
+    vm.navigationError(socks, for: gw)
+    if case .failed(let f) = vm.pageState { return f }
+    return nil
+}
+
+let m2 = TSNetModel()
+let vm2 = BrowserViewModel(model: m2, initialURL: gw, dataStore: .nonPersistent())
+let hostPort = "\(gw.host!):443"
+let matching = ProxyReply(target: hostPort, reply: "connection refused",
+                          elapsed: .milliseconds(12), at: Date().addingTimeInterval(1))
+let f1 = stateAfterSocksFailure(matching, on: vm2, model: m2)
+expect(f1?.proxyReply != nil, "a reply for this host, port and load is attached")
+expect(f1?.cause == .refused, "and decides the cause: \(f1?.cause.logName ?? "nil")")
+
+let otherHost = ProxyReply(target: "other.tail-scale.ts.net:443", reply: "connection refused",
+                           elapsed: .milliseconds(12), at: Date().addingTimeInterval(1))
+let f2 = stateAfterSocksFailure(otherHost, on: vm2, model: m2)
+expect(f2?.proxyReply == nil, "a reply for ANOTHER host is not attached -- a discovery sweep refuses twelve of them a second before the page's own attempt")
+expect(f2?.cause != .refused, "so it cannot decide this page's cause")
+
+let otherPort = ProxyReply(target: "\(gw.host!):8443", reply: "connection refused",
+                           elapsed: .milliseconds(12), at: Date().addingTimeInterval(1))
+expect(stateAfterSocksFailure(otherPort, on: vm2, model: m2)?.proxyReply == nil,
+       "nor a reply for another port on the same host (F1: the port is part of the gateway)")
+
+let stale = ProxyReply(target: hostPort, reply: "connection refused",
+                       elapsed: .milliseconds(12), at: Date().addingTimeInterval(-3600))
+expect(stateAfterSocksFailure(stale, on: vm2, model: m2)?.proxyReply == nil,
+       "nor one from before this load began -- the previous load's refusal must not explain this one")
+
+let upper = ProxyReply(target: hostPort.uppercased(), reply: "host unreachable",
+                       elapsed: .milliseconds(12), at: Date().addingTimeInterval(1))
+expect(stateAfterSocksFailure(upper, on: vm2, model: m2)?.cause == .unreachable,
+       "the target compares case-insensitively: WebKit sends what it was given, the qualifier lowercases")
+
+expect(BrowserViewModel.firstLabel(of: "byskebox.example.ts.net") == "byskebox",
+       "the owner sees the first label")
+expect(BrowserViewModel.firstLabel(of: "byskebox") == "byskebox", "a bare label is itself")
+expect(BrowserViewModel.firstLabel(of: "") == "", "and an empty host does not crash")
+
 print(failures == 0 ? "\(checks)/\(checks) browser view model checks passed" : "\(failures) of \(checks) browser view model checks FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -45,6 +45,95 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published var navErrorKind: NavErrorKind?
     @Published var navErrorURLString: String?
 
+    // MARK: - Page state (F4 §4.2, §4.3)
+
+    /// What the page is doing, as one value. The views read this; the
+    /// `navError*` fields above are what the error overlay read before F4 and
+    /// are still set beside it, so this commit changes no visible behaviour.
+    @Published private(set) var pageState: PageState = .idle
+
+    /// Every transition writes one line (F4 §4.9), so a device run and a suite
+    /// can both say which state was on screen and for how long. Assigning the
+    /// same state twice is not logged: `@Published` fires `objectWillChange`
+    /// even for an equal value, and a status poll would otherwise print a line
+    /// every five seconds.
+    private func setPageState(_ next: PageState) {
+        guard next != pageState else { return }
+        pageState = next
+        switch next {
+        case .idle:
+            break
+        case .holding(let host, _):
+            logger.log("page-state: holding host=\(host)")
+        case .connecting(let host, let port, let since, let attempt):
+            logger.log("page-state: connecting host=\(host) port=\(port) attempt=\(attempt)"
+                       + (attempt > 1 ? " after \(PageState.elapsedSeconds(since: since)) s" : ""))
+        case .committed:
+            break   // logged with its status where the response is seen
+        case .failed(let f):
+            var line = "page-state: failed cause=\(f.cause.logName) code=\(f.code) "
+                + "after \(PageState.milliseconds(f.elapsed)) ms"
+            if let reply = f.proxyReply { line += " reply=\"\(reply.reply)\"" }
+            logger.log(line)
+        }
+    }
+
+    /// The failure for `error` on `failedURL`, with the relay's reply attached
+    /// when it is plausibly about this very load.
+    /// `elapsed` is measured from the load's start unless given: a parse failure
+    /// and a crash of an already-committed page had no load in flight, and
+    /// `navigationStartedAt` would then be the *previous* load's clock.
+    private func pageFailure(error: NSError, failedURL: URL?,
+                             cause overrideCause: PageState.Failure.Cause? = nil,
+                             elapsed fixedElapsed: Duration? = nil,
+                             contentType: String? = nil,
+                             bodyLength: Int? = nil) -> PageState.Failure {
+        let fqdn = failedURL?.host ?? ""
+        let port = failedURL?.port ?? 443
+        let elapsed = fixedElapsed ?? elapsedSinceNavigationStart()
+        let reply = matchingProxyReply(fqdn: fqdn, port: port)
+        let cause = overrideCause
+            ?? PageFailureText.cause(domain: error.domain, code: error.code,
+                                     proxyReply: reply, elapsed: elapsed)
+        return PageState.Failure(host: Self.firstLabel(of: fqdn), fqdn: fqdn, port: port,
+                                 cause: cause, elapsed: elapsed,
+                                 domain: error.domain, code: error.code, proxyReply: reply,
+                                 responseContentType: contentType, responseBodyLength: bodyLength)
+    }
+
+    /// The host as the owner knows it: `byskebox`, not
+    /// `byskebox.example.ts.net`. The full name is kept in `fqdn` and shown
+    /// under Details.
+    nonisolated static func firstLabel(of host: String) -> String {
+        host.split(separator: ".").first.map(String.init) ?? host
+    }
+
+    /// D2: the first load is waiting for the node's status or its peer list.
+    /// `loadInitial` runs again on every status poll, so the FIRST hold's stamp
+    /// is kept — otherwise the duration on screen would reset every five
+    /// seconds and a wait that never ends would look like one that just began.
+    private func holdPage(_ url: URL) {
+        let host = Self.firstLabel(of: url.host ?? "")
+        if case .holding(let h, _) = pageState, h == host { return }
+        setPageState(.holding(host: host, since: .now))
+    }
+
+    private func elapsedSinceNavigationStart() -> Duration {
+        .milliseconds(max(0, Int(Date().timeIntervalSince(navigationStartedAt) * 1000)))
+    }
+
+    /// The relay's last refusal, if it was for this host and port and arrived no
+    /// earlier than this load began. Both conditions matter: a discovery sweep
+    /// refuses twelve other hosts a second before the page's own attempt, and a
+    /// refusal from the *previous* load would otherwise explain this one.
+    private func matchingProxyReply(fqdn: String, port: Int) -> ProxyReply? {
+        guard let reply = tsnetModel.lastProxyFailure, !fqdn.isEmpty,
+              reply.target.caseInsensitiveCompare("\(fqdn):\(port)") == .orderedSame,
+              reply.at >= navigationStartedAt
+        else { return nil }
+        return reply
+    }
+
     // Raw WKWebView state consumed by browser chrome.
     @Published private(set) var title = ""
     /// Security-sensitive, user-visible URL. This advances after WebKit commits
@@ -247,6 +336,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         didLoadInitial = false
         // The next makeWebView loads the page afresh anyway.
         reloadWhenActive = false
+        // No web view, so no page: a stale `connecting` here would have the
+        // restored tab show a spinner for a load that is not running.
+        setPageState(.idle)
     }
 
     /// Keeps delegates/observation attached if SwiftUI reuses the view.
@@ -323,6 +415,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
                 status: tsnetModel.localStatus) {
             case .wait:
                 logger.log("loadInitial: holding \(initialURL.redactedForLog) until home-page availability is known")
+                holdPage(initialURL)
                 return
             case .load(let decidedURL):
                 if decidedURL != initialURL {
@@ -334,6 +427,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
         if needsPeerDataToRoute(target), tsnetModel.proxyPolicy?.hasPeerData != true {
             logger.log("loadInitial: holding \(target.redactedForLog) until tailnet peer data arrives")
+            holdPage(target)
             return
         }
         didLoadInitial = true
@@ -406,6 +500,15 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // delay explicit connection failures; it only extends how long an
         // otherwise-silent request may remain pending.
         navigationStartedAt = Date()
+        // A startup retry keeps the FIRST attempt's clock, so the duration on
+        // screen never restarts while the silent retries run (F4 §4.3).
+        let host = Self.firstLabel(of: url.host ?? "")
+        let port = url.port ?? 443
+        if case .connecting(let h, let p, let since, let attempt) = pageState, h == host, p == port {
+            setPageState(.connecting(host: h, port: p, since: since, attempt: attempt + 1))
+        } else {
+            setPageState(.connecting(host: host, port: port, since: .now, attempt: 1))
+        }
         webView?.load(URLRequest(url: url, timeoutInterval: 120))
     }
 
@@ -537,6 +640,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
         navErrorURLString = Self.withoutSignInToken(attemptedURL).absoluteString
         url = attemptedURL
         failedInitialURL = attemptedURL == initialURL ? attemptedURL : nil
+        // No load was dispatched, so no clock: resolution failed first.
+        setPageState(.failed(pageFailure(error: error as NSError, failedURL: attemptedURL,
+                                         cause: .ambiguousHost(host, candidates),
+                                         elapsed: .zero)))
     }
 
     private func reportUnknownTailnetHost(_ host: String, attemptedURL: URL) {
@@ -548,6 +655,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         navErrorURLString = Self.withoutSignInToken(attemptedURL).absoluteString
         url = attemptedURL
         failedInitialURL = attemptedURL == initialURL ? attemptedURL : nil
+        setPageState(.failed(pageFailure(error: error as NSError, failedURL: attemptedURL,
+                                         cause: .unknownHost(host), elapsed: .zero)))
     }
 
     func navigationError(_ error: Error, for failedURL: URL) {
@@ -567,6 +676,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // Let the tsnet manager judge whether its relay listener is what
         // failed (R30). Only the error's identity goes: no URL leaves here.
         let ns = error as NSError
+        setPageState(.failed(pageFailure(error: ns, failedURL: url)))
         reportLoadFailure?(SocksRelayRecovery.PageFailure(
             domain: ns.domain, code: ns.code, navigationStartedAt: navigationStartedAt))
     }
@@ -578,6 +688,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
         navErrorKind = .urlFormat
         navErrorURLString = raw
         failedInitialURL = nil
+        setPageState(.failed(pageFailure(error: URLError(.badURL) as NSError, failedURL: nil,
+                                        cause: .badAddress, elapsed: .zero)))
     }
 
     /// What the error page says under the caption: CFNetwork's description
@@ -775,6 +887,11 @@ extension BrowserViewModel: WKNavigationDelegate {
         startupRetryTask?.cancel()
         startupRetryTask = nil
         startupLoad = nil
+        // The page is on screen: nothing may cover it after this (F4 D8).
+        if pageState != .committed {
+            logger.log("page-state: committed after \(PageState.milliseconds(elapsedSinceNavigationStart())) ms")
+            setPageState(.committed)
+        }
         refreshState(from: webView, includeCommittedURL: true)
         failedInitialURL = nil
         session?.navigationCommitted()
@@ -945,6 +1062,11 @@ extension BrowserViewModel {
             let host = (webView?.url ?? initialURL).host() ?? "the gateway"
             navigationError(error, for: initialURL)
             navErrorMessage = ResponsePolicy.refusalText(status: status, host: host)
+            // navigationError decided the cause from WebKit's 102, which says
+            // only "something cancelled it". The status is what the gateway
+            // actually answered, so it wins (F4 §4.13).
+            setPageState(.failed(pageFailure(error: error, failedURL: initialURL,
+                                             cause: .gatewayError(status: status))))
             return true
         }
         if webView?.url != nil {
@@ -959,6 +1081,8 @@ extension BrowserViewModel {
         let attempted = (error.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? initialURL
         navigationError(error, for: initialURL)
         navErrorMessage = "The gateway redirected to \(attempted.redactedForLog), which is not the gateway this app is set to, so it was not opened here. Check the gateway address in Settings."
+        setPageState(.failed(pageFailure(error: error, failedURL: initialURL,
+                                         cause: .redirectedAway(attempted.redactedForLog))))
         return true
     }
 
@@ -984,6 +1108,13 @@ extension BrowserViewModel {
             logger.log("Web content process terminated \(contentRecovery.maxReloads + 1) times in \(Int(contentRecovery.window))s; showing the error page")
             navigationError(URLError(.cannotLoadFromNetwork), for: webView.url ?? url ?? initialURL)
             navErrorMessage = "The dashboard page stopped repeatedly (\(contentRecovery.maxReloads + 1) times in a minute), so automatic reloading has paused. This is the page itself failing, not the tailnet. Reload to try again."
+            // The page failed, not the tailnet, and the elapsed time of the last
+            // load says nothing about it: this is a committed page dying.
+            setPageState(.failed(pageFailure(error: URLError(.cannotLoadFromNetwork) as NSError,
+                                             failedURL: webView.url ?? url ?? initialURL,
+                                             cause: .pageCrashed(times: contentRecovery.maxReloads + 1,
+                                                                 window: Int(contentRecovery.window)),
+                                             elapsed: .zero)))
             return
         }
         AppDiagnostics.shared.webContentAutoReloads += 1
