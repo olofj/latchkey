@@ -36,6 +36,21 @@
 // app redacts again on display. A line repeated back to back is written
 // once, with a count.
 //
+// The echo is not the first place a line reaches the disk. logtail writes
+// each entry, as JSON, to its filch buffer -- aperture.log1.txt and
+// aperture.log2.txt in the same directory -- synchronously, before its drain
+// (a 2-s timer, into the no-op transport) reads it back, and filch truncates
+// a file only when it has been read to the end. Until this revision those
+// entries were written raw: every tsnet server takes the process logtail
+// (tailscale.go, TsnetNewServer), so the login link was in them in plain
+// text, refreshed every 5 s through a login wait, and left there until the
+// next launch when the process was killed or suspended mid-wait (5.8 KB of
+// undrained entries were found in a live container). redactingBuffer now
+// sits between logtail and filch and redacts every entry first, by the same
+// rules, verbose lines included; the drain reads back valid JSON, as before.
+// What it cannot see is what the process writes to fd 2 itself, which filch
+// captures directly: Go's panic output, and under Xcode the os_log mirror.
+//
 // It never leaves the device: they are local files, and the directory is
 // excluded from backup (App/Workspace/BackupExclusion.swift).
 
@@ -50,6 +65,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"tailscale.com/logtail"
 )
 
 const localLogMax = 1 << 20 // 1 MiB per file
@@ -122,6 +139,24 @@ func (s *splitLog) Write(p []byte) (int, error) {
 		s.tsnet.Write(redactLine(p))
 	} else if s.raw != nil {
 		s.raw.Write(redactLine(bytes.TrimPrefix(rest, []byte(" "))))
+	}
+	return len(p), nil
+}
+
+// redactingBuffer is the logtail.Buffer in front of the process's filch
+// files (see the header): each entry logtail writes is redacted before filch
+// puts it on disk. An entry is logtail's JSON with the line quoted inside
+// it; the rules only ever remove characters or insert "…", "[token
+// redacted]" or "tskey-…", none of which is a quote or a backslash, so the
+// entry stays valid JSON and the drain replays it as one, not as a raw line.
+// Reads pass straight through.
+type redactingBuffer struct {
+	logtail.Buffer
+}
+
+func (b redactingBuffer) Write(p []byte) (int, error) {
+	if _, err := b.Buffer.Write(redactLine(p)); err != nil {
+		return 0, err
 	}
 	return len(p), nil
 }

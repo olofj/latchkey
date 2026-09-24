@@ -4,9 +4,16 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"expvar"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"tailscale.com/logtail/filch"
+	"tailscale.com/metrics"
 )
 
 func TestLocalLogStampsAndRotates(t *testing.T) {
@@ -185,6 +192,102 @@ func TestRedactLineIsShapeAgnostic(t *testing.T) {
 		if got := string(redactLine([]byte(c.in))); got != want {
 			t.Errorf("%s:\n  in   %s\n  got  %s\n  want %s", c.name, c.in, got, want)
 		}
+	}
+}
+
+// The filch buffer files, aperture.log{1,2}.txt, are the FIRST place a line
+// reaches the disk: logtail writes its JSON entry there synchronously,
+// before the 2-s drain reads it back and before the tsnet.log echo matters,
+// and filch truncates a file only once it has been read to the end. Every
+// tsnet server logs through this one logger, so control's "AuthURL is" and
+// tsnet's "go to:" (every 5 s through a login wait) were there in plain
+// text, and stayed until the next launch when the process was killed or
+// suspended mid-wait. Drive the real process logger, as TsnetSetupLogs
+// builds it, and read its files before anything has drained.
+func TestProcessLoggerRedactsTheFilchBuffer(t *testing.T) {
+	dir := t.TempDir()
+	lg, buf, _, err := newProcessLogger(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer buf.Close()
+	awaitStartupDrain(t, buf)
+	secrets := []string{"0f1e-2D3c-4b5A", "0F1e-2d3C-4b5A-6978", "fk1.sessionsecret", "pw"}
+	lg.Logf("control: AuthURL is https://login.tailscale.com/a/%s", secrets[0])
+	lg.Logf("To start this tsnet server, restart with TS_AUTHKEY set, or go to: http://127.0.0.1:8490/auth/%s", secrets[1])
+	// Verbose: never echoed to tsnet.log (StderrLevel 0), only buffered. A
+	// redaction that lived in the echo alone would miss it entirely.
+	lg.Logf("[v1] magicsock: derp: home https://user:%s@relay.example.ts.net/?token=%s", secrets[3], secrets[2])
+
+	var filch string
+	for _, name := range []string{"aperture.log1.txt", "aperture.log2.txt"} {
+		b, err := os.ReadFile(dir + "/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		filch += string(b)
+	}
+	if strings.Count(filch, "\n") != 3 {
+		t.Fatalf("expected three buffered entries on disk, undrained:\n%s", filch)
+	}
+	ts, _ := os.ReadFile(dir + "/tsnet.log")
+	for _, secret := range secrets {
+		if strings.Contains(filch, secret) {
+			t.Errorf("%q reached the filch buffer files:\n%s", secret, filch)
+		}
+		if strings.Contains(string(ts), secret) {
+			t.Errorf("%q reached tsnet.log:\n%s", secret, ts)
+		}
+	}
+	for _, want := range []string{
+		`"text":"control: AuthURL is https://login.tailscale.com/a/…"`,
+		`"text":"To start this tsnet server, restart with TS_AUTHKEY set, or go to: http://127.0.0.1:8490/auth/…"`,
+		`"text":"magicsock: derp: home https://…@relay.example.ts.net/?…"`,
+	} {
+		if !strings.Contains(filch, want) {
+			t.Errorf("the buffer lacks %s (the entry, redacted, should be there):\n%s", want, filch)
+		}
+	}
+	// The drain contract: logtail replays an entry as JSON only while it is
+	// valid JSON; a broken one would come back as a RAW-STDERR line.
+	for line := range strings.Lines(filch) {
+		if !json.Valid([]byte(line)) {
+			t.Errorf("not valid JSON after redaction: %s", line)
+		}
+	}
+	// The echo still works, and only for non-verbose lines.
+	for _, want := range []string{"AuthURL is https://login.tailscale.com/a/…\n", "go to: http://127.0.0.1:8490/auth/…\n"} {
+		if !strings.Contains(string(ts), want) {
+			t.Errorf("tsnet.log lacks %q:\n%s", want, ts)
+		}
+	}
+	if strings.Contains(string(ts), "magicsock") {
+		t.Errorf("a verbose line was echoed to tsnet.log:\n%s", ts)
+	}
+	// And the drain itself still runs to completion (into the no-op
+	// transport: this package's init sets TS_NO_LOGS_NO_SUPPORT).
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := lg.Shutdown(ctx); err != nil {
+		t.Errorf("shutdown (final drain) failed: %v", err)
+	}
+}
+
+// awaitStartupDrain returns once logtail's uploading goroutine has made its
+// first pass over the empty buffer and parked. filch rotates exactly once at
+// the end of that pass, inside TryReadLine and under the lock every Write
+// also takes, so once the count is 1 nothing reads the buffer again until
+// the 2-s flush timer the first write arms: what the test then writes stays
+// on disk to be read. Without this the pass raced the writes, and drained
+// none, some or all of them before the test looked.
+func awaitStartupDrain(t *testing.T, buf *filch.Filch) {
+	t.Helper()
+	rotates := buf.ExpVar().(*metrics.Set).Get("counter_rotate_calls").(*expvar.Int)
+	for deadline := time.Now().Add(5 * time.Second); rotates.Value() < 1; {
+		if time.Now().After(deadline) {
+			t.Fatal("logtail never made its first pass over the buffer")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

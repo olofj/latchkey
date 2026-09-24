@@ -57,8 +57,28 @@ func TsnetSetupLogs(dir *C.char) C.int {
 	if root == "" {
 		return C.EINVAL
 	}
-	if err := os.MkdirAll(root, 0700); err != nil {
+	lg, buf, public, err := newProcessLogger(root, true)
+	if err != nil {
 		return C.EIO
+	}
+	processLogs.logger = lg
+	processLogs.buffer = buf
+	processLogs.public = public
+	log.SetFlags(0)
+	log.SetOutput(lg)
+	lg.Logf("libtailscale process logging started; Go %s", runtime.Version())
+	return 0
+}
+
+// newProcessLogger builds the process-wide logger under root exactly as
+// TsnetSetupLogs installs it, so a Go test can drive the real thing against
+// a temporary directory and read what reaches its files (Latchkey,
+// latchkey_locallog_test.go). captureStderr is filch's ReplaceStderr: the
+// app wants fd 2 taken, so a Go panic's output survives to the next launch;
+// a test does not want its own taken.
+func newProcessLogger(root string, captureStderr bool) (*logtail.Logger, *filch.Filch, string, error) {
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return nil, nil, "", err
 	}
 	cfgPath := root + "/aperture.log.conf"
 	cfg, err := logpolicy.ConfigFromFile(cfgPath)
@@ -66,12 +86,15 @@ func TsnetSetupLogs(dir *C.char) C.int {
 		cfg = logpolicy.NewConfig(logtail.CollectionNode)
 		err = cfg.Save(cfgPath)
 	}
-	if err != nil || cfg.Validate(logtail.CollectionNode) != nil {
-		return C.EIO
-	}
-	buf, err := filch.New(root+"/aperture", filch.Options{ReplaceStderr: true})
 	if err != nil {
-		return C.EIO
+		return nil, nil, "", err
+	}
+	if err := cfg.Validate(logtail.CollectionNode); err != nil {
+		return nil, nil, "", err
+	}
+	buf, err := filch.New(root+"/aperture", filch.Options{ReplaceStderr: captureStderr})
+	if err != nil {
+		return nil, nil, "", err
 	}
 	lc := logtail.Config{
 		Collection: cfg.Collection,
@@ -85,8 +108,13 @@ func TsnetSetupLogs(dir *C.char) C.int {
 		// Latchkey (M8.3): the echo goes to a local, capped tsnet.log
 		// instead -- the only copy that survives, since uploads are off and
 		// the drain discards (latchkey_locallog.go).
-		Stderr:              latchkeyLocalLog(root),
-		Buffer:              buf,
+		Stderr: latchkeyLocalLog(root),
+		// Latchkey: the filch files are the first place a line reaches the
+		// disk, before the echo and before the drain. Every tsnet server
+		// logs through this logger (TsnetNewServer), the login link among
+		// its lines, so the buffer redacts each entry before filch writes
+		// it (latchkey_locallog.go, redactingBuffer).
+		Buffer:              redactingBuffer{buf},
 		CompressLogs:        true,
 		IncludeProcID:       true,
 		IncludeProcSequence: true,
@@ -94,14 +122,7 @@ func TsnetSetupLogs(dir *C.char) C.int {
 			Host: logpolicy.LogHost(),
 		}.New()},
 	}
-	lg := logtail.NewLogger(lc, logger.Discard)
-	processLogs.logger = lg
-	processLogs.buffer = buf
-	processLogs.public = cfg.PublicID.String()
-	log.SetFlags(0)
-	log.SetOutput(lg)
-	lg.Logf("libtailscale process logging started; Go %s", runtime.Version())
-	return 0
+	return logtail.NewLogger(lc, logger.Discard), buf, cfg.PublicID.String(), nil
 }
 
 //export TsnetLog
