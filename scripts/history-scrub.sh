@@ -58,7 +58,12 @@ if [[ ${#TAILNETS[@]} -eq 0 && ${#IPS[@]} -eq 0 && -z "$LITERALS" && -z "$AUTHOR
     echo "  values must NOT be passed: they are what the tests assert about." >&2
     exit 2
 fi
-TAILNET="${TAILNETS[*]}"
+# `${ARR[@]+...}`, not `${ARR[*]}`. macOS ships bash 3.2, where expanding an
+# EMPTY array under `set -u` is an unbound-variable error -- so a run that passed
+# no --ip died on the export below, after tagging a backup and before rewriting
+# anything. Every array expansion here needs the guard, including the ones that
+# happen to be non-empty today.
+TAILNET="${TAILNETS[@]+${TAILNETS[*]}}"
 
 # --- refuse to run on anything but a clean, unpushed, idle repository --------
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -88,7 +93,7 @@ echo "::: tagged the current history as $BACKUP ($BEFORE_COUNT commits)"
 # --prune-empty drops the commits that become no-ops, which is exactly what the
 # rename commits become: both sides of their diffs end up saying Latchkey.
 export SCRUB_TAILNET="$TAILNET"
-export SCRUB_IPS="${IPS[*]}"
+export SCRUB_IPS="${IPS[@]+${IPS[*]}}"
 export SCRUB_LITERALS="$LITERALS"
 export SCRUB_AUTHOR_FROM="$AUTHOR_FROM" SCRUB_AUTHOR_NAME="$AUTHOR_NAME" SCRUB_AUTHOR_EMAIL="$AUTHOR_EMAIL"
 export FILTER_BRANCH_SQUELCH_WARNING=1

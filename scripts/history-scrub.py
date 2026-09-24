@@ -164,7 +164,11 @@ LITERAL_SUBS = literal_patterns(os.environ.get("SCRUB_LITERALS", ""))
 def scrub(text):
     text = rewrite(text)
     for pattern, replacement in TAILNET_SUBS + IP_SUBS + LITERAL_SUBS:
-        text = pattern.sub(replacement, text)
+        # `lambda _: replacement`, not the string: re.sub treats a replacement
+        # STRING as a template, so a caller-supplied value containing a backslash
+        # would be read as a group reference and silently corrupt the result.
+        # These values come from argv, so the caller decides what is in them.
+        text = pattern.sub(lambda _, r=replacement: r, text)
     return text
 
 
