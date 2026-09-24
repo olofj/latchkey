@@ -324,19 +324,23 @@ enum WorkspaceStore {
     /// sibling so iOS and macOS test credentials are isolated from normal
     /// credentials and from each other.
     ///
-    /// **The directory names below deliberately still spell the OLD product
-    /// name, and must not be "corrected" to match the new one.** The product
-    /// was renamed on 2026-09-23 but
-    /// the bundle id stayed `net.lixom.latchkey`, so this is the *same app
-    /// container* as before, and this directory is live: it holds each
-    /// workspace's tsnet state dir — the node's identity — plus
-    /// `workspaces.json` and the logs. Renaming the literal would point the app
-    /// at an empty directory and silently discard the Tailscale node: new node
-    /// key, fresh login, tailnet-lock re-signing, new grants. Nothing would
-    /// crash; the owner would just find themselves logged out with an
-    /// unapproved device. If it is ever worth renaming, it needs a migration
-    /// that moves the directory first and is tested against a populated one.
-    /// See `scripts/rename-to-latchkey.py` for the full reasoning.
+    /// **Renaming this literal discards the Tailscale node. It was renamed once,
+    /// on purpose, and that is the last time it should happen casually.**
+    ///
+    /// This directory is live: it holds each workspace's tsnet state dir — the
+    /// node's identity — plus `workspaces.json` and the logs. Point the app at a
+    /// different name and it finds an empty directory and starts over: new node
+    /// key, fresh login, tailnet-lock re-signing, new grants. **Nothing
+    /// crashes.** The owner simply finds themselves logged out with an
+    /// unapproved device, which is the worst shape a fault can have.
+    ///
+    /// It moved from the previous product's name to `Latchkey/` on 2026-09-24,
+    /// with the bundle id, because the old name was trademark-encumbered and had
+    /// to leave the repository — and Olof accepted losing the node for it. No
+    /// migration was written: there was exactly one install, and logging it back
+    /// in was cheaper than code that would run once. If it is ever renamed
+    /// again, it needs a migration that moves the directory first and is tested
+    /// against a populated one. See `scripts/rename-to-latchkey.py`.
     static var appSupportDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask).first

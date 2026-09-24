@@ -61,21 +61,41 @@ non-goals, not omissions.
   exact instrument because it starts at the pristine import.
   Keep it that way: never fold a vendored-tree change into an unrelated
   commit. Provenance and diff recipes are in `ThirdParty/VENDORED.md`.
-- **The old product name survives in three places on purpose. Do not tidy
-  them.** The app was renamed Latchkey → Latchkey on 2026-09-23 but **kept
-  its bundle id**, so anything keyed to that identity had to stay put:
-  - `net.lixom.latchkey` — bundle ids, the os_log subsystem, queue labels;
-  - `<Application Support>/Latchkey/` and its `-UI-Test*` siblings
-    (`App/Workspace/WorkspaceStore.swift`). Same bundle id means the same
-    container, so this directory is **live**: it holds each workspace's tsnet
-    state dir, i.e. the Tailscale node's identity. Renaming it logs the device
-    out and forces tailnet-lock re-signing and new grants, with no crash and
-    no error — the app just quietly starts over;
-  The node's **default** MagicDNS name is *not* in that list: it followed the
-  product to `latchkey-iphone` / `-ipad` later the same day. That is safe for
-  the opposite reason — it is only a default, a live install carries its own
-  hostname in `workspaces.json`, and the tailnet grant is scoped by address
-  range rather than node name. Storage identity must not move; a default may.
+- **The app's identity moved on 2026-09-24, deliberately, and it cost the
+  node.** An earlier rename had frozen everything keyed to the bundle id
+  precisely so the install would keep its container. This one could not: the
+  previous name was trademark-encumbered and had to leave the published
+  repository, history included. So the bundle id, the os_log subsystem, the
+  queue labels and `<Application Support>/` all moved to `latchkey` /
+  `net.lixom.latchkey` / `Latchkey/`.
+
+  The consequence, accepted explicitly by Olof before the rename: **the app is
+  a new node.** A container is keyed to the bundle id, and that container held
+  each workspace's tsnet state dir — i.e. the Tailscale node's identity. So the
+  first launch after this asks to log in again, needs device approval, needs
+  re-signing under tailnet lock, and needs whatever grant its new address gets.
+  The old node lingers in the admin console until removed. Renaming back would
+  not recover it.
+
+  What that means for anyone reading this later: the *reason* the old name used
+  to be frozen was real, and it still applies to any future rename — if you move
+  `net.lixom.latchkey` or `<Application Support>/Latchkey/` again, you log the
+  device out silently, with no crash and no error. Do not do it casually. The
+  node's **default** MagicDNS name (`latchkey-iphone` / `-ipad`) is the one
+  identity-adjacent string that *is* safe to change: it is only a default, a
+  live install carries its own hostname in `workspaces.json`, and the grant is
+  scoped by address range rather than node name.
+
+- **`Kiro Crew` is a different product and must never be renamed.** It is an
+  official Kiro project; this app is its client. Two uses are load-bearing
+  rather than cosmetic: `GatewayCandidates.manifestIsKiroCrew` matches the
+  gateway's web-app manifest on the literal `"Kiro Crew"`, which is how
+  discovery *recognises* a gateway, and `authProbeIsKiroCrew` pairs it with
+  `X-Auth-Required`. Rewrite either and the app finds nothing, on every tailnet,
+  with no error — the sweep just reports zero gateways. Note `kirocrew`
+  contains `kiro`, so any future bulk rename must mask it first;
+  `scripts/rename-to-latchkey.py` shows how, and its `--check` is bidirectional
+  for exactly this reason.
 
   The vendored tree keeps its `latchkey_*` file and test names under R16, so
   `scripts/test-all.sh` still runs `go test -run Latchkey`. Reasoning and the
