@@ -247,6 +247,6 @@ Common failures:
 `App/` and `UITests/` are Xcode **synchronized folder groups** — a new
 `.swift` file there is compiled automatically. `TSNet/` is **not**: it has a
 `membershipExceptions` list in `project.pbxproj`, and a new file dropped there
-is silently not compiled until you add its name to that list. The app icon is
-rendered by `scripts/render-app-icon.swift`; rerun it rather than editing the
-PNG.
+is silently not compiled until you add its name to that list. The app icon is rendered by
+`../design/latchkey-icon.swift` (`swift design/latchkey-icon.swift` from the
+repository root); rerun it rather than editing the PNGs.

@@ -595,7 +595,7 @@ likely to make the app feel unreliable in daily use.
 
 | # | Task |
 |---|---|
-| 8.1 | App icon and launch screen. **Done:** an original icon (`app/scripts/render-app-icon.swift`); the launch screen is the generated system background. |
+| 8.1 | App icon and launch screen. **Done:** an original icon (`design/latchkey-icon.swift`); the launch screen is the generated system background. |
 | 8.2 | Diagnostics screen: node state, selected gateway, session expiry, proxy endpoint, last error — everything needed to debug a failure without a Mac. **Done early (R29):** Settings → Status, which also shows the node key and provisioning-profile expiry (R31, R33). |
 | 8.3 | Surface tsnet's own logs. Upstream writes Go/tsnet detail to `Logs/tsnet.log`, **not** to `LogRing`/`os_log`, so Settings → Logs currently hides magicsock/DERP/loopback failures. Pipe them in. **Local only (R1/D1):** nothing is uploaded to Tailscale's log service — upload is disabled inside the vendored libtailscale — and every line is redacted (`URL.redactedForLog`, `LogRedaction.scrub`). Revision R29 moves this before M6's device tests. **Done (R29):** upstream actually discarded these lines (the drain goes to the no-op transport). The vendored library now keeps a local, capped `tsnet.log` (plus `stderr.log` for a Go panic), shown in Settings → Node log. |
 | 8.4 | `README.md`: build, install, re-sign, test, troubleshoot. **Done.** |

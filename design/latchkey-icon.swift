@@ -381,8 +381,8 @@ func sheet() -> CGImage {
     let big = 320
     place(masked(light, pixels: big), x: 60, y: 50, size: CGFloat(big))
     place(masked(tintedPreview(pixels: Int(side)), pixels: big), x: 400, y: 50, size: CGFloat(big))
-    place(masked(dark, pixels: big), x: W / 2 + 60, y: 50, size: CGFloat(big))
-    place(masked(light, pixels: big), x: W / 2 + 400, y: 50, size: CGFloat(big))
+    place(masked(dark, pixels: big), x: CGFloat(W) / 2 + 60, y: 50, size: CGFloat(big))
+    place(masked(light, pixels: big), x: CGFloat(W) / 2 + 400, y: 50, size: CGFloat(big))
 
     // Row 2: true pixel sizes, light on light and dark on dark, plus the light
     // icon on dark (a light-appearance user with a dark wallpaper).
