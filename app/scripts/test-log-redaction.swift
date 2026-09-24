@@ -103,6 +103,39 @@ expectEqual(LogRedaction.scrub(dashPath), dashPath, "a short segment under /a/ a
 expectEqual(LogRedaction.scrub("loaded https://gw.example.ts.net/chat/a/abcdefgh1234"),
             "loaded https://gw.example.ts.net/chat/a/…",
             "an 8+ code under /a/ ANYWHERE is cut: over-redacting a path beats missing a login code")
+
+// The shape of a login code is the CONTROL SERVER's to choose, not ours: the
+// app never builds that URL, it arrives as `resp.AuthURL`. So the rule must not
+// assume a character set. These are the shapes the L2 harness now mints by
+// default (hostile: hyphenated, mixed-case groups), and the shapes the vendored
+// Go redactor was fixed to catch on 2026-09-23. Before that fix both sides
+// assumed 8+ ASCII alphanumerics and let every row below through.
+for (code, what) in [("0f1e-2d3c-4b5a", "hyphens"),
+                     ("Ab3F-9zQ1-Kp7M-2wXe", "hyphens and mixed case"),
+                     ("a_b.c~d-e1f2", "underscore, dot and tilde"),
+                     ("%41%42%43%44%45%46", "percent-encoded")] {
+    expectEqual(LogRedaction.scrub("go to: https://login.example.ts.net/a/\(code)"),
+                "go to: https://login.example.ts.net/a/…",
+                "a login code with \(what) is cut")
+}
+expectEqual(LogRedaction.scrub("go to: https://login.example.ts.net/A/0f1e2d3c4b5a6978"),
+            "go to: https://login.example.ts.net/A/…",
+            "the /A/ prefix is matched case-insensitively")
+expectEqual(LogRedaction.scrub("opening http://127.0.0.1:8490/AUTH/Ab3F-9zQ1-Kp7M"),
+            "opening http://127.0.0.1:8490/AUTH/…",
+            "and so is /AUTH/ with a hostile code")
+// The floor stays, so ordinary dashboard paths keep their shape. This is where
+// the Swift rule DIVERGES from the Go one, on purpose: the Go redactor only
+// ever sees tsnet's own log lines, while this one also scrubs dashboard URLs
+// like /chat/a/b. Divergence with a reason is fine; the silent kind is what the
+// 2026-09-23 review kept finding.
+expectEqual(LogRedaction.scrub("loaded https://gw.example.ts.net/chat/a/b"),
+            "loaded https://gw.example.ts.net/chat/a/b",
+            "a short segment under /a/ is still left alone")
+expectEqual(LogRedaction.redactSecretPath("/a/0f1e-2d3c-4b5a"), "/a/…",
+            "redactSecretPath itself is charset-agnostic")
+expectEqual(LogRedaction.redactSecretPath("/a/b"), "/a/b",
+            "redactSecretPath keeps a short segment")
 expectEqual(LogRedaction.scrub("https://login.tailscale.com/a/"), "https://login.tailscale.com/a/",
             "nothing after the prefix: nothing to hide")
 expectEqual(LogRedaction.scrub("https://h.example/a/b"), "https://h.example/a/b",

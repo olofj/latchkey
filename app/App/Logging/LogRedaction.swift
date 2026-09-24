@@ -48,19 +48,37 @@ enum LogRedaction {
     /// (anyone holding it can finish the login -- with THEIR account) and a
     /// control plane's `/auth/<id>` (testcontrol, headscale). The path is
     /// kept up to the secret, so the line still says what it was (M8.3).
-    /// A secret is a run of 8+ ASCII letters and digits right after the
-    /// prefix, whatever follows it (punctuation that ended up in the path, an
-    /// escaped newline); an ordinary short path like `/a/b` is left alone.
+    ///
+    /// A secret is a run of `secretFloor`+ characters right after the prefix,
+    /// stopping at a `/` or whitespace. **Deliberately no character set:** the
+    /// login URL is not built here, it arrives from the control server as
+    /// `resp.AuthURL`, so its shape is Tailscale's to change. Until 2026-09-23
+    /// both this and the vendored Go redactor required 8+ ASCII alphanumerics
+    /// and matched the prefix case-sensitively, so a code containing a hyphen —
+    /// or a `/A/` — passed through in plain text. The L2 harness now mints
+    /// hostile codes by default so this cannot regress silently.
+    ///
+    /// The length floor is why this differs from the Go rule, which cuts
+    /// everything after the prefix: that one only ever sees tsnet's own log
+    /// lines, while this one also scrubs dashboard URLs, where `/chat/a/b` is an
+    /// ordinary path and should keep its shape.
     nonisolated static func redactSecretPath(_ path: String) -> String {
-        for prefix in ["/a/", "/auth/"] where path.hasPrefix(prefix) {
+        let lower = path.lowercased()
+        for prefix in ["/a/", "/auth/"] where lower.hasPrefix(prefix) {
             let rest = path.dropFirst(prefix.count)
-            let secret = rest.prefix { $0.isASCII && ($0.isLetter || $0.isNumber) }
-            if secret.count >= 8 {
-                return prefix + "…" + rest.dropFirst(secret.count)
+            let secret = rest.prefix { !$0.isWhitespace && $0 != "/" }
+            if secret.count >= secretFloor {
+                // Keep the path's own spelling of the prefix, not the folded one.
+                return path.prefix(prefix.count) + "…" + rest.dropFirst(secret.count)
             }
         }
         return path
     }
+
+    /// Shortest run after `/a/` or `/auth/` treated as a secret rather than a
+    /// path segment. Six: the shortest login code worth worrying about, and
+    /// still long enough to leave `/chat/a/b` and `/a/me` alone.
+    nonisolated static let secretFloor = 6
 
     nonisolated static func redact(_ url: URL) -> String {
         guard let scheme = url.scheme?.lowercased() else {
@@ -168,8 +186,13 @@ enum LogRedaction {
     nonisolated(unsafe) private static let urlPattern = try! NSRegularExpression(
         pattern: #"[A-Za-z][A-Za-z0-9+.\-]*://[^\s"'<>\\`{]+"#)
 
+    /// Charset-agnostic and case-insensitive, for the reasons on
+    /// `redactSecretPath`: the code's shape belongs to the control server. The
+    /// class excludes `/` and the characters that end a URL in prose, so a
+    /// following path segment or closing quote survives, and the `{6,}` floor
+    /// keeps ordinary paths like `/chat/a/b` intact.
     nonisolated(unsafe) private static let secretPathPattern = try! NSRegularExpression(
-        pattern: #"/(a|auth)/[A-Za-z0-9]{8,}"#)
+        pattern: #"(?i)/(a|auth)/[^\s"'<>\\`/]{6,}"#)
 
     nonisolated(unsafe) private static let bareTokenPattern = try! NSRegularExpression(
         pattern: #"(?i)\btoken=[^&\s"',;}]*"#)
