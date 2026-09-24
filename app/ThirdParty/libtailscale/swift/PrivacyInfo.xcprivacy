@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- TailscaleKit collects no data and performs no tracking, but Apple
+         rejects an app at UPLOAD (ITMS-91053), not at build, if an embedded
+         framework slice has no manifest or leaves a required-reason API
+         undeclared.
+
+         Unlike upstream libtailscale#57's empty manifest, this one declares
+         the two categories the Go runtime actually imports, measured with
+         `nm -u` on the ios-arm64 slice (2026-09-24):
+           _stat _fstat _fstatat _lstat   -> FileTimestamp
+           _mach_absolute_time            -> SystemBootTime
+         Re-run that scan after a Go toolchain bump; a new import in another
+         category (statfs -> DiskSpace, ...) needs its own entry here. -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <!-- os.Stat and friends on the node's own state and log files,
+                 all inside the app container. -->
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+        <dict>
+            <!-- The Go runtime's monotonic clock: elapsed time and timers. -->
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>35F9.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

@@ -68,6 +68,14 @@ ios-fat: ios-sim ios ## Builds TailscaleKit.xcframework (with bundled dSYMs) to 
 	# an unreadable "TailscaleKit + <offset>"). The dSYMs are produced by the
 	# `ios`/`ios-sim` prerequisites via DEBUG_INFORMATION_FORMAT=dwarf-with-dsym.
 	rm -rf ./build/Build/Products/Release-iphonefat/TailscaleKit.xcframework
+	# Latchkey divergence (after libtailscale#57): App Store Connect rejects
+	# an upload (ITMS-91053) whose embedded framework slice lacks a privacy
+	# manifest. The slices are built unsigned; the app's Embed & Sign step
+	# seals the manifest in with the rest of the bundle.
+	for fw in ./build/Build/Products/Release-iphoneos/TailscaleKit.framework \
+	          ./build/Build/Products/Release-iphonesimulator/TailscaleKit.framework; do \
+		cp ./PrivacyInfo.xcprivacy "$$fw/PrivacyInfo.xcprivacy" || exit 1; \
+	done
 	xcodebuild -create-xcframework \
 		-framework ./build/Build/Products/Release-iphoneos/TailscaleKit.framework \
 		-debug-symbols $(CURDIR)/build/Build/Products/Release-iphoneos/TailscaleKit.framework.dSYM \
