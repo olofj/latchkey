@@ -25,7 +25,7 @@ These revisions come out of an adversarial review of the plan. Full findings, wi
 | D1 | **Log upload off.** No app or tsnet logs go to Tailscale's hosted logtail. On-device logs stay, with URLs redacted. |
 | D2 | **Vendor libtailscale as plain source**, via one clean, import-only commit first. All modifications are later, separate commits. |
 | D3 | **First token: both paths.** Paste from the Mac (primary; CLI links survive gateway restarts) and QR scan (convenience). |
-| D4 | **chonk is out of v1.** v1 targets byskebox only. |
+| D4 | **chonk is out of v1.** v1 targets byskebox only. **Superseded 2026-09-23** (`DECISIONS.md`, "D4 superseded"): chonk already had `tailscale serve` on 443 in front of its loopback-only dashboard, so it is a usable HTTPS gateway, as is box; the grant covers all three. Where R26 and R28 below cite D4, the mechanism they built stands on its other grounds (https-only discovery, the dashboard's own origin check). |
 | D5 | **User-owned node, "admin purgatory" tailnet policy.** The node logs in as `owner@example.com` (so KiroCrew sees his login). The tailnet policy gives full access only to chonk and air by name; every new admin-owned device lands in a purgatory address pool with no grants, and gets access only when an admin moves its address into a category range — for Latchkey, `kiro-clients` → `byskebox:443`. Applied by an agent in Olof's infra workspace. See §C O3/O3b. |
 | D6 | **No notifications in v1.** The deep-link interim is dropped. |
 | D7 | **Tests must run with the Mac's own Tailscale up.** chonk is always on the tailnet. Leak coverage for tailnet *IP* destinations is accepted as weaker. |
@@ -193,20 +193,20 @@ KiroCrew's end-to-end suite (`website/playwright/auth.setup.ts` in kirodotdev/Ki
 ### Before M5
 
 **R26 — Discovery: https only, byskebox-first** [H8, H9, D4, D5]
-- Delete the `http://<host>:5476` probe. chonk's dashboard listens on `127.0.0.1` only, a plain-http origin fails the required `/api/ws` origin check, and HSTS (`includeSubDomains`) upgrades it after any https visit. chonk is out of v1 (D4); remove it from M7.6 and all ACs.
+- Delete the `http://<host>:5476` probe. chonk's dashboard listens on `127.0.0.1` only, a plain-http origin fails the required `/api/ws` origin check, and HSTS (`includeSubDomains`) upgrades it after any https visit. chonk is out of v1 (D4); remove it from M7.6 and all ACs. *(D4 has since been superseded — chonk is served on 443 and is a gateway like any other; the http probe stays dropped on the first two grounds.)*
 - Probe the saved gateway first. Filter candidates to `Online`, not `Expired`, not `ShareeNode`, `OS` in {linux, macOS, windows}, owned by the same user. `OS`/`UserID` are not decoded by the vendored TailscaleKit (`LocalAPI/Types.swift`) — add them in a post-import commit.
-- 12–16 concurrent probes, 1.5 s each, 5 s overall deadline; stream results into the picker as they arrive.
+- 12–16 concurrent probes, 1.5 s each, 5 s overall deadline; stream results into the picker as they arrive. *(Built as 12 concurrent; the budgets were raised to 4 s and 12 s by R39, which is the live rule.)*
 - Send probes through an ephemeral `URLSession` built from `tsnetModel.proxyConfiguration`, rebuilt when the config is republished. If every probe fails with `-1000`/`-1004`, report "proxy unhealthy" and call `refreshStatusNow()` — not "no gateways found".
 - Fingerprint: `GET /manifest.json` with `"name": "Kiro Crew"` (use the FQDN without the trailing dot), confirmed by `GET /api/auth/me` returning 403 with `X-Auth-Required: true`.
 - **Expectation to verify in M7:** under the purgatory policy (D5) a promoted `kiro-clients` node's netmap should contain only peers it may talk to or that may talk to it — roughly byskebox, chonk and air — so real-world discovery is small. A node still in purgatory sees no gateway at all. Keep the filters and deadline anyway.
-- Rewrite the M5 AC against the real tailnet with a defined instrument (app-logged timestamps): first gateway shown ≤ 5 s, sweep done ≤ 10 s.
+- Rewrite the M5 AC against the real tailnet with a defined instrument (app-logged timestamps): first gateway shown ≤ 5 s, sweep done ≤ 10 s *(≤ 15 s since R39)*.
 
 **R27 — Stop republishing the proxy config on every peer change** [review M6]
 - `matchDomains` includes every peer's DNS name and short hostname, so any device joining, leaving or renaming republishes; WebKit may rebuild sessions on some config changes.
 - Either pin the rules to `[100.64.0.0/10, fd7a:115c:a1e0::/48, <MagicDNS suffix>]` (still a scoped split tunnel, so it does not violate upstream's AGENTS.md warning; the app only uses FQDN origins), or add a test that republishes mid-WebSocket. §7.3 claims M6.4 already tests this; it does not.
 
 **R28 — ATS can now be tightened** [review L, D4]
-- With chonk gone and discovery https-only, M8.6 is viable: `NSAllowsArbitraryLoads = false`. Keep test-only exceptions in the test configuration if the harness needs them (loopback IP literals are exempt anyway). Fix the malformed nested dict in `Info.plist` in the same edit.
+- With chonk gone and discovery https-only, M8.6 is viable: `NSAllowsArbitraryLoads = false`. *(D4 is superseded and chonk is back — served on 443, so it changes nothing here. The rule rests on discovery and manual entry being https-only (R26) and on every gateway being an HTTPS origin behind `tailscale serve`; a dashboard's bare loopback listener is never a target.)* Keep test-only exceptions in the test configuration if the harness needs them (loopback IP literals are exempt anyway). Fix the malformed nested dict in `Info.plist` in the same edit.
 
 ### M6 – M8
 
@@ -251,7 +251,8 @@ KiroCrew's end-to-end suite (`website/playwright/auth.setup.ts` in kirodotdev/Ki
 - **Now 4 s per request, 12 s per sweep** (`GatewayDiscovery.requestTimeout`, `.deadline`). Concurrency stays 12, so a dead peer still costs one probe's wait, not the sum.
 - The M5/M7.6 AC changes with it: first gateway shown ≤ 5 s stands; **sweep done ≤ 15 s**, and a sweep must take ≥ 4 s when a stalling peer is present (`scripts/test-discovery.sh` enforces both from the app's own log).
 
-**R40 — A gateway carries a port; 8443 is the standard one** [owner, 2026-09-23]
+**R40 — A gateway carries a port; ~~8443 is the standard one~~ 443 stays the default** [owner, 2026-09-23]
+- **Status (2026-09-23): agreed in mechanism, deferred in number.** Olof, the same day: "I'm fine with staying on 443 for now." The port-carrying mechanism below (`GatewayEndpoint`, port-aware origins, manual `host:port`, the saved port probed first) is still the design and is buildable; making **8443 the standard, probed by default, does not happen yet** — 8443 needs `KIROCREW_CORS_ORIGINS` on every gateway or it fails silently, whereas 443 works with a bare `tailscale serve`. Reasoning: `features/F1-gateway-port.md` §0 and §4a; the user-facing default: `SETUP.md`. Nothing of R40 is in the code yet: `Gateway.url` is still `https://<host>` (`app/App/Discovery/GatewayDiscovery.swift:41`). The bullets below are the entry as written, kept as the record.
 - `tailscale serve --https=443` takes port 443 **host-wide** on macOS (measured on chonk: `IPNExtension` listening on `*:443`, v4 and v6), so it collides with anything local that wants 443. Serving on another port is supported for tailnet-only serve; only Funnel is restricted to 443/8443/10000.
 - **8443 is the project's standard alternate**: the conventional alt-HTTPS port, allowed by Funnel if that is ever wanted, and not 5476 (which would collide with the dashboard's own loopback listener).
 - The app hardcodes 443 today — `Gateway.url`, both probe URLs, and `GatewayCandidates.manualOrigin`, which parses a typed port and then discards it. A gateway must carry a port: discovery probes 443 **and** 8443 concurrently, manual entry accepts `host:8443`, and the saved gateway keeps it.

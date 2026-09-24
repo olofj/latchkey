@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | **Superseded as the driver of work (2026-09-23):** new work is specified one feature at a time in [`features/`](features/README.md); this document stays as the record of M0–M8. In implementation. M0–M5 done; M6's simulator-testable parts done (6.5, 6.7, 6.8 on the L2 harness; 6.6 and the AC numbers need the device); M8 done (8.1–8.6). Revisions R1–R40 applied. Remaining work needs the owner or the phone: the M1 device check (O1 and O3 done 2026-09-21; O2 needs Olof at chonk with the phone, then `make -C app device`, O3b, O5), O4, O7, M6.6, M7. Where a revision disagrees with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
+| Status | **Superseded as the driver of work (2026-09-23):** new work is specified one feature at a time in [`features/`](features/README.md); this document stays as the record of M0–M8. In implementation. M0–M5 done; M6's simulator-testable parts done (6.5, 6.7, 6.8 on the L2 harness; 6.6 and the AC numbers need the device); M8 done (8.1–8.6). Revisions R1–R39 applied; R40 is agreed in mechanism (a gateway carries a port) and **deferred in number** — 443 stays the default, per Olof on 2026-09-23 ([`features/F1-gateway-port.md`](features/F1-gateway-port.md) §0) — and no part of it is in the code yet (`app/App/Discovery/GatewayDiscovery.swift:41` builds `https://<host>` with no port). Remaining work needs the owner or the phone: the M1 device check (O1 and O3 done 2026-09-21; O2 needs Olof at chonk with the phone, then `make -C app device`, O3b, O5), O4, O7, M6.6, M7. Where a revision disagrees with this document, the revision wins. Progress and every divergence: `docs/DECISIONS.md`. |
 | Author | Drafted 2026-09-20 from three parallel research passes |
 | Repo | `~/src/latchkey` |
 | Base | Fork of [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) @ `dba0555` (2026-08-24), BSD-3-Clause |
@@ -86,7 +86,7 @@ experimental WebKit browser for iOS and macOS with an embedded userspace
 Tailscale node, written almost entirely by Avery Pennarun (197 of 200 commits).
 It already solves the hard parts:
 
-- Embeds `TailscaleKit` (the Swift binding in [tailscale/libtailscale](https://github.com/tailscale/libtailscale)) as a vendored submodule and builds it into an `xcframework`.
+- Embeds `TailscaleKit` (the Swift binding in [tailscale/libtailscale](https://github.com/tailscale/libtailscale)) as a vendored submodule and builds it into an `xcframework`. *(A submodule upstream and at the fork; plain vendored source in this repository since R16 — `app/ThirdParty/VENDORED.md`.)*
 - Brings up a tsnet node, drives interactive login through `ASWebAuthenticationSession`, and persists node state.
 - Obtains tsnet's loopback SOCKS5 proxy and points WebKit at it via `WKWebsiteDataStore.proxyConfigurations`.
 - Implements a **split tunnel**: only tailnet destinations go through the proxy, because routing public traffic through it made every non-tailnet URL fail with `NSURLErrorBadURL (-1000)` on some hardware.
@@ -259,7 +259,7 @@ and has more preconditions than the paragraph above lists (see M7.5).
 
 1. Take the peers from `tsnetModel.localStatus`, which the app already polls through `LocalAPIClient.backendStatus()` — the same data `TailnetProxyPolicy.make(from:)` uses. **(R18:** this step originally said to prefer `TailscaleNode.statusJSON()`. That API and `tailscale_status_json` exist only in libtailscale `main`, which lacks `restartLoopback`; the vendored revision has neither, and the header text quoted here was from `main`.)
 2. **(R26)** Filter to candidates: `Online`, not `Expired`, not a `ShareeNode`, `OS` in {linux, macOS, windows}, owned by the same user. The saved gateway is always probed, and first. (`OS`/`UserID` needed a post-import decode in the vendored TailscaleKit.)
-3. Probe each over **HTTPS only**, through an ephemeral `URLSession` built from `tsnetModel.proxyConfiguration`: 12 at a time, 1.5 s per request, 5 s for the whole sweep, results streamed to the picker as they arrive.
+3. Probe each over **HTTPS only**, through an ephemeral `URLSession` built from `tsnetModel.proxyConfiguration`: 12 at a time, ~~1.5 s per request, 5 s for the whole sweep~~ **4 s per request, 12 s for the whole sweep (R39** — R26's numbers lost the race against a relayed intercontinental gateway on the first device run; `GatewayDiscovery.requestTimeout` and `.deadline`, `app/App/Discovery/GatewayDiscovery.swift:65-68`**)**, results streamed to the picker as they arrive.
 4. A gateway is a match when `GET /manifest.json` is JSON named `"Kiro Crew"` **and** an unauthenticated `GET /api/auth/me` answers 403 with `X-Auth-Required: true`.
 5. If every probe fails with -1000/-1004, report "proxy unhealthy" (not "no gateways") and refresh the node's status.
 6. Re-probe on first run, on manual refresh, and from the "gateway unreachable" banner. Persist the chosen gateway.
@@ -267,7 +267,11 @@ and has more preconditions than the paragraph above lists (see M7.5).
 ~~Fallback: also probe `http://<host>:5476`.~~ **Dropped (R26):** chonk's
 dashboard listens on 127.0.0.1 only, a plain-http origin fails KiroCrew's
 `/api/ws` origin check, and HSTS (`includeSubDomains`) upgrades it after any
-https visit anyway. chonk is out of v1 (D4). Manual entry stays, https only.
+https visit anyway. ~~chonk is out of v1 (D4).~~ Manual entry stays, https only.
+*(D4 was superseded on 2026-09-23 — `docs/DECISIONS.md`, "D4 superseded": chonk
+already had `tailscale serve` in front of the dashboard on 443, so it is an
+HTTPS gateway like any other, as is box. The http probe stays dropped on the
+first two grounds, which do not depend on chonk.)*
 
 ### 3.5 Lifecycle
 
@@ -522,21 +526,21 @@ tasks.
 
 ### M5 — Gateway discovery (5–8 h)
 
-**Status:** done 2026-09-21 on the L2 harness: `scripts/test-discovery.sh` passes 3/3; first gateway < 0.5 s, sweep ~1.5 s. The real-tailnet check waits for M7. `docs/DECISIONS.md` "M5" has the detail.
+**Status:** done 2026-09-21 on the L2 harness: `scripts/test-discovery.sh` passes 3/3; first gateway < 0.5 s, sweep ~1.5 s *(measured under R26's 1.5 s probe timeout; since R39 raised it to 4 s a harness sweep with the stalling peer takes ≥ 4 s, and the script asserts 4–15 s)*. The real-tailnet check waits for M7. `docs/DECISIONS.md` "M5" has the detail.
 
 **Goal:** find KiroCrew gateways on the tailnet instead of hardcoding a hostname.
 
 | # | Task | Detail |
 |---|---|---|
 | 5.1 | `GatewayDiscovery` | Peers from `tsnetModel.localStatus` (R18), filtered by R26: online, not expired, not shared in, a server OS, same owner; the saved gateway first. The filter and fingerprint are pure code (`GatewayCandidates`), host-tested. |
-| 5.2 | Probe (R26) | HTTPS only, through an ephemeral `URLSession` on the node's proxy configuration; 12 concurrent, 1.5 s per request, 5 s per sweep; streamed. Fingerprint: `manifest.json` named "Kiro Crew" **and** `/api/auth/me` → 403 + `X-Auth-Required`. All probes failing with -1000/-1004 → "proxy unhealthy" + `refreshStatusNow()`. ~~`http://<host>:5476`~~ dropped. |
+| 5.2 | Probe (R26) | HTTPS only, through an ephemeral `URLSession` on the node's proxy configuration; 12 concurrent, ~~1.5 s per request, 5 s per sweep~~ **4 s per request, 12 s per sweep (R39)**; streamed. Fingerprint: `manifest.json` named "Kiro Crew" **and** `/api/auth/me` → 403 + `X-Auth-Required`. All probes failing with -1000/-1004 → "proxy unhealthy" + `refreshStatusNow()`. ~~`http://<host>:5476`~~ dropped. |
 | 5.3 | Picker UI | Shown instead of the dashboard until a gateway is chosen; results stream in; Refresh; manual entry (a bare name is qualified with the MagicDNS suffix; always https). A single gateway found on the first run is chosen without asking (the "already has a session" condition cannot be known before loading it, and would not change what to load). |
 | 5.4 | Wire into the start URL | `HomePage.defaultURL` is empty — no gateway — instead of the M1 hardcoded byskebox. Choosing one sets the home page and reopens the dashboard tab on it. `HomePageAvailability` stays. |
 | 5.5 | Re-probe policy | First run, manual refresh, and the "gateway unreachable" banner's Find. Never on every launch. |
 | 5.6 | Tests | L2 (`scripts/test-discovery.sh`): the tsnet harness with peers `gw` (the fake KiroCrew gateway), `dash` (a web page, not KiroCrew), `plain` (nothing listening) and `slow` (accepts, never answers). Discovery must find exactly `gw` within the deadline, choose it and load it over the tailnet; manual entry when nothing is found; the choice persists across relaunch. |
 
 **AC (rewritten by R26, measured by app-logged timestamps):**
-- On the harness tailnet, discovery finds exactly the one gateway; the first gateway appears within 5 s and the sweep completes within 10 s even with a peer that never answers.
+- On the harness tailnet, discovery finds exactly the one gateway; the first gateway appears within 5 s and the sweep completes within ~~10 s~~ **15 s (R39)** even with a peer that never answers — and takes at least 4 s when one is present, which proves it was waited for. `scripts/test-discovery.sh` enforces 4–15 s from the app's own log.
 - Manual entry works when discovery finds nothing.
 - The selected gateway persists across app restarts.
 - **To verify in M7 (R26):** under the purgatory policy (D5) a promoted `kiro-clients` node's netmap should hold only byskebox, chonk and air; a node still in purgatory sees no gateway at all.
@@ -574,16 +578,16 @@ likely to make the app feel unreliable in daily use.
 |---|---|---|
 | 7.1 | Device registration | Plug the iPhone into `chonk`, Xcode → Devices and Simulators, enable Developer Mode on the phone (Settings → Privacy & Security). |
 | 7.2 | Install | Xcode Run with the free personal team. Trust the profile under General → VPN & Device Management. |
-| 7.3 | Node login | Interactive login through `ASWebAuthenticationSession` (`TSNet/AuthManager.swift:16-44`). The new node appears in the tailnet under `owner@example.com`, **not** tagged. Confirm in the Tailscale admin console. **R6:** it is already named `latchkey-iphone` by `WorkspaceDefinition.makeDefault()` — renaming it after the first dashboard sign-in would sign the app out, since KiroCrew pins sessions to `login|node name`. **R8:** this login now happens during the M1 device check, not here. |
+| 7.3 | Node login | Interactive login through `ASWebAuthenticationSession` (`TSNet/AuthManager.swift:16-44`). The new node appears in the tailnet under `owner@example.com`, **not** tagged. Confirm in the Tailscale admin console. **R6:** it is already named `latchkey-iphone` (now `latchkey-iphone`, `app/App/Workspace/WorkspaceStore.swift:111`) by `WorkspaceDefinition.makeDefault()` — renaming it after the first dashboard sign-in would sign the app out, since KiroCrew pins sessions to `login|node name`. **R8:** this login now happens during the M1 device check, not here. |
 | 7.4 | System VPN off | Turn the Tailscale app's VPN off and confirm the dashboard still loads. This is the headline feature — verify it explicitly. |
 | 7.5 | Durable QR sessions — **optional, QR users only (R24)** | CLI-link sessions already survive restarts, so this matters only if QR sign-in is used. `dashboard.qr_session_persist_across_restart` needs **all of:** `trust_identity` on with a non-empty `allowed_logins` (including `owner@example.com`), `qr_session_until_restart` still true, **and** the QR generated from an unbounded desktop session. Keep `pin_scope: node`, and name the node first (R6). Depends on §C O4; needs Olof's consent (§C O6) and a rollback note. |
-| 7.6 | Discovery on the real tailnet | Confirm discovery finds `byskebox` (443 via serve) and nothing else, within R26's budget. ~~`chonk`~~: out of v1 (D4, R26) — its dashboard listens on loopback only. Gateway switching itself was built in M5 (Settings → Gateway, Find gateways…, the unreachable banner's Find; L2-tested), which R32 confirmed. |
+| 7.6 | Discovery on the real tailnet | Confirm discovery finds `byskebox` (443 via serve) ~~and nothing else~~, within R39's budget (first gateway ≤ 5 s, sweep ≤ 15 s; R26's numbers were raised by R39). ~~`chonk`: out of v1 (D4, R26) — its dashboard listens on loopback only.~~ **D4 superseded 2026-09-23** (`docs/DECISIONS.md`): chonk and box are served on 443 too, so three gateways is the real shape; the picker lists them and does not auto-choose (5.3). Gateway switching itself was built in M5 (Settings → Gateway, Find gateways…, the unreachable banner's Find; L2-tested), which R32 confirmed. |
 | 7.7 | Weekly re-sign | Document the 7-day rebuild ritual in `README.md`. If it grates, the $99 program makes profiles last a year. |
 
 **AC:**
 - App reaches a live session with the system VPN off, on cellular as well as Wi-Fi.
 - Survives a gateway restart without a token re-entry — for CLI-link sessions always; for QR sessions only if 7.5 is enabled.
-- byskebox is discovered on the real tailnet within R26's budget.
+- byskebox is discovered on the real tailnet within R39's budget (first gateway ≤ 5 s, sweep ≤ 15 s).
 
 ---
 
@@ -841,12 +845,13 @@ make test-policy                    # host-only unit tests, ~2 s
 xcrun simctl boot "iPhone 17"
 xcrun simctl keychain booted add-root-cert ../testing/harness/ca.der
 xcrun simctl io booted screenshot /tmp/shot.png
-xcrun simctl spawn booted log stream --level debug --predicate 'subsystem CONTAINS "latchkey"'
+xcrun simctl spawn booted log stream --level debug --predicate 'subsystem == "net.lixom.latchkey"'
+#   (the subsystem kept the old product name with the bundle id: TSNet/Logging.swift)
 
 # Tests
 xcodebuild test -scheme Latchkey \
   -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0' \
-  -resultBundlePath /tmp/out.xcresult -only-testing:LatchkeyUITests/ProxyTests \
+  -resultBundlePath /tmp/out.xcresult -only-testing:LatchkeyUITests/OfflineHarnessTests \
   -parallel-testing-enabled NO -test-timeouts-enabled YES
 xcrun xcresulttool get test-results summary --path /tmp/out.xcresult --format json
 
