@@ -92,7 +92,8 @@ manually* still works and is the answer. (Loosening these filters is tracked as
 
 - Xcode (the author builds with Xcode 27; the app targets iOS 26), with an
   Apple ID added under Xcode → Settings → Accounts. A **free personal team is
-  enough** — there is no TestFlight or ad-hoc distribution here. Note the
+  enough** for sideloading; TestFlight needs the paid Developer Program and
+  is optional ([TESTFLIGHT.md](TESTFLIGHT.md)). Note the
   ten-character **Team ID** the Accounts pane shows next to it.
 - Go (the author builds with 1.27), for the embedded Tailscale library.
 - Your iPhone on iOS 26 or later, paired to this Mac by cable — unlock it and

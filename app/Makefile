@@ -4,6 +4,7 @@
 #   make test       build, then run the UI tests on the simulator
 #   make device     build (Release), install and launch on the paired iPhone
 #   make ipa        archive + export a dev-signed .ipa for a real device
+#   make tf         archive + upload to App Store Connect for TestFlight
 #   make look       screenshot the booted sim + describe it with a vision sub-pi
 #   make clean      remove app build artifacts (keeps the TailscaleKit xcframework)
 #
@@ -164,6 +165,13 @@ ipa: framework  ## Archive + export a dev-signed .ipa for a real iOS device
 	@echo "✅ IPA: $$(ls -1 $(IPA_DIR)/*.ipa 2>/dev/null | head -1)"
 	@echo "Install on a plugged-in device with Xcode locally:"
 	@echo "  xcrun devicectl device install app --device <udid-or-name> $(IPA_DIR)/Latchkey.ipa"
+
+# ----- TestFlight -----
+# Needs the paid Developer Program and an App Store Connect API key in
+# app/.asc-key (docs/TESTFLIGHT.md). UPLOAD=0 stops at an App Store .ipa.
+.PHONY: tf
+tf: framework  ## Archive for the App Store and upload to TestFlight (UPLOAD=0: export only)
+	@UPLOAD=$(or $(UPLOAD),1) ./scripts/testflight.sh $(SWIFT_SANDBOX_FLAGS)
 
 # ----- test -----
 # An auth key automates login on a fresh sim so the connected tests run.

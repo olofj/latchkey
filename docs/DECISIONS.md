@@ -3004,3 +3004,40 @@ unambiguous once looked at — the run's own `dashboard.log` had been truncated
 and carried `gw.` peer requests from the *other* harness. Parallel agents are
 fine; parallel agents that start a harness are not. Serialise suite runs against
 them, or give the agent its own port set.
+
+## 2026-09-24 — TestFlight comes back, with manifests that declare what is used
+
+**Decision:** reverse the 2026-09-20 removal. Add `make tf`
+(`app/scripts/testflight.sh`, `app/ExportOptions.AppStore.plist`), a privacy
+manifest for the app and one for TailscaleKit, and `docs/TESTFLIGHT.md`. PLAN
+§1.3 keeps App Store distribution as a non-goal; TestFlight is for the owner's
+own installs.
+
+**Why:** the owner wants to install without the Mac tether, and the paid
+membership (team DX33PQ7J4A, renewed 2026-09-24) makes TestFlight available.
+The 2026-09-20 reason, "the route is closed" by libtailscale#57, was only true
+of the upstream framework: we build the xcframework ourselves, so the manifest
+is a vendored delta, the same as any other.
+
+**Not the upstream manifest.** #57 ships an *empty* one. `nm -u` on our
+ios-arm64 slice shows the Go runtime importing `stat`, `fstat`, `fstatat`,
+`lstat` (FileTimestamp) and `mach_absolute_time` (SystemBootTime), so an empty
+manifest would still be rejected with ITMS-91053. Ours declares `C617.1` and
+`35F9.1`; the app's own declares `C617.1` for `NodeLog`'s modification dates.
+The manifest is listed in `LIBTSCALE_SOURCES` so an existing framework is
+rebuilt with it, and `make tf` checks the archive for both before exporting.
+
+**Upload through altool, sign with a local certificate.** From a non-GUI shell,
+`xcodebuild -exportArchive` cannot reach
+`com.apple.dt.Xcode.ITunesSoftwareService` (lookup error 3) — also with the
+agent sandbox disabled — so neither its `destination=upload` nor cloud-managed
+distribution signing works there. `altool` with the API key does (`--list-apps`
+returned the record). The export therefore needs an Apple Distribution
+certificate in the keychain, created once in Xcode.
+
+**Encryption declaration left to the owner.** `ITSAppUsesNonExemptEncryption`
+is not set; App Store Connect asks per build until it is.
+
+**Evidence:** `docs/TESTFLIGHT.md`; archive `build/Latchkey-appstore.xcarchive`
+from `make tf UPLOAD=0` (ARCHIVE SUCCEEDED, both manifests present; export
+failed on the missing distribution certificate, as above).

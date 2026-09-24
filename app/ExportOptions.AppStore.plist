@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Store Connect export for TestFlight, used by `make tf`
+	     (scripts/testflight.sh). It needs the paid Developer Program; a free
+	     personal team cannot export this way. The script copies this file and
+	     fills in teamID from app/Local.xcconfig or app/.dev-team. It exports
+	     locally and uploads with altool, because xcodebuild's own upload
+	     cannot reach its App Store Connect service from a non-GUI shell. -->
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>teamID</key>
+	<string>REPLACED_BY_SCRIPT</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<!-- The script stamps CURRENT_PROJECT_VERSION itself; don't let App Store
+	     Connect renumber the build behind it. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+	<!-- The xcframework bundles TailscaleKit's dSYMs (libtailscale/swift
+	     Makefile, ios-fat) so TestFlight crash logs symbolicate Go frames. -->
+	<key>uploadSymbols</key>
+	<true/>
+	<key>stripSwiftSymbols</key>
+	<true/>
+</dict>
+</plist>

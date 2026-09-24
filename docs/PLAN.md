@@ -61,7 +61,7 @@ entry (M4.4) — not restarts.
 
 ### 1.3 Non-goals (for v1)
 
-- **App Store or TestFlight distribution.** Personal sideloading only. This also dodges the privacy-manifest blocker in [libtailscale PR #57](https://github.com/tailscale/libtailscale/pull/57).
+- **App Store distribution.** Personal use only. TestFlight, first a non-goal, was added on 2026-09-24 for the owner's own installs (see [TESTFLIGHT.md](TESTFLIGHT.md) and DECISIONS.md); the privacy-manifest blocker in [libtailscale PR #57](https://github.com/tailscale/libtailscale/pull/57) is carried as a vendored delta.
 - **Push notifications.** They need KiroCrew [PR #7821](https://github.com/kirodotdev/KiroCrew/pull/7821) (Web Push) or a native APNs sender. Section 9 keeps the door open.
 - **A general browser.** No tabs, no address bar, no arbitrary navigation. Exactly one destination, chosen from discovered gateways.
 - **Exit nodes and subnet routes.** Broken upstream in tsnet (see §7.4). Explicitly out of scope; remove the UI.
