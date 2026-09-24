@@ -124,5 +124,44 @@ expect(GatewayCandidates.isPlausibleGatewayName("dash", suffix: sfx)
        && !GatewayCandidates.isPlausibleGatewayName("a b", suffix: sfx),
        "plausibility enables the button; it says nothing about the tailnet")
 
+// MARK: - selectWithSkipped (F7 §4.4)
+//
+// The exclusion reasons already existed and were thrown away, so a gateway
+// filtered out for its owner or its OS vanished and the picker reported that
+// nothing answered. These reasons are now offered to the owner to probe.
+print("== the peers declined, and why")
+
+let mixed = [peer("gw.ts.net"),                                    // probed
+             peer("nas.ts.net", os: "synology"),                   // OS
+             peer("theirs.ts.net", user: 99),                      // another owner
+             peer("shared.ts.net", sharee: true),                  // shared in
+             peer("asleep.ts.net", online: false),                 // NOT reported
+             peer("stale.ts.net", expired: true),                  // NOT reported
+             peer("tagged.ts.net", user: 0)]                       // tagged: probed
+let split = GatewayCandidates.selectWithSkipped(mixed, selfUserID: 7, savedHost: nil)
+
+expect(hosts(split.probe) == ["gw.ts.net", "tagged.ts.net"],
+       "only the peers worth probing are probed")
+expect(split.skipped.map(\.host) == ["nas.ts.net", "shared.ts.net", "theirs.ts.net"],
+       "the reportable exclusions are offered, alphabetically; got \(split.skipped.map(\.host))")
+expect(split.skipped.first { $0.host == "nas.ts.net" }?.reason == "OS synology",
+       "the OS reason names the OS, so the owner can judge it")
+expect(split.skipped.first { $0.host == "theirs.ts.net" }?.reason == "another owner",
+       "the owner reason says so plainly")
+// A sleeping laptop is not worth a tap, and burying the two actionable reasons
+// under a list of them is how this feature would become noise.
+expect(!split.skipped.contains { $0.host == "asleep.ts.net" || $0.host == "stale.ts.net" },
+       "an offline or key-expired peer is not offered: it cannot answer")
+// The saved gateway bypasses every filter, and is therefore never "skipped".
+let withSaved = GatewayCandidates.selectWithSkipped(mixed, selfUserID: 7, savedHost: "nas.ts.net")
+expect(hosts(withSaved.probe).first == "nas.ts.net",
+       "the saved gateway is probed first whatever the filters say")
+expect(!withSaved.skipped.contains { $0.host == "nas.ts.net" },
+       "and is not also reported as skipped")
+// select() must keep behaving exactly as it did: it is now defined in terms of
+// the new function, and every existing row above still passes.
+expect(hosts(GatewayCandidates.select(mixed, selfUserID: 7, savedHost: nil)) == hosts(split.probe),
+       "select() and selectWithSkipped().probe cannot diverge")
+
 print(failures == 0 ? "\(checks)/\(checks) gateway candidate checks passed" : "\(failures) of \(checks) gateway candidate checks FAILED")
 exit(failures == 0 ? 0 : 1)

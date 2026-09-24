@@ -73,22 +73,62 @@ enum GatewayCandidates {
         return nil
     }
 
+    /// A peer that was not probed, and why (F7 §4.4).
+    struct Skipped: Equatable, Sendable {
+        let host: String
+        /// `exclusion`'s own words, shown to the owner verbatim.
+        let reason: String
+    }
+
     /// The peers to probe, in order: the saved gateway first (if it is a
     /// peer at all, whatever the filters say), then the rest alphabetically.
     static func select(_ peers: [GatewayPeer], selfUserID: Int64?, savedHost: String?) -> [GatewayPeer] {
+        selectWithSkipped(peers, selfUserID: selfUserID, savedHost: savedHost).probe
+    }
+
+    /// `select`, and the peers it declined with the reason each was declined.
+    ///
+    /// The reasons already existed — `exclusion` returns a string — and were
+    /// thrown away, so a gateway filtered out for its owner or its OS simply
+    /// vanished and the picker said nothing had answered. On this author's
+    /// tailnet that cannot misfire (his gateways are his own or tagged, running
+    /// Linux and macOS); on a shared tailnet, or a gateway on a NAS, it hides
+    /// the thing the owner is looking for (F7 §1.1).
+    ///
+    /// **Offline and key-expired peers are deliberately not reported.** They
+    /// cannot answer, so offering them would bury the two reasons worth acting
+    /// on under a list of sleeping laptops.
+    static func selectWithSkipped(_ peers: [GatewayPeer], selfUserID: Int64?,
+                                  savedHost: String?) -> (probe: [GatewayPeer], skipped: [Skipped]) {
         var seen = Set<String>()
         let saved = savedHost.map { GatewayPeer(host: $0, online: true, os: nil, userID: nil).host }
         var first: [GatewayPeer] = []
         var rest: [GatewayPeer] = []
+        var skipped: [Skipped] = []
         for p in peers where !p.host.isEmpty && seen.insert(p.host).inserted {
             if p.host == saved {
                 first.append(p)
-            } else if exclusion(p, selfUserID: selfUserID) == nil {
+            } else if let reason = exclusion(p, selfUserID: selfUserID) {
+                if Self.reportableExclusions.contains(reason) || reason.hasPrefix("OS ") {
+                    skipped.append(Skipped(host: p.host, reason: reason))
+                }
+            } else {
                 rest.append(p)
             }
         }
-        return first + rest.sorted { $0.host < $1.host }
+        return (first + rest.sorted { $0.host < $1.host },
+                skipped.sorted { $0.host < $1.host })
     }
+
+    /// Exclusions worth showing the owner: the ones where the peer could have
+    /// answered and a filter decided otherwise. `exclusion`'s OS reason carries
+    /// the OS name, so it is matched by prefix.
+    /// F7 §4.4 also lists "no MagicDNS name", but that reason is unreachable
+    /// here: the loop above drops an empty host before `exclusion` is asked, and
+    /// a peer with no name is nothing the owner could tap anyway.
+    private static let reportableExclusions: Set<String> = [
+        "a node of someone this tailnet shares with", "another owner",
+    ]
 
     // MARK: - The fingerprint (R26)
 
