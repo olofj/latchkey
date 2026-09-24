@@ -27,6 +27,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F6](F6-single-origin-web-view.md) | The web view loads the gateway, four named CDNs, and nothing else | designed; ready to build (CDN widgets allowlisted, fonts still blocked) |
 | [F7](F7-portable-discovery.md) | Discovery works on someone else's tailnet, and never overstates what it checked | **built** 2026-09-24 — discovery suite 10/10; one open question with a measurement behind it (§8) |
 | [F8](F8-node-start-failure.md) | A node that cannot start is a screen, not a crash | designed; ready to build. Extends F4 with one state (G7). Specced from the review's deferred finding, and found a **second** launch-path trap that fires earlier on the same fault |
+| [F9](F9-safe-area-insets.md) | The page gets the real safe-area insets (bug report: content bleeds into the Dynamic Island) | designed; ready to build. The dashboard is well-behaved — it declares `viewport-fit=cover` and uses `env(safe-area-inset-*)` 54 times — and we report zero |
 
 ## Still open, not yet answered
 
