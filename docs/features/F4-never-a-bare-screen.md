@@ -591,6 +591,36 @@ ZStack {
 - Status → Gateway → "Last discovery" (`DiagnosticsView.swift:164-171`)
   reads `lastSweep`: "1 of 4 candidates; 2 answered, 2 didn't, 4.1 s".
 
+**As built (2026-09-24), four corrections.** F7 landed between this section
+being written and being implemented, and it changed the same two files:
+
+1. **The published names are `probedCount`, `answeredCount`, `unansweredCount`**,
+   not `probed`/`answered`/`unanswered`: `probedCount` already shipped in F7 and
+   its host tests, and renaming a shipped, tested value to match a spec written
+   earlier is churn for its own sake. `SweepSummary` also carries `probed` and
+   `truncated`, which this section did not ask for — without them the
+   "Last discovery" row would report a sweep that ran out of time as if it had
+   finished.
+2. **The counts are kept per host, not as counters**, so
+   `answeredCount + unansweredCount == probedCount` holds by construction. A
+   continuation re-probes the saved gateway and may re-probe a peer that timed
+   out inside the dispatched window, and plain counters would have had the picker
+   say it checked 25 of 24 computers.
+3. **P4's wording is merged with F7 §4.2's, not chosen over it.** This section's
+   answered/unanswered split is the part that tells the owner whether the tailnet
+   or the gateway is at fault; F7's rule is that no sentence may name a number
+   that was not probed. So the split always shows, the count is `probedCount`,
+   and the candidate total appears beside it only when the two differ — with
+   "— the search ran out of time" and "Keep searching to try the rest" added in
+   that case. The button therefore has *three* labels, not two: `Searching…`
+   while probing, `Keep searching` when truncated, `Search again` otherwise.
+4. **"Existing tests read only the first field and keep working" was wrong.**
+   `DiscoveryTests.testManualEntryWhenNoGatewayIsFound` asserted
+   `XCTAssertEqual(label, "sweep-done:0")` — whole-string equality. Appending the
+   two fields broke it, and it was updated to parse by field. A marker that tests
+   compare by equality is not extensible; the format is now documented in the
+   view *and* parsed by field on the test side.
+
 ### 4.9 One line per state
 
 Through `logger.log`, redacted as today (`redactedForLog`):

@@ -75,17 +75,63 @@ final class GatewayDiscovery: ObservableObject {
     /// Peers a filter declined, with the reason, for the owner to probe anyway.
     @Published private(set) var skipped: [GatewayCandidates.Skipped] = []
 
-    /// Which candidates have a verdict, for `probedCount`. A set of hosts and
-    /// not a counter, because a continuation re-probes the saved gateway (it is
-    /// always the first candidate) and may re-probe a peer that was in flight
-    /// when the deadline cancelled it. Counting events instead of hosts would
-    /// tell the owner it checked 25 of 24 computers.
-    private var probedHosts: Set<String> = []
+    /// Of the probed, how many replied at all — whether or not they turned out
+    /// to be a gateway — and how many never replied (F4 §4.8). The split is what
+    /// lets the picker tell the two situations apart: peers that answered and
+    /// simply are not gateways means the tailnet is fine, and peers that did not
+    /// answer at all usually means this device is not allowed to reach them yet,
+    /// which is the one case where searching again cannot help.
+    @Published private(set) var answeredCount = 0
+    @Published private(set) var unansweredCount = 0
+    /// When the sweep now running began, so the picker can tick a duration.
+    /// Non-nil means "a sweep is in flight"; every exit from `.probing` clears it.
+    @Published private(set) var startedAt: ContinuousClock.Instant?
+    /// Peers in the netmap, gateway candidates or not. The picker says "0
+    /// candidates among 3 peers" (F4 §3.5 P7), which distinguishes "the tailnet
+    /// has nothing that could be a gateway" from "the netmap has not arrived".
+    @Published private(set) var peerCount = 0
+    /// The last finished sweep, for Settings → Gateway → "Last discovery".
+    @Published private(set) var lastSweep: SweepSummary?
 
-    /// Records a verdict for `host` and republishes the count.
-    private func recordProbed(_ host: String) {
-        probedHosts.insert(host)
-        probedCount = probedHosts.count
+    struct SweepSummary: Equatable, Sendable {
+        let candidates: Int
+        let probed: Int
+        let answered: Int
+        let unanswered: Int
+        let gateways: Int
+        let truncated: Bool
+        let elapsed: Duration
+    }
+
+    /// Each candidate's verdict — true if it replied, false if it never did —
+    /// keyed by host. Keyed, not counted, because a continuation re-probes the
+    /// saved gateway (always the first candidate) and may re-probe a peer that
+    /// was in flight when the deadline cancelled it; counting events instead of
+    /// hosts would tell the owner it checked 25 of 24 computers. Keeping the
+    /// verdict rather than just the host also keeps
+    /// `answeredCount + unansweredCount == probedCount` true by construction,
+    /// which the picker's wording states as a fact.
+    private var verdicts: [String: Bool] = [:]
+    /// When the last `Discovery: progress` line was written; at most one a
+    /// second, so a 40-peer sweep does not drown the log it is meant to explain.
+    private var lastProgressLog: ContinuousClock.Instant?
+
+    /// Records a verdict for `host` and republishes the counts.
+    private func recordProbed(_ host: String, replied: Bool) {
+        verdicts[host] = replied
+        probedCount = verdicts.count
+        answeredCount = verdicts.values.filter { $0 }.count
+        unansweredCount = verdicts.count - answeredCount
+    }
+
+    /// `Discovery: progress k/n at t ms`, at most once a second (F4 §4.8). Its
+    /// own line: the two lines `scripts/test-discovery.sh` parses must not gain
+    /// or lose a character, which F7 learned by breaking them.
+    private func logProgress(started: ContinuousClock.Instant) {
+        let now = ContinuousClock.now
+        if let last = lastProgressLog, now - last < .seconds(1) { return }
+        lastProgressLog = now
+        logger.log("Discovery: progress \(probedCount)/\(candidateCount) at \((now - started).milliseconds) ms")
     }
 
     /// Per-request budget. Was 1.5 s, chosen before anyone had tried a real
@@ -143,6 +189,10 @@ final class GatewayDiscovery: ObservableObject {
         run = nil
         generation += 1
         if phase == .probing { phase = .idle }
+        // `startedAt` means "a sweep is in flight", and the picker ticks a
+        // duration from it. Every path out of .probing must clear it or the
+        // picker counts up forever over a sweep that is not running.
+        startedAt = nil
     }
 
     /// Probe one peer a filter declined (F7 §4.4). If it answers it joins
@@ -209,19 +259,25 @@ final class GatewayDiscovery: ObservableObject {
         // saved host, which a continuation always probes first.
         if continueFrom == 0 {
             gateways = []
-            probedHosts = []
+            verdicts = [:]
             probedCount = 0
+            answeredCount = 0
+            unansweredCount = 0
         }
         sweepTruncated = false
         nextCandidateIndex = 0
         skipped = []
+        lastProgressLog = nil
+        startedAt = .now
         guard let proxy = model.proxyConfiguration, let status = model.localStatus else {
             logger.log("Discovery: no proxy or status yet; nothing to probe")
             candidateCount = 0
+            startedAt = nil
             phase = .finished
             return
         }
         let peers = (status.Peer ?? [:]).values.map(GatewayPeer.init(peer:))
+        peerCount = peers.count
         // Never probe a host the proxy would not carry: its probe would go
         // direct, off the tailnet (M5 review). The policy covers every peer
         // name, so this only ever drops a malformed one.
@@ -269,6 +325,7 @@ final class GatewayDiscovery: ObservableObject {
         guard !candidates.isEmpty else {
             // Nothing to wait for: do not sit out the deadline.
             logger.log("Discovery: 0 gateway(s); no candidates among \(peers.count) peer(s)")
+            startedAt = nil
             phase = .finished
             return
         }
@@ -311,14 +368,18 @@ final class GatewayDiscovery: ObservableObject {
                     if !gateways.contains(where: { $0.host == host }) {
                         gateways.append(Gateway(host: host))
                     }
-                    recordProbed(host)
+                    recordProbed(host, replied: true)
                 case .notGateway(let host):
                     answered += 1
-                    recordProbed(host)
+                    recordProbed(host, replied: true)
                 case .failed(let host, let code):
                     failures.append(code)
-                    recordProbed(host)
+                    // A probe that got no reply at all. `.failed` is also what a
+                    // refusal arrives as, but from the owner's side both mean
+                    // "nothing there answered me".
+                    recordProbed(host, replied: false)
                 }
+                logProgress(started: started)
                 inFlight -= 1
                 if !pastDeadline, !Task.isCancelled, cursor < plan.count {
                     let next = plan[cursor].peer
@@ -342,7 +403,7 @@ final class GatewayDiscovery: ObservableObject {
         // the cursor stopped: a peer that timed out inside the dispatched window
         // is behind the cursor, and resuming past it would strand it for good.
         // Re-probing a few that did answer is the cheap side of that trade.
-        if let firstUnprobed = plan.first(where: { !probedHosts.contains($0.peer.host) }) {
+        if let firstUnprobed = plan.first(where: { verdicts[$0.peer.host] == nil }) {
             sweepTruncated = true
             nextCandidateIndex = firstUnprobed.orderedIndex
         }
@@ -357,7 +418,23 @@ final class GatewayDiscovery: ObservableObject {
         logger.log("Discovery: \(gateways.count) gateway(s); first after \(firstFound.map { "\($0.milliseconds) ms" } ?? "—"), sweep \(elapsed.milliseconds) ms; \(answered) answered, \(failures.count) failed; shown to first \(fromShown.map { "\($0.milliseconds) ms" } ?? "—")")
         // F7's counters, on their own line so the summary above stays the
         // instrument scripts/test-discovery.sh parses.
+        //
+        // Mind the SCOPES: the summary above describes the sweep that just ran
+        // — its `answered`/`failed`, like its elapsed time, are that sweep's own
+        // — while `probed`/`candidates` here describe the whole chain of
+        // continuations, because `probedCount` counts distinct hosts across it.
+        // The two therefore agree exactly only when this sweep is not a
+        // continuation, which the `continuing at candidate` line above marks.
+        // The suite checks that invariant in both forms, so a future change that
+        // mixes the scopes will fail rather than quietly mislead.
         logger.log("Discovery: probed=\(probedCount)/\(candidateCount) truncated=\(sweepTruncated ? "yes" : "no") skipped=\(skipped.count)\(sweepTruncated ? " next=\(nextCandidateIndex)" : "")")
+        lastSweep = SweepSummary(candidates: candidateCount, probed: probedCount,
+                                 answered: answeredCount, unanswered: unansweredCount,
+                                 gateways: gateways.count, truncated: sweepTruncated,
+                                 elapsed: elapsed)
+        // Cleared so the picker's ticking duration cannot keep running over a
+        // finished sweep: `startedAt` means "a sweep is in flight".
+        startedAt = nil
         if proxyDead {
             phase = .proxyUnhealthy
         } else {

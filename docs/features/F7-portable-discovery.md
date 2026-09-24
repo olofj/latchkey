@@ -232,6 +232,47 @@ one path to the network that skips the check. A peer that is probed and does not
 answer stays listed, with "— tried, no answer" appended to its reason, so the
 owner can see the filter was not what hid a gateway.
 
+### 4.4a What the suite needed before any of §6 could be written
+
+None of §6's cases were reachable with the harness as it stood, and the gap was
+not small: a large tailnet, a peer reporting a NAS's OS, and a peer owned by
+someone else are all *control-plane* facts, and the harness only had real tsnet
+peers. Standing up forty of those is not a test, it is a second product.
+
+So `testing/tsnet-harness` gained three endpoints on its existing test API:
+
+| Endpoint | Does |
+|---|---|
+| `POST /peers?n=N&name=PREFIX&os=OS` | adds N **synthetic** peers — present in the netmap, candidates by every one of R26's filters, and with nothing behind them, so a probe stalls to the app's own 4 s timeout. That stall is what makes a truncated sweep reproducible. |
+| `POST /peer-os?hostname=H&os=OS` | makes a real, answering peer report another OS (`synology`) |
+| `POST /peer-owner?hostname=H&user=ID` | gives it a different, non-zero owner |
+
+Four things about it that are not obvious, all of them learned by getting them
+wrong first:
+
+1. **A synthetic node needs `Name` set to the full MagicDNS FQDN with a trailing
+   dot.** The app reads `PeerStatus.DNSName`, and a peer with no name is dropped
+   *before* any filter — so the peers would exist and be invisible. `testcontrol`'s
+   own `AddFakeNode` sets neither `Hostinfo` nor `Name`, which is why it could
+   not be used.
+2. **The owner must be non-zero.** `exclusion` treats `UserID == 0` as "unknown",
+   which does *not* exclude — so `user=0` would have produced a test that passed
+   while proving nothing. The harness refuses it with that reason.
+3. **The OS override has to be applied to the incoming map request, not pushed.**
+   `serveMap` stores `req.Hostinfo` into the node *after* the `HoldMapRequest`
+   hook returns, so a push from the hook is overwritten by the very request that
+   triggered it. Rewriting `req.Hostinfo.OS` in place is what sticks. Without
+   stickiness the override silently reverts when the peer next re-sends its
+   Hostinfo, and the test goes green for the wrong reason.
+4. **Synthetic peers are reported as harness peers** in `GET /state`, because the
+   suite identifies the app's node as the one node that is *not* one.
+
+`name` is load-bearing in one test: the candidate list is alphabetical after the
+saved gateway, so the forty peers are named `a-*` to sort *before* `gw` and put
+the gateway out of a first sweep's reach. The harness's default prefix sorts
+after it, which would have made `testSearchAgainContinuesFromWhereItStopped`
+pass without the cursor ever being exercised.
+
 ### 4.5 Deliberately unchanged
 
 The budgets (`requestTimeout = 4`, `deadline = 12`, `concurrency = 12`) stay as
@@ -263,6 +304,36 @@ that is what makes the large-tailnet and skipped-peer cases testable at all.
 | `testAGatewayOwnedByAnotherUserIsOffered` | discovery (M5) | same shape, with the gateway untagged and a different `UserID`: reason reads `another owner` | removing the owner rule from the reported set |
 | `test-gateway-candidates.swift` (extended) | host (`make test-policy`) | `selectWithSkipped` returns each §1.1 reason for the right peer; offline/expired peers appear in neither list; `select` returns exactly what it does today for every existing case | changing a reason string; letting an offline peer into `skipped`; any divergence between `select` and `selectWithSkipped.probe` |
 
+### 6.1 As built — three rows of the table above were wrong
+
+Written before the fixture existed, and corrected by running it (2026-09-24):
+
+- **40 peers is not enough to truncate; it is the boundary.** A 12 s deadline at
+  concurrency 12 with a 4 s probe timeout reaches roughly 36 candidates, and the
+  first run measured `probed=43/43 truncated=no` in one test beside
+  `probed=40/44 truncated=yes` in another — the same mechanism, opposite verdicts,
+  one candidate apart. The truncation test now presents **90**. A test whose
+  subject is a coin flip is worse than no test.
+- **"After one *Search again* the gateway appears" is not assertable with this
+  fixture**, and the reason is worth keeping: forty peers reported *online with no
+  data plane* congest tsnet enough that a probe to the genuinely reachable gateway
+  also exceeds its 4 s budget (`socks[41] CONNECT gw…:443` reached the proxy and
+  never completed; the relay's session cap was never hit). So the test asserts
+  what §4.3 actually promises and what the owner actually reads: the truncated
+  "Checked 40 of 44" becomes "Checked 44 computers" after one tap, and the button
+  returns to *Search again*. That is a stronger test of the cursor than a page
+  load, because it cannot pass while the cursor is broken. The congestion itself
+  is §8's open question.
+- **"An offline peer is not listed as skipped" is not end-to-end testable.** The
+  harness runs `AllOnline: true` and its `MapResponse` marks every peer online;
+  there is no per-node switch without a vendored `testcontrol` change, which R16
+  would make its own commit and which is not worth it. That rule is covered by
+  the host table in `test-gateway-candidates.swift`, which does assert it.
+- The finished-sweep text reads "Checked 6 computers in 4 s…", not "among all 6":
+  §4.2's wording was merged with F4 §3.5's answered/unanswered split (see F4 §4.8,
+  "as built"), since F4 specified the same row first and without knowing about
+  truncation.
+
 ## 7. Acceptance criteria
 
 - The empty state never names a number larger than what was probed — the
@@ -286,6 +357,24 @@ that is what makes the large-tailnet and skipped-peer cases testable at all.
   expanded when it is short, say three or fewer? Collapsed is specified because
   on his tailnet the list is usually empty and an always-open section would be
   clutter for the common case.
+- **Open, with evidence, and worth answering before anyone runs this on a big
+  restricted tailnet:** many peers that are *online but unreachable* delay probes
+  to the reachable ones past the 4 s budget. Measured while building §6's tests
+  (2026-09-24): with 40 such peers, a sweep truncated at 40 of 44 as designed,
+  and the continuation's probes to `gw` and `dash` — both genuinely reachable —
+  reached the proxy (`socks[41] CONNECT gw…:443`) and never completed inside the
+  4 s timeout. It is not the relay's session cap: `SocksRelayCapacity` logged no
+  refusal or eviction in the whole run.
+
+  Mostly this is a property of the fixture, and that is the reassuring part: a
+  real tailnet reports an unreachable peer as **offline**, and `exclusion` drops
+  offline peers before they are probed, so they never compete for tsnet at all.
+  The exception is the environment this feature was written for — a restricted
+  tailnet where peers are *visible and drop traffic*, which is exactly device
+  purgatory on the author's own. At four peers that is harmless (the purgatory
+  test sweeps in 4 s). Whether it stays harmless at forty is unknown, and the
+  honest answer is that the instrument to find out already exists: run a sweep on
+  a large restricted tailnet and read `probed=`/`truncated=`.
 - Worth deciding once there is a second user: whether `sharee` should be
   probed by default rather than merely offered. It is the one exclusion with a
   real argument for being on by default — a shared-in node is usually someone

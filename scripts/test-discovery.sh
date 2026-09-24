@@ -140,36 +140,94 @@ fi
 say "R26 sweeps, from the app's own log"
 xcrun simctl spawn "$UDID" log show --start "$LOG_START" \
     --predicate 'subsystem == "net.lixom.latchkey"' --style compact 2>/dev/null \
-    | grep -E "Discovery: (probing|[0-9]+ gateway)" > "$LOG_DIR/sweeps.log" || true
+    | grep -E "Discovery: (probing|[0-9]+ gateway|probed=|continuing at)" > "$LOG_DIR/sweeps.log" || true
 if ! python3 - "$LOG_DIR/sweeps.log" <<'PY'
 import re, sys
 lines = open(sys.argv[1]).read().splitlines()
 purgatory_sig = (4, 4, 0, 0, 4)
-expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2), purgatory_sig}
-bad, found, probing, purgatory = [], 0, None, 0
+# The small fixed tailnet's sweeps, enumerated. (3, 4, 0, 1, 2) is F7's
+# skipped-peer tests: four peers, gw declined for its OS or its owner, so three
+# probed -- dash answers, plain and slow do not.
+expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2), (3, 4, 0, 1, 2), purgatory_sig}
+# F7's large-tailnet tests present 40+ synthetic peers, and how many of those a
+# 12 s sweep reaches varies by a dozen from run to run. Enumerating those
+# signatures would be enumerating the scheduler. Above this many peers the
+# invariants below are checked instead -- and they are the ones that matter for
+# a truncated sweep: that it says it was truncated, and that what it claims to
+# have probed is what it reports.
+SMALL_TAILNET = 5
+bad, found, probing, purgatory, continuing = [], 0, None, 0, False
+pending = None   # a summary awaiting its `probed=` line
+def close(p):
+    """Check a summary once its probed= line is in (or turned out to be absent).
+
+    Note the two lines have different SCOPES, deliberately: the summary's
+    `answered`/`failed` describe the sweep that just ran, as its elapsed time
+    does, while `probed=`/`truncated=` describe the whole chain of continuations
+    (F7 §4.3) -- `probedCount` counts distinct hosts across it. So the two agree
+    exactly only for a sweep that is not a continuation, and a continuation is
+    identified by the `continuing at candidate` line.
+    """
+    if p is None:
+        return
+    sig, sweep, answered, failed, counters, cont, l = p
+    small = sig[1] <= SMALL_TAILNET
+    if small and not cont and sig not in expected:
+        bad.append("unexpected sweep %s: %s" % (sig, l))
+    if counters is None:
+        bad.append("sweep %s logged no probed=/truncated= line: %s" % (sig, l))
+        return
+    probed, candidates, truncated = counters
+    if probed > candidates:
+        bad.append("sweep %s probed %d of %d candidates: %s" % (sig, probed, candidates, l))
+    if answered + failed > probed:
+        bad.append("sweep %s reports %d answered + %d failed, more than probed=%d: %s"
+                   % (sig, answered, failed, probed, l))
+    if not cont and answered + failed != probed:
+        bad.append("sweep %s reports %d answered + %d failed but probed=%d: %s"
+                   % (sig, answered, failed, probed, l))
+    # The rule F7 turns on, and the one the picker's wording leans on.
+    if truncated and probed >= candidates:
+        bad.append("sweep %s says truncated but probed all %d: %s" % (sig, candidates, l))
+    if not truncated and probed != candidates:
+        bad.append("sweep %s says it was not truncated but probed %d of %d: %s"
+                   % (sig, probed, candidates, l))
 for l in lines:
     m = re.search(r"Discovery: probing (\d+) of (\d+) peer", l)
     if m:
+        close(pending); pending = None
         probing = (int(m.group(1)), int(m.group(2)))
+        continuing = False
+        continue
+    if re.search(r"Discovery: continuing at candidate \d+ of \d+", l):
+        continuing = True
+        continue
+    m = re.search(r"Discovery: probed=(\d+)/(\d+) truncated=(yes|no)", l)
+    if m and pending is not None:
+        sig, sweep, answered, failed, _, cont, sl = pending
+        pending = (sig, sweep, answered, failed,
+                   (int(m.group(1)), int(m.group(2)), m.group(3) == "yes"), cont, sl)
+        close(pending); pending = None
         continue
     m = re.search(r"Discovery: (\d+) gateway\(s\); first after (\S+?)(?: ms)?, sweep (\d+) ms; "
                   r"(\d+) answered, (\d+) failed; shown to first (\S+?)(?: ms)?$", l)
     if not m:
         continue
+    close(pending); pending = None
     n, sweep, answered, failed = int(m.group(1)), int(m.group(3)), int(m.group(4)), int(m.group(5))
     shown = m.group(6)
     sig = (probing or (0, 0)) + (n, answered, failed)
     print("    probed %s of %s: %d gateway(s), %d answered, %d failed; sweep %d ms; picker to first %s"
           % (sig[0], sig[1], n, answered, failed, sweep, shown + (" ms" if shown != "—" else "")))
-    if sig not in expected:
-        bad.append("unexpected sweep %s: %s" % (sig, l))
     if sweep < 4000 or sweep > 15000:
         bad.append("sweep %d ms outside 4-15 s: %s" % (sweep, l))
     if n and (shown == "—" or int(shown) > 5000):
         bad.append("first gateway %s after the picker appeared (budget 5 s): %s" % (shown, l))
     found += n > 0
     purgatory += sig == purgatory_sig
+    pending = (sig, sweep, answered, failed, None, continuing, l)
     probing = None
+close(pending)
 if not found:
     print("error: no sweep that found a gateway was logged; this measured nothing")
     sys.exit(1)

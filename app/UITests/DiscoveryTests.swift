@@ -104,7 +104,14 @@ final class DiscoveryTests: XCTestCase {
 
         XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
         XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 15), "no gateway found, and it says so")
-        XCTAssertEqual(element(app, "gateway-sweep-done").label, "sweep-done:0")
+        // The marker gained answered/unanswered fields (F4 §4.8). Read by field
+        // rather than by whole-string equality, which is what it was: F4 claimed
+        // "existing tests read only the first field and keep working" and this
+        // assertion disproved it.
+        let done = try sweepDone(app)
+        XCTAssertEqual(done.gateways, 0)
+        XCTAssertEqual(done.answered + done.unanswered, 3,
+                       "dash answered, plain and slow did not: \(done)")
         // Not vacuous: the sweep really probed, and rejected, the web page.
         // (A first version passed here with every peer filtered out.)
         let probed = try await dashboardState()["paths"] as? [String] ?? []
@@ -224,11 +231,22 @@ final class DiscoveryTests: XCTestCase {
         let waited = ContinuousClock.now - shown
         let message = none.label
         // The peers are visible (as admin devices plausibly are on the real
-        // tailnet), so it is the "answered among N" form, not "No computers
-        // on your tailnet could be a gateway", which needs an empty list.
-        XCTAssertTrue(message.hasPrefix("No Kiro Crew gateway answered among 4 computer(s)"),
+        // tailnet), so it is the "checked N" form, not "No computer on your
+        // tailnet could be a gateway", which needs an empty candidate list.
+        // The wording is F4 §3.5's, which replaced "answered among N".
+        XCTAssertTrue(message.hasPrefix("Checked 4 computers"),
                       "in purgatory the picker says: \(message)")
-        XCTAssertEqual(element(app, "gateway-sweep-done").label, "sweep-done:0")
+        XCTAssertTrue(message.contains("4 didn't answer at all"),
+                      "and every one of them was dropped, not merely uninteresting: \(message)")
+        // Purgatory is precisely the situation F4's unanswered-branch advice was
+        // written for, so it must be the branch shown: the device is not allowed
+        // to reach the peers yet, and searching again cannot change that.
+        let advice = element(app, "gateway-none-advice").label
+        XCTAssertTrue(advice.contains("isn't allowed to reach"),
+                      "the advice must name the real cause, not suggest retrying: \(advice)")
+        let done = try sweepDone(app)
+        XCTAssertEqual(done.gateways, 0)
+        XCTAssertEqual(done.unanswered, 4, "all four were dropped: \(done)")
         XCTAssertFalse(element(app, "gateway-proxy-unhealthy").exists,
                        "the node's loopback is fine; it is the tailnet that drops the traffic")
         let node = try await appNode()
@@ -300,6 +318,214 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertFalse(oldV4.contains { addresses.contains($0) }, "and not the old one: \(addresses)")
     }
 
+    // MARK: - F7: honest counts, the tail of a large tailnet, and the declined
+
+    /// A sweep that runs out of time says so, and names only what it probed.
+    ///
+    /// Before F7 the picker reported `candidateCount` as "checked", so on a
+    /// large tailnet it claimed to have checked forty-three machines when the
+    /// 12 s deadline let it check about half that.
+    func testATruncatedSweepSaysSoAndCountsOnlyWhatItProbed() async throws {
+        try await resetHarness(withGateway: false)
+        // Ninety, not forty. A 12 s deadline at concurrency 12 and a 4 s probe
+        // timeout reaches about 36 candidates, so 43 sat right on the boundary
+        // and the first run of this test probed all 43 and did not truncate —
+        // while a 44-candidate run in the same suite truncated at 40. Measured,
+        // not estimated: the app logged `probed=43/43 truncated=no` beside
+        // `probed=40/44 truncated=yes`. A test whose subject is a coin flip is
+        // worse than no test, so this is now three times the boundary.
+        try await addPeers(90)
+        let total = try await harnessPeerCount()
+        XCTAssertGreaterThan(total, 80, "the harness should be presenting a large tailnet")
+
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
+        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40),
+                      "the sweep finished and found nothing")
+
+        let text = element(app, "gateway-none").label
+        XCTAssertTrue(text.contains("ran out of time"),
+                      "a truncated sweep must say so; got: \(text)")
+        guard let counts = checkedCounts(text) else {
+            return XCTFail("the empty state names no counts: \(text)")
+        }
+        XCTAssertEqual(counts.total, total,
+                       "the total must be every candidate on the tailnet; got: \(text)")
+        XCTAssertLessThan(counts.probed, counts.total,
+                          "it cannot have probed them all in 12 s; got: \(text)")
+        // The counts on screen are the counts the sweep actually recorded.
+        let done = try sweepDone(app)
+        XCTAssertEqual(done.answered + done.unanswered, counts.probed,
+                       "answered + unanswered must be exactly what it claims to have checked: \(done)")
+        XCTAssertTrue(element(app, "gateway-refresh").label.contains("Keep searching"),
+                      "and the button offers to continue, not to start over")
+    }
+
+    /// A finished sweep says it checked them all, and does not cry wolf.
+    ///
+    /// The other half of the rule above: a deadline that arrives with every
+    /// verdict in hand is an ordinary sweep, not a truncated one.
+    func testAFinishedSweepSaysItCheckedThemAll() async throws {
+        try await resetHarness(withGateway: false)
+        try await addPeers(3)
+        let total = try await harnessPeerCount()
+
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
+        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40))
+
+        let text = element(app, "gateway-none").label
+        XCTAssertFalse(text.contains("ran out of time"),
+                       "a sweep that checked everything must not claim it ran out of time: \(text)")
+        let counts = checkedCounts(text)
+        XCTAssertEqual(counts?.probed, total, "it checked them all: \(text)")
+        XCTAssertEqual(counts?.total, total)
+        let done = try sweepDone(app)
+        XCTAssertEqual(done.answered + done.unanswered, total, "\(done)")
+        XCTAssertEqual(element(app, "gateway-refresh").label, "Search again",
+                       "nothing was left, so the button starts over rather than continuing")
+    }
+
+    /// Keep searching resumes at the cursor, so the tail of a large tailnet is
+    /// reached rather than the first two rounds being re-probed forever.
+    ///
+    /// What this asserts is that the **counts complete**: a truncated sweep says
+    /// "Checked 40 of 44", and after one tap the picker says it checked all 44.
+    /// A picker that restarted from the top would report the same partial count
+    /// however many times the button was tapped, which is the defect F7 §4.3
+    /// exists to fix.
+    ///
+    /// It deliberately does **not** assert that the gateway at the tail then
+    /// loads, though that is the owner-visible point of §4.3. With this fixture
+    /// it cannot: forty peers that are reported online with no data plane behind
+    /// them congest tsnet enough that a probe to the *reachable* gateway also
+    /// exceeds its 4 s budget — measured, `socks[41] CONNECT gw…:443` reached the
+    /// proxy and never completed. That is a fixture artefact more than a product
+    /// fault: a real tailnet reports an unreachable peer as **offline**, and
+    /// `exclusion` drops offline peers before they are ever probed. The one real
+    /// environment that can produce many online-but-unreachable peers is a
+    /// restricted tailnet like the author's own during device purgatory, which
+    /// is recorded as an open question in F7 §8 rather than asserted here.
+    func testSearchAgainContinuesFromWhereItStopped() async throws {
+        try await resetHarness()
+        // Ninety, for the same reason as the truncation test: 40 put the sweep
+        // right on the 12 s boundary, and one run of this test probed all 44
+        // candidates and never truncated at all.
+        try await addPeers(90)
+        let total = try await harnessPeerCount()
+
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
+        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40),
+                      "the first sweep runs out of time")
+        let first = element(app, "gateway-none").label
+        XCTAssertTrue(first.contains("ran out of time"), "got: \(first)")
+        guard var probed = checkedCounts(first)?.probed else {
+            return XCTFail("the empty state names no counts: \(first)")
+        }
+        XCTAssertLessThan(probed, total, "it did not reach them all: \(first)")
+
+        // Tap until the list is exhausted, asserting the count STRICTLY climbs
+        // each time. That is the whole of §4.3: a picker that restarted from the
+        // top would report the same partial count for ever, so monotone progress
+        // is the property, and reaching the total is the proof it terminates.
+        // Ninety candidates at ~36 a sweep needs three; five is the ceiling.
+        var text = first
+        for tap in 1...5 {
+            let button = element(app, "gateway-refresh")
+            XCTAssertTrue(button.label.contains("Keep searching"),
+                          "tap \(tap): a truncated sweep offers to continue, not to restart: \(button.label)")
+            button.tap()
+            var advanced = false
+            for _ in 0..<60 {
+                try await Task.sleep(for: .milliseconds(500))
+                // The row exists only while `phase == .finished`, so it
+                // disappears for the duration of the sweep the tap just started
+                // — reading `.label` through the gap throws "no matches found".
+                // Its presence with a higher count is therefore exactly the
+                // signal wanted: the next sweep has finished and got further.
+                let row = element(app, "gateway-none")
+                guard row.exists else { continue }
+                text = row.label
+                if let c = checkedCounts(text), c.probed > probed { advanced = true; break }
+            }
+            XCTAssertTrue(advanced,
+                          "tap \(tap): the count must climb past \(probed), not restart: \(text)")
+            guard let c = checkedCounts(text) else {
+                return XCTFail("tap \(tap): the empty state names no counts: \(text)")
+            }
+            XCTAssertEqual(c.total, total, "tap \(tap): the total must not shrink: \(text)")
+            probed = c.probed
+            if !text.contains("ran out of time") { break }
+        }
+        XCTAssertFalse(text.contains("ran out of time"),
+                       "continuing must eventually exhaust the list: \(text)")
+        XCTAssertEqual(probed, total,
+                       "and every candidate has been probed across the chain: \(text)")
+        XCTAssertEqual(element(app, "gateway-refresh").label, "Search again",
+                       "so the button goes back to offering a fresh search")
+    }
+
+    /// A gateway declined for its OS is offered, with the reason, and one tap
+    /// probes it.
+    ///
+    /// `synology` is a real example: a gateway on a NAS. R26's OS filter is a
+    /// cheap-probe optimisation, and on the author's tailnet it cannot misfire
+    /// — every gateway of his runs Linux or macOS.
+    func testAPeerSkippedForItsOSIsOfferedAndCanBeProbed() async throws {
+        try await resetHarness()
+        try await setPeerOS("gw", "synology")
+
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
+        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40),
+                      "the sweep finds nothing, because the only gateway was filtered out")
+
+        let summary = element(app, "gateway-skipped-summary")
+        XCTAssertTrue(summary.waitForExistence(timeout: 5), "the declined peer is offered, not hidden")
+        XCTAssertEqual(summary.label, "1 computer was not checked")
+        summary.tap()
+
+        let row = element(app, "gateway-skipped-\(Self.gatewayHost)")
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "and it names the host")
+        XCTAssertTrue(row.label.contains("OS synology"), "with the reason: \(row.label)")
+        row.tap()
+
+        // Probed anyway, it answers, and it is a gateway like any other.
+        let found = element(app, "gateway-\(Self.gatewayHost)")
+        XCTAssertTrue(found.waitForExistence(timeout: 30), "one tap probes it and it answers")
+        found.tap()
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 75),
+                      "and choosing it loads the gateway")
+    }
+
+    /// The same, for a gateway owned by someone else — a colleague's or a
+    /// family member's machine on a shared tailnet, which is the case the
+    /// author's own tailnet can never produce.
+    func testAGatewayOwnedByAnotherUserIsOffered() async throws {
+        try await resetHarness()
+        try await setPeerOwner("gw", 777)
+
+        let app = launch()
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
+        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40))
+
+        let summary = element(app, "gateway-skipped-summary")
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        summary.tap()
+        let row = element(app, "gateway-skipped-\(Self.gatewayHost)")
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.label.contains("another owner"), "with the reason: \(row.label)")
+        row.tap()
+        XCTAssertTrue(element(app, "gateway-\(Self.gatewayHost)").waitForExistence(timeout: 30),
+                      "probed anyway, a colleague's gateway answers like any other")
+    }
+
     // MARK: - Helpers
 
     private func launch() -> XCUIApplication {
@@ -325,6 +551,83 @@ final class DiscoveryTests: XCTestCase {
 
     private func harnessState() async throws -> [String: Any] {
         try JSONSerialization.jsonObject(with: try await Self.get("\(Self.harnessAPI)/state")) as? [String: Any] ?? [:]
+    }
+
+    // MARK: - F7: a large tailnet, and peers a filter declined
+
+    /// Adds `n` synthetic peers: in the netmap, candidates by every one of
+    /// R26's filters, and with **nothing behind them**, so a probe stalls until
+    /// the app's own 4 s request timeout. That is what makes a sweep that runs
+    /// out of time reproducible without standing up forty real tsnet nodes.
+    ///
+    /// `name` matters: the candidate list is alphabetical after the saved
+    /// gateway, so `a` puts them all *before* `gw` and the gateway is out of
+    /// reach of a first sweep. The harness's default prefix sorts after it.
+    @discardableResult
+    private func addPeers(_ n: Int, name: String = "a", os: String? = nil) async throws -> [String] {
+        var url = "\(Self.harnessAPI)/peers?n=\(n)&name=\(name)"
+        if let os { url += "&os=\(os)" }
+        let data = try await Self.post(url, timeout: 30)
+        let reply = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        XCTAssertEqual(reply["added"] as? Int, n, "the harness did not add them: \(reply)")
+        return reply["hostnames"] as? [String] ?? []
+    }
+
+    /// Makes an existing peer report a different OS — `synology`, a NAS, which
+    /// R26's OS filter declines and F7 must offer anyway.
+    private func setPeerOS(_ hostname: String, _ os: String) async throws {
+        let data = try await Self.post("\(Self.harnessAPI)/peer-os?hostname=\(hostname)&os=\(os)")
+        let reply = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        XCTAssertEqual(reply["updated"] as? Int, 1, "no peer named \(hostname): \(reply)")
+    }
+
+    /// Gives an existing peer a different, non-zero owner — a colleague's
+    /// machine on a shared tailnet. Zero is what the app reads as "owner
+    /// unknown", which does *not* exclude, so the harness refuses it.
+    private func setPeerOwner(_ hostname: String, _ user: Int) async throws {
+        let data = try await Self.post("\(Self.harnessAPI)/peer-owner?hostname=\(hostname)&user=\(user)")
+        let reply = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        XCTAssertEqual(reply["updated"] as? Int, 1, "no peer named \(hostname): \(reply)")
+    }
+
+    private struct SweepDone: CustomStringConvertible {
+        let gateways: Int, answered: Int, unanswered: Int
+        var description: String { "gateways=\(gateways) answered=\(answered) unanswered=\(unanswered)" }
+    }
+
+    /// The hidden `sweep-done:<gateways>:<answered>:<unanswered>` marker.
+    private func sweepDone(_ app: XCUIApplication) throws -> SweepDone {
+        let label = element(app, "gateway-sweep-done").label
+        let f = label.split(separator: ":").map(String.init)
+        guard f.count == 4, f[0] == "sweep-done",
+              let g = Int(f[1]), let a = Int(f[2]), let u = Int(f[3])
+        else {
+            XCTFail("unreadable sweep marker: \(label)")
+            return SweepDone(gateways: 0, answered: 0, unanswered: 0)
+        }
+        return SweepDone(gateways: g, answered: a, unanswered: u)
+    }
+
+    /// "Checked 24 of 43 computers in 12 s — …" → (24, 43). Reads the count the
+    /// owner reads, which is the whole point of F7 §4.2.
+    private func checkedCounts(_ text: String) -> (probed: Int, total: Int)? {
+        // "Checked P of N computers" when truncated, "Checked N computers" when not.
+        let words = text.replacingOccurrences(of: ",", with: " ").split(separator: " ").map(String.init)
+        guard let i = words.firstIndex(of: "Checked") else { return nil }
+        if words.count > i + 2, words[i + 2] == "of", let p = Int(words[i + 1]),
+           words.count > i + 3, let n = Int(words[i + 3]) {
+            return (p, n)
+        }
+        if words.count > i + 1, let n = Int(words[i + 1]) { return (n, n) }
+        return nil
+    }
+
+    /// How many peers the harness is presenting, the app's own node excluded.
+    /// Every harness peer and every synthetic one passes R26's filters, so this
+    /// is also the candidate count — which is what the picker's total must be.
+    private func harnessPeerCount() async throws -> Int {
+        let nodes = try await harnessState()["nodes"] as? [[String: Any]] ?? []
+        return nodes.filter { $0["harnessPeer"] as? Bool == true }.count
     }
 
     private struct Node {
