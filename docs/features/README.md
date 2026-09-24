@@ -32,6 +32,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F11](F11-first-run-introduction.md) | The first screen says what this is and what is about to be asked of you (bug report: first run is a bare "Login" button) | designed; ready to build. F4 hardened this screen's *failure* states; its initial state was never treated as one needing words |
 | [F12](F12-traceable-builds.md) | `make tf` refuses a dirty tree; the build records its commit (bug report) | designed; ready to build. Two builds were made from a dirty tree on the day it was reported, and neither artefact says so |
 | [F13](F13-bottom-safe-area.md) | The bottom safe area: the code's comment and the measurement disagree | designed; low priority. Likely a one-line comment fix — F9 §0's reasoning says the page should not be under the home indicator either, which is what the layout already does |
+| [F14](F14-fast-suites.md) | The suites are too slow to iterate against (L1 254s, session 482s, full tier ~17min) | designed; **measure before optimising** (§4.1). The acceptance criterion forbids the obvious wrong answer: a run that is faster because it does less is a failure |
 
 ## Still open, not yet answered
 
