@@ -1,0 +1,152 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+#include "tailscale.h"
+#include <sys/socket.h>
+#include <stdio.h>
+#include <unistd.h>
+
+// Functions exported by Go.
+extern int TsnetSetupLogs(char* dir);
+extern int TsnetLog(char* message);
+extern int TsnetFlushLogs(int timeoutMillis);
+extern int TsnetNewServer();
+extern int TsnetStart(int sd);
+extern int TsnetUp(int sd);
+extern int TsnetClose(int sd);
+extern int TsnetErrmsg(int sd, char* buf, size_t buflen);
+extern int TsnetDial(int sd, char* net, char* addr, int* connOut);
+extern int TsnetSetDir(int sd, char* str);
+extern int TsnetSetHostname(int sd, char* str);
+extern int TsnetSetAuthKey(int sd, char* str);
+extern int TsnetSetControlURL(int sd, char* str);
+extern int TsnetSetEphemeral(int sd, int ephemeral);
+extern int TsnetCrashTest(int sd, int mode);
+extern int TsnetDebugResetConnections(int sd);
+extern int TsnetDebugShutdownTCPConnections(int sd);
+extern int TsnetDebugDefunctLoopback(int sd);
+extern int TsnetVMBridgeStart(int sd, char* socketPath, char* magicDNSSuffix, int* bridgeOut);
+extern int TsnetVMBridgeReady(int sd, int bridgeHandle);
+extern int TsnetVMBridgeStop(int sd, int bridgeHandle);
+extern int TsnetRestartLoopback(int sd, char* addrOut, size_t addrLen, char* proxyOut, char* localOut);
+extern int TsnetGetIps(int sd, char *buf, size_t buflen);
+extern int TsnetGetRemoteAddr(int listener, int conn, char *buf, size_t buflen);
+extern int TsnetListen(int sd, char* net, char* addr, int* listenerOut);
+extern int TsnetAccept(int ld, int* connOut);
+extern int TsnetLoopback(int sd, char* addrOut, size_t addrLen, char* proxyOut, char* localOut);
+extern int TsnetEnableFunnelToLocalhostPlaintextHttp1(int sd, int localhostPort);
+
+int tailscale_setup_logs(const char* dir) {
+	return TsnetSetupLogs((char*)dir);
+}
+
+int tailscale_log(const char* message) {
+	return TsnetLog((char*)message);
+}
+
+int tailscale_flush_logs(int timeout_millis) {
+	return TsnetFlushLogs(timeout_millis);
+}
+
+tailscale tailscale_new() {
+	return TsnetNewServer();
+}
+
+int tailscale_start(tailscale sd) {
+	return TsnetStart(sd);
+}
+
+int tailscale_up(tailscale sd) {
+	return TsnetUp(sd);
+}
+
+int tailscale_close(tailscale sd) {
+	return TsnetClose(sd);
+}
+
+int tailscale_dial(tailscale sd, const char* network, const char* addr, tailscale_conn* conn_out) {
+	return TsnetDial(sd, (char*)network, (char*)addr, (int*)conn_out);
+}
+
+int tailscale_listen(tailscale sd, const char* network, const char* addr, tailscale_listener* listener_out) {
+	return TsnetListen(sd, (char*)network, (char*)addr, (int*)listener_out);
+}
+
+int tailscale_accept(tailscale_listener ld, tailscale_conn* conn_out) {
+	return TsnetAccept(ld, (int*)conn_out);
+}
+
+int tailscale_getremoteaddr(tailscale_listener l, tailscale_conn conn, char* buf, size_t buflen) {
+	return TsnetGetRemoteAddr(l, conn, buf, buflen);
+}
+
+int tailscale_getips(tailscale sd, char* buf, size_t buflen) {
+	return TsnetGetIps(sd, buf, buflen);
+}
+
+int tailscale_set_dir(tailscale sd, const char* dir) {
+	return TsnetSetDir(sd, (char*)dir);
+}
+int tailscale_set_hostname(tailscale sd, const char* hostname) {
+	return TsnetSetHostname(sd, (char*)hostname);
+}
+int tailscale_set_authkey(tailscale sd, const char* authkey) {
+	return TsnetSetAuthKey(sd, (char*)authkey);
+}
+int tailscale_set_control_url(tailscale sd, const char* control_url) {
+	return TsnetSetControlURL(sd, (char*)control_url);
+}
+int tailscale_set_ephemeral(tailscale sd, int ephemeral) {
+	return TsnetSetEphemeral(sd, ephemeral);
+}
+
+// tailscale_crash_test deliberately crashes the Go runtime. TEST/DEBUG ONLY.
+// See TsnetCrashTest in tailscale.go (and TSNetManager's -CrashTest hook).
+// mode 0: panic immediately (prints panic+stack to the log fd/stderr, then
+//         raises SIGABRT — the same mechanism as a real overnight Go-runtime
+//         fatal). Does not return.
+// mode 1: panic in a background goroutine (returns 0; aborts the process
+//         asynchronously).
+int tailscale_crash_test(tailscale sd, int mode) {
+	return TsnetCrashTest(sd, mode);
+}
+
+int tailscale_debug_reset_connections(tailscale sd) {
+	return TsnetDebugResetConnections(sd);
+}
+
+int tailscale_debug_shutdown_tcp_connections(tailscale sd) {
+	return TsnetDebugShutdownTCPConnections(sd);
+}
+
+int tailscale_debug_defunct_loopback(tailscale sd) {
+	return TsnetDebugDefunctLoopback(sd);
+}
+
+int tailscale_vm_bridge_start(tailscale sd, const char* socket_path, const char* magic_dns_suffix, int* bridge_out) {
+	return TsnetVMBridgeStart(sd, (char*)socket_path, (char*)magic_dns_suffix, bridge_out);
+}
+
+int tailscale_vm_bridge_ready(tailscale sd, int bridge) {
+	return TsnetVMBridgeReady(sd, bridge);
+}
+
+int tailscale_vm_bridge_stop(tailscale sd, int bridge) {
+	return TsnetVMBridgeStop(sd, bridge);
+}
+
+int tailscale_loopback(tailscale sd, char* addr_out, size_t addrlen, char* proxy_cred_out, char* local_api_cred_out) {
+	return TsnetLoopback(sd, addr_out, addrlen, proxy_cred_out, local_api_cred_out);
+}
+
+int tailscale_restart_loopback(tailscale sd, char* addr_out, size_t addrlen, char* proxy_cred_out, char* local_api_cred_out) {
+	return TsnetRestartLoopback(sd, addr_out, addrlen, proxy_cred_out, local_api_cred_out);
+}
+
+int tailscale_errmsg(tailscale sd, char* buf, size_t buflen) {
+	return TsnetErrmsg(sd, buf, buflen);
+}
+
+int tailscale_enable_funnel_to_localhost_plaintext_http1(tailscale sd, int localhostPort) {
+	return TsnetEnableFunnelToLocalhostPlaintextHttp1(sd, localhostPort);
+}

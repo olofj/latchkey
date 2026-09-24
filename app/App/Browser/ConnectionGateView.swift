@@ -1,0 +1,48 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+//
+//  ConnectionGateView.swift
+//  Latchkey
+//
+//  The pre-connection "onboarding" screen: the brand header + Tailscale status
+//  + Login button. Shown by `DashboardRootView` until the tailnet first
+//  reaches `Running`, after which the dashboard takes over for the rest of
+//  the session. Keeps the brand header (with the Settings gear) and the
+//  "Tailscale Status" section so the connection-independent UI tests still
+//  have their anchors here.
+//
+
+import SwiftUI
+
+struct ConnectionGateView: View {
+    @ObservedObject var statusViewModel: StatusViewModel
+    let onSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            LatchkeyBrandHeader {
+                HStack(spacing: 14) {
+                    Button {
+                        onSettings()
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityIdentifier("settings-button")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
+
+            StatusView(viewModel: statusViewModel)
+                .padding()
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.platformSystemBackground)
+    }
+}

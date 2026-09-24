@@ -1,0 +1,893 @@
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
+
+// A Go c-archive of the tsnet package. See tailscale.h for details.
+package main
+
+//#include "errno.h"
+import "C"
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
+	"tailscale.com/hostinfo"
+	"tailscale.com/ipn"
+	"tailscale.com/logpolicy"
+	"tailscale.com/logtail"
+	"tailscale.com/logtail/filch"
+	"tailscale.com/tsnet"
+	"tailscale.com/types/logger"
+)
+
+func main() {}
+
+// processLogs is the single process-wide filch/logtail used by every tsnet
+// server and by the embedding application. It owns stderr so Go runtime panic
+// output survives a crash and is uploaded on the next launch.
+var processLogs struct {
+	mu     sync.Mutex
+	logger *logtail.Logger
+	buffer *filch.Filch
+	public string
+}
+
+//export TsnetSetupLogs
+func TsnetSetupLogs(dir *C.char) C.int {
+	processLogs.mu.Lock()
+	defer processLogs.mu.Unlock()
+	if processLogs.logger != nil {
+		return 0
+	}
+	root := C.GoString(dir)
+	if root == "" {
+		return C.EINVAL
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return C.EIO
+	}
+	cfgPath := root + "/aperture.log.conf"
+	cfg, err := logpolicy.ConfigFromFile(cfgPath)
+	if os.IsNotExist(err) {
+		cfg = logpolicy.NewConfig(logtail.CollectionNode)
+		err = cfg.Save(cfgPath)
+	}
+	if err != nil || cfg.Validate(logtail.CollectionNode) != nil {
+		return C.EIO
+	}
+	buf, err := filch.New(root+"/aperture", filch.Options{ReplaceStderr: true})
+	if err != nil {
+		return C.EIO
+	}
+	lc := logtail.Config{
+		Collection: cfg.Collection,
+		PrivateID:  cfg.PrivateID,
+		BaseURL:    logpolicy.LogURL(),
+		// Do NOT echo old filch logs (from prior runs) to stderr. They are
+		// still uploaded to logtail via the buffer drain, but echoing them to
+		// the original stderr floods the Xcode/console with stale warnings
+		// (e.g. SwiftUI "publishing changes" faults from the previous launch)
+		// that look like a live problem. io.Discard suppresses only the echo.
+		// Latchkey (M8.3): the echo goes to a local, capped tsnet.log
+		// instead -- the only copy that survives, since uploads are off and
+		// the drain discards (latchkey_locallog.go).
+		Stderr:              latchkeyLocalLog(root),
+		Buffer:              buf,
+		CompressLogs:        true,
+		IncludeProcID:       true,
+		IncludeProcSequence: true,
+		HTTPC: &http.Client{Transport: logpolicy.TransportOptions{
+			Host: logpolicy.LogHost(),
+		}.New()},
+	}
+	lg := logtail.NewLogger(lc, logger.Discard)
+	processLogs.logger = lg
+	processLogs.buffer = buf
+	processLogs.public = cfg.PublicID.String()
+	log.SetFlags(0)
+	log.SetOutput(lg)
+	lg.Logf("libtailscale process logging started; Go %s", runtime.Version())
+	return 0
+}
+
+//export TsnetLog
+func TsnetLog(msg *C.char) C.int {
+	processLogs.mu.Lock()
+	lg := processLogs.logger
+	processLogs.mu.Unlock()
+	if lg == nil {
+		return C.ENXIO
+	}
+	lg.Logf("aperture: %s", C.GoString(msg))
+	return 0
+}
+
+//export TsnetFlushLogs
+func TsnetFlushLogs(timeoutMillis C.int) C.int {
+	processLogs.mu.Lock()
+	lg := processLogs.logger
+	processLogs.mu.Unlock()
+	if lg == nil {
+		return C.ENXIO
+	}
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if timeoutMillis > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMillis)*time.Millisecond)
+		defer cancel()
+	}
+	if err := lg.FlushContext(ctx); err != nil {
+		return -1
+	}
+	return 0
+}
+
+// netmapCacheEnvOnce ensures we configure the netmap-caching environment
+// variables exactly once, before the first tsnet server is created.
+//
+// TS_FORCE_CACHE_NETMAP forces tailscale to write the full netmap to its
+// on-disk cache even when the control server has not granted the
+// cache-network-maps node capability. TS_USE_CACHED_NETMAP (which already
+// defaults to true) allows a previously cached netmap to be loaded at
+// startup so tsnet can come up with a usable netmap before the control
+// plane is reached.
+//
+// Both are read lazily by tailscale.com/envknob during tsnet startup (in
+// LocalBackend.startLocked/setNetMapLocked), so setting them here, before
+// the server is started, takes effect in time.
+var netmapCacheEnvOnce sync.Once
+
+func setupNetmapCacheEnv() {
+	netmapCacheEnvOnce.Do(func() {
+		os.Setenv("TS_FORCE_CACHE_NETMAP", "1")
+		os.Setenv("TS_USE_CACHED_NETMAP", "1")
+	})
+}
+
+// servers tracks all the allocated *tsnet.Server objects.
+var servers struct {
+	mu   sync.Mutex
+	next C.int
+	m    map[C.int]*server
+}
+
+type vmBridge interface {
+	Ready() bool
+	Err() error
+	Close() error
+}
+
+type server struct {
+	s       *tsnet.Server
+	lastErr string
+	started bool
+
+	vmMu      sync.Mutex
+	vmNext    C.int
+	vmBridges map[C.int]vmBridge
+}
+
+func getServer(sd C.int) *server {
+	servers.mu.Lock()
+	defer servers.mu.Unlock()
+	return servers.m[sd]
+}
+
+// listeners tracks all the tsnet_listener objects allocated via tsnet_listen.
+var listeners struct {
+	mu sync.Mutex
+	m  map[C.int]*listener
+}
+
+type listener struct {
+	s  *server
+	ln net.Listener
+	fd int // go side fd of socketpair sent to C
+	mu sync.Mutex
+	m  map[C.int]net.Addr //maps fds to remote addresses for lookup
+}
+
+// conns tracks all the pipe(2)s allocated via tsnet_dial.
+var conns struct {
+	mu sync.Mutex
+	m  map[C.int]*conn // keyed by the FD given to C (w)
+}
+
+type conn struct {
+	s *tsnet.Server
+	c net.Conn
+	r *os.File // r is the local socket to the C client
+}
+
+func (s *server) recErr(err error) C.int {
+	if err == nil {
+		s.lastErr = ""
+		return 0
+	}
+	s.lastErr = err.Error()
+	return -1
+}
+
+//export TsnetNewServer
+func TsnetNewServer() C.int {
+	setupNetmapCacheEnv()
+
+	servers.mu.Lock()
+	defer servers.mu.Unlock()
+
+	if servers.m == nil {
+		servers.m = map[C.int]*server{}
+		hostinfo.SetApp("libtailscale")
+	}
+	if servers.next == 0 {
+		servers.next = 42<<16 + 1
+	}
+	sd := servers.next
+	servers.next++
+	ts := &tsnet.Server{}
+	processLogs.mu.Lock()
+	ts.Logtail = processLogs.logger
+	processLogs.mu.Unlock()
+	if ts.Logtail != nil {
+		// Latchkey (R29): tsnet's user-facing lines (the login link, every
+		// 5 s while it waits) already go to Logtail. With UserLogf nil it
+		// ALSO log.Printf's them, and log's output is that same logger
+		// (TsnetSetupLogs), so each landed twice in tsnet.log.
+		ts.UserLogf = logger.Discard
+	}
+	s := &server{s: ts}
+	servers.m[sd] = s
+	return (C.int)(sd)
+}
+
+//export TsnetStart
+func TsnetStart(sd C.int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	err := s.s.Start()
+	if err == nil {
+		s.started = true
+	}
+	return s.recErr(err)
+}
+
+//export TsnetUp
+func TsnetUp(sd C.int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	_, err := s.s.Up(context.Background()) // cancellation is via TsnetClose
+	if err == nil {
+		s.started = true
+	}
+	return s.recErr(err)
+}
+
+//export TsnetClose
+func TsnetClose(sd C.int) C.int {
+	servers.mu.Lock()
+	s := servers.m[sd]
+	if s != nil {
+		delete(servers.m, sd)
+	}
+	servers.mu.Unlock()
+
+	if s == nil {
+		return C.EBADF
+	}
+
+	// VM bridges borrow this server's Dial method, so stop them before the
+	// owning tsnet identity. This also removes every Unix socket deterministically.
+	s.vmMu.Lock()
+	bridges := s.vmBridges
+	s.vmBridges = nil
+	s.vmMu.Unlock()
+	for _, bridge := range bridges {
+		_ = bridge.Close()
+	}
+
+	// TODO: cancel Up
+	// TODO: close related listeners / conns.
+	if !s.started {
+		// Server was never started, nothing to close.
+		return 0
+	}
+	if err := s.s.Close(); err != nil {
+		if s.s.Logf != nil { // nil unless the caller set it (see TsnetDebugShutdownTCPConnections)
+			s.s.Logf("tailscale_close: failed with %v", err)
+		}
+		return -1
+	}
+
+	return 0
+}
+
+//export TsnetGetIps
+func TsnetGetIps(sd C.int, buf *C.char, buflen C.size_t) C.int {
+	if buf == nil {
+		panic("errmsg passed nil buf")
+	} else if buflen == 0 {
+		panic("errmsg passed buflen of 0")
+	}
+
+	servers.mu.Lock()
+	s := servers.m[sd]
+	servers.mu.Unlock()
+
+	out := unsafe.Slice((*byte)(unsafe.Pointer(buf)), buflen)
+
+	if s == nil {
+		out[0] = '\x00'
+		return C.EBADF
+	}
+
+	ip4, ip6 := s.s.TailscaleIPs()
+	joined := strings.Join([]string{ip4.String(), ip6.String()}, ",")
+	n := copy(out, joined)
+	if n >= len(out) {
+		out[len(out)-1] = '\x00' // always NUL-terminate
+		return C.ERANGE
+	}
+	out[n] = '\x00'
+	return 0
+}
+
+//export TsnetErrmsg
+func TsnetErrmsg(sd C.int, buf *C.char, buflen C.size_t) C.int {
+	if buf == nil {
+		panic("errmsg passed nil buf")
+	} else if buflen == 0 {
+		panic("errmsg passed buflen of 0")
+	}
+
+	servers.mu.Lock()
+	s := servers.m[sd]
+	servers.mu.Unlock()
+
+	out := unsafe.Slice((*byte)(unsafe.Pointer(buf)), buflen)
+	if s == nil {
+		out[0] = '\x00'
+		return C.EBADF
+	}
+	n := copy(out, s.lastErr)
+	if n >= len(out) {
+		out[len(out)-1] = '\x00' // always NUL-terminate
+		return C.ERANGE
+	}
+	out[n] = '\x00'
+	return 0
+}
+
+//export TsnetListen
+func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+
+	ln, err := s.s.Listen(C.GoString(network), C.GoString(addr))
+	if err != nil {
+		return s.recErr(err)
+	}
+	s.started = true
+
+	// The tailscale_listener we return to C is one side of a socketpair(2).
+	// We do this so we can proactively call ln.Accept in a goroutine and
+	// feed an fd for the connection through the listener. This lets C use
+	// epoll on the tailscale_listener to know if it should call
+	// tailscale_accept, which avoids a blocking call on the far side.
+	fds, err := syscall.Socketpair(syscall.AF_LOCAL, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return s.recErr(err)
+	}
+	sp := fds[1]
+	fdC := C.int(fds[0])
+
+	listeners.mu.Lock()
+	if listeners.m == nil {
+		listeners.m = map[C.int]*listener{}
+	}
+	listener := &listener{s: s, ln: ln, fd: sp, m: map[C.int]net.Addr{}}
+	listeners.m[fdC] = listener
+	listeners.mu.Unlock()
+
+	cleanup := func() {
+		// If fdC is closed on the C side, then we end up calling
+		// into cleanup twice. Be careful to avoid syscall.Close
+		// twice as the FD may have been reallocated.
+		listeners.mu.Lock()
+		if tsLn, ok := listeners.m[fdC]; ok && tsLn.ln == ln {
+			delete(listeners.m, fdC)
+			syscall.Close(sp)
+		}
+		listeners.mu.Unlock()
+
+		ln.Close()
+	}
+	go func() {
+		// fdC is never written to, so trying to read from sp blocks
+		// until fdC is closed. We use this as a signal that C is
+		// done with the listener, and we can tear it down.
+		//
+		// TODO: would using os.NewFile avoid a locked up thread?
+		var buf [256]byte
+		syscall.Read(sp, buf[:])
+		cleanup()
+	}()
+	go func() {
+		defer cleanup()
+		for {
+			netConn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			var connFd C.int
+			if err := newConn(s, netConn, &connFd); err != nil {
+				if s.s.Logf != nil {
+					s.s.Logf("libtailscale.accept: newConn: %v", err)
+				}
+				netConn.Close()
+				continue
+			}
+			rights := syscall.UnixRights(int(connFd))
+			err = syscall.Sendmsg(sp, nil, rights, nil, 0)
+			if err != nil {
+				// We handle sp being closed in the read goroutine above.
+				if s.s.Logf != nil {
+					s.s.Logf("libtailscale.accept: sendmsg failed: %v", err)
+				}
+				netConn.Close()
+				// fallthrough to close connFd, then continue Accept()ing
+			}
+
+			// map the connection to the remote address
+			listener.mu.Lock()
+			listener.m[connFd] = netConn.RemoteAddr()
+			listener.mu.Unlock()
+
+			syscall.Close(int(connFd)) // now owned by recvmsg
+		}
+	}()
+
+	*listenerOut = fdC
+	return 0
+}
+
+//export TsnetAccept
+func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+	listeners.mu.Lock()
+	ln := listeners.m[listenerFd]
+	listeners.mu.Unlock()
+
+	if ln == nil {
+		return C.EBADF
+	}
+
+	buf := make([]byte, unix.CmsgLen(int(unsafe.Sizeof((C.int)(0)))))
+	_, oobn, _, _, err := syscall.Recvmsg(int(listenerFd), nil, buf, 0)
+	if err != nil {
+		return ln.s.recErr(err)
+	}
+
+	scms, err := syscall.ParseSocketControlMessage(buf[:oobn])
+	if err != nil {
+		return ln.s.recErr(err)
+	}
+	if len(scms) != 1 {
+		return ln.s.recErr(fmt.Errorf("libtailscale: got %d control messages, want 1", len(scms)))
+	}
+	fds, err := syscall.ParseUnixRights(&scms[0])
+	if err != nil {
+		return ln.s.recErr(err)
+	}
+	if len(fds) != 1 {
+		return ln.s.recErr(fmt.Errorf("libtailscale: got %d FDs, want 1", len(fds)))
+	}
+	*connOut = (C.int)(fds[0])
+
+	return 0
+}
+
+func newConn(s *server, netConn net.Conn, connOut *C.int) error {
+	fds, err := syscall.Socketpair(syscall.AF_LOCAL, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return err
+	}
+	r := os.NewFile(uintptr(fds[1]), "socketpair-r")
+	c := &conn{s: s.s, c: netConn, r: r}
+	fdC := C.int(fds[0])
+
+	conns.mu.Lock()
+	if conns.m == nil {
+		conns.m = make(map[C.int]*conn)
+	}
+	conns.m[fdC] = c
+	conns.mu.Unlock()
+
+	connCleanup := func() {
+		var inCleanup bool
+		conns.mu.Lock()
+		if tsConn, ok := conns.m[fdC]; ok && tsConn.c == netConn {
+			delete(conns.m, fdC)
+			inCleanup = true
+		}
+		conns.mu.Unlock()
+
+		if !inCleanup {
+			return
+		}
+
+		r.Close()
+		netConn.Close()
+	}
+	go func() {
+		defer connCleanup()
+		var b [1 << 16]byte
+		io.CopyBuffer(r, netConn, b[:])
+		syscall.Shutdown(int(r.Fd()), syscall.SHUT_WR)
+		if cr, ok := netConn.(interface{ CloseRead() error }); ok {
+			cr.CloseRead()
+		}
+	}()
+	go func() {
+		defer connCleanup()
+		var b [1 << 16]byte
+		io.CopyBuffer(netConn, r, b[:])
+		syscall.Shutdown(int(r.Fd()), syscall.SHUT_RD)
+		if cw, ok := netConn.(interface{ CloseWrite() error }); ok {
+			cw.CloseWrite()
+		}
+	}()
+
+	*connOut = fdC
+	return nil
+}
+
+//export TsnetGetRemoteAddr
+func TsnetGetRemoteAddr(listener C.int, conn C.int, buf *C.char, buflen C.size_t) C.int {
+	if buf == nil {
+		panic("errmsg passed nil buf")
+	} else if buflen == 0 {
+		panic("errmsg passed buflen of 0")
+	}
+	out := unsafe.Slice((*byte)(unsafe.Pointer(buf)), buflen)
+
+	listeners.mu.Lock()
+	defer listeners.mu.Unlock()
+	l := listeners.m[listener]
+	if l == nil {
+		out[0] = '\x00'
+		return C.EBADF
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	addr, ok := l.m[conn]
+	if !ok {
+		out[0] = '\x00'
+		return C.EBADF
+	}
+
+	ip := extractIP(addr.String())
+
+	n := copy(out, ip)
+	if n >= len(out) {
+		out[len(out)-1] = '\x00' // always NUL-terminate
+		return C.ERANGE
+	}
+	out[n] = '\x00'
+	return 0
+}
+
+// Strips the port from connection IPs
+func extractIP(ipWithPort string) string {
+	re := regexp.MustCompile(`(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|\[([0-9a-fA-F:]+)\]`)
+	match := re.FindString(ipWithPort)
+	return match
+}
+
+//export TsnetDial
+func TsnetDial(sd C.int, network, addr *C.char, connOut *C.int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	netConn, err := s.s.Dial(context.Background(), C.GoString(network), C.GoString(addr))
+	if err != nil {
+		return s.recErr(err)
+	}
+	s.started = true
+	if err := newConn(s, netConn, connOut); err != nil {
+		return s.recErr(err)
+	}
+	return 0
+}
+
+//export TsnetSetDir
+func TsnetSetDir(sd C.int, str *C.char) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	s.s.Dir = C.GoString(str)
+	return 0
+}
+
+//export TsnetSetHostname
+func TsnetSetHostname(sd C.int, str *C.char) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	s.s.Hostname = C.GoString(str)
+	return 0
+}
+
+//export TsnetSetAuthKey
+func TsnetSetAuthKey(sd C.int, str *C.char) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	s.s.AuthKey = C.GoString(str)
+	return 0
+}
+
+//export TsnetSetControlURL
+func TsnetSetControlURL(sd C.int, str *C.char) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	s.s.ControlURL = C.GoString(str)
+	return 0
+}
+
+//export TsnetSetEphemeral
+func TsnetSetEphemeral(sd C.int, e int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	if e == 0 {
+		s.s.Ephemeral = false
+	} else {
+		s.s.Ephemeral = true
+	}
+	return 0
+}
+
+// TsnetCrashTest deliberately crashes the Go runtime. TEST/DEBUG ONLY —
+// never reachable from normal app flow; the Swift side only invokes it when
+// the `-CrashTest` launch argument is set (see TSNetManager.startTailscale).
+//
+// It verifies end-to-end that Go runtime panics (and the goroutine stack dump
+// printed to fd 2 before aborting) survive in the process-wide filch and are
+// uploaded by logtail on the next launch.
+// This reproduces the exact mechanism of the overnight TestFlight crash
+// (SIGABRT raised from a TailscaleKit thread via the Go runtime):
+//
+//	Thread N:
+//	  0 libsystem_kernel.dylib  __kill
+//	  1 TailscaleKit            runtime.signal_unix / runtime.fatalthrow
+//
+// mode 0: panic synchronously in the calling goroutine. The Go runtime
+//
+//	prints "panic: TsnetCrashTest: ..." + a stack trace to stderr (fd 2),
+//	then raises SIGABRT. Does not return.
+//
+// mode 1: panic in a freshly-spawned background goroutine. Returns 0
+//
+//	immediately; the goroutine panics a moment later and the runtime
+//	aborts the whole process (closer to "ran for a while, then a
+//	goroutine panicked").
+//
+// TsnetDebugResetConnections simulates the transport damage caused by an iOS
+// suspend/resume cycle without closing the tsnet Server. It rebinds magicsock's
+// UDP sockets and breaks every DERP TCP connection; magicsock immediately
+// reconnects its home DERP. Existing netstack TCP sessions and the loopback
+// SOCKS listener remain alive.
+//
+//export TsnetDebugResetConnections
+func TsnetDebugResetConnections(sd C.int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return -1
+	}
+	lc, err := s.s.LocalClient()
+	if err != nil {
+		return s.recErr(fmt.Errorf("debug LocalClient: %w", err))
+	}
+	// This is called synchronously through C from an iOS foreground task.
+	// Never let an unhealthy backend pin that task (and the reconnect UI)
+	// forever. Swift cancellation cannot interrupt a C/Go call.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := lc.DebugAction(ctx, "rebind"); err != nil {
+		return s.recErr(fmt.Errorf("debug rebind: %w", err))
+	}
+	if err := lc.DebugAction(ctx, "break-derp-conns"); err != nil {
+		return s.recErr(fmt.Errorf("debug break DERP: %w", err))
+	}
+	return s.recErr(nil)
+}
+
+//export TsnetDebugDefunctLoopback
+func TsnetDebugDefunctLoopback(sd C.int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return -1
+	}
+	return s.recErr(s.s.DebugDefunctLoopback())
+}
+
+// TsnetDebugShutdownTCPConnections deliberately calls shutdown(SHUT_RDWR) on
+// every TCP descriptor in the process without close(2). TEST/DEBUG ONLY. This
+// simulates iOS defuncting sockets while avoiding fd-number reuse races.
+//
+//export TsnetDebugShutdownTCPConnections
+func TsnetDebugShutdownTCPConnections(sd C.int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return -1
+	}
+	matched, succeeded, err := debugShutdownTCPConnections()
+	// Logf is a caller-supplied field and is nil here (only UserLogf is set,
+	// R29 review); calling it unguarded was a nil dereference that took the
+	// app down with the first use of this hook (M6). The accept path below
+	// already guards it the same way.
+	if s.s.Logf != nil {
+		s.s.Logf("debug shutdown TCP sockets: matched=%d succeeded=%d err=%v", matched, succeeded, err)
+	}
+	if matched == 0 {
+		return s.recErr(fmt.Errorf("no TCP sockets found"))
+	}
+	// Partial success is enough for chaos injection; individual sockets can
+	// reject shutdown based on their state.
+	if succeeded == 0 && err != nil {
+		return s.recErr(err)
+	}
+	return s.recErr(nil)
+}
+
+//export TsnetCrashTest
+func TsnetCrashTest(sd, mode C.int) C.int {
+	if getServer(sd) == nil {
+		return -1
+	}
+	switch mode {
+	case 0:
+		panic("TsnetCrashTest: deliberate panic (mode 0)")
+	case 1:
+		go func() { panic("TsnetCrashTest: deliberate goroutine panic (mode 1)") }()
+		return 0
+	default:
+		panic("TsnetCrashTest: unknown mode")
+	}
+}
+
+//export TsnetRestartLoopback
+func TsnetRestartLoopback(sd C.int, addrOut *C.char, addrLen C.size_t, proxyOut *C.char, localOut *C.char) C.int {
+	return tsnetLoopback(sd, addrOut, addrLen, proxyOut, localOut, true)
+}
+
+//export TsnetLoopback
+func TsnetLoopback(sd C.int, addrOut *C.char, addrLen C.size_t, proxyOut *C.char, localOut *C.char) C.int {
+	return tsnetLoopback(sd, addrOut, addrLen, proxyOut, localOut, false)
+}
+
+func tsnetLoopback(sd C.int, addrOut *C.char, addrLen C.size_t, proxyOut *C.char, localOut *C.char, restart bool) C.int {
+	// Panic here to ensure we always leave the out values NUL-terminated.
+	if addrOut == nil {
+		panic("loopback_api passed nil addr_out")
+	} else if addrLen == 0 {
+		panic("loopback_api passed addrlen of 0")
+	} else if proxyOut == nil {
+		panic("loopback_api passed nil proxy_cred_out")
+	} else if localOut == nil {
+		panic("loopback_api passed nil local_api_cred_out")
+	}
+
+	// Start out NUL-termianted to cover error conditions.
+	*addrOut = '\x00'
+	*localOut = '\x00'
+	*proxyOut = '\x00'
+
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	var addr, proxyCred, localAPICred string
+	var err error
+	if restart {
+		addr, proxyCred, localAPICred, err = s.s.RestartLoopback()
+	} else {
+		addr, proxyCred, localAPICred, err = s.s.Loopback()
+	}
+	if err != nil {
+		return s.recErr(err)
+	}
+	if len(proxyCred) != 32 {
+		return s.recErr(fmt.Errorf("libtailscale: len(proxyCred)=%d, want 32", len(proxyCred)))
+	}
+	if len(localAPICred) != 32 {
+		return s.recErr(fmt.Errorf("libtailscale: len(localAPICred)=%d, want 32", len(localAPICred)))
+	}
+
+	out := unsafe.Slice((*byte)(unsafe.Pointer(addrOut)), addrLen)
+	n := copy(out, addr)
+	if n >= len(out) {
+		out[len(out)-1] = '\x00' // always NUL-terminate
+		return C.ERANGE
+	}
+	out[n] = '\x00'
+
+	// proxyOut and localOut are non-nil and 33 bytes long because
+	// they are defined in C as char cred_out[static 33].
+	out = unsafe.Slice((*byte)(unsafe.Pointer(proxyOut)), 33)
+	copy(out, proxyCred)
+	out[32] = '\x00'
+	out = unsafe.Slice((*byte)(unsafe.Pointer(localOut)), 33)
+	copy(out, localAPICred)
+	out[32] = '\x00'
+
+	return 0
+}
+
+//export TsnetEnableFunnelToLocalhostPlaintextHttp1
+func TsnetEnableFunnelToLocalhostPlaintextHttp1(sd C.int, localhostPort C.int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+
+	ctx := context.Background()
+	lc, err := s.s.LocalClient()
+	if err != nil {
+		return s.recErr(err)
+	}
+
+	st, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return s.recErr(err)
+	}
+	domain := st.CertDomains[0]
+
+	hp := ipn.HostPort(net.JoinHostPort(domain, strconv.Itoa(443)))
+	tcpForward := fmt.Sprintf("127.0.0.1:%d", localhostPort)
+	sc := &ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{
+			443: {
+				TCPForward:   tcpForward,
+				TerminateTLS: domain,
+			},
+		},
+		AllowFunnel: map[ipn.HostPort]bool{
+			hp: true,
+		},
+	}
+
+	lc.SetServeConfig(ctx, sc)
+	if !sc.AllowFunnel[hp] {
+		return s.recErr(fmt.Errorf("libtailscale: failed to enable funnel"))
+	}
+
+	return 0
+}

@@ -1,0 +1,245 @@
+# AGENTS.md
+
+Working notes for AI coding agents (and humans) on this directory. Read
+alongside [`README.md`](README.md) for build/setup, and
+[`../docs/PLAN.md`](../docs/PLAN.md) for what is being built. This file
+captures the non-obvious things that are easy to get wrong.
+
+Inherited from upstream aperture-plus and rewritten for this fork — where it
+says something surprising, it is because someone already got it wrong once.
+
+## What this is
+
+A SwiftUI app that loads exactly one page — a self-hosted KiroCrew dashboard —
+through an embedded userspace Tailscale node (`TailscaleKit` /
+`libtailscale`). One target, one scheme: **`Latchkey`**. Bundle id
+`net.lixom.latchkey`.
+
+It is a fork of tailscale/aperture-plus, which was a general multi-tab browser
+with a macOS app and a virtualization feature. All of that is deleted. If you
+find yourself re-adding tabs, an address bar, bookmarks, a Mac target or an
+exit-node toggle, check `../docs/PLAN.md` §1.3 first — they are explicit
+non-goals, not omissions.
+
+## Hard constraints (will break the build or the product if ignored)
+
+- **Do not "simplify" the split tunnel.** `TSNet/TailnetProxyPolicy.swift`
+  decides which hosts go through the SOCKS5 proxy. Only tailnet destinations
+  do; everything else loads direct. Collapsing this back to an unscoped
+  `ProxyConfiguration` is what caused every non-tailnet URL to fail with
+  `NSURLErrorDomain -1000` on real hardware. Read that file's header comment
+  before touching it. Gotchas it encodes, all measured:
+  - `matchDomains = []` means **proxy everything**; an empty-string entry also
+    matches everything. Never emit either.
+  - Matching is **label-wise suffix**, so a single-label rule for a peer named
+    `ai` would capture the whole public `.ai` TLD. Such names are withheld and
+    reached by FQDN rewrite instead.
+  - Peer names are **untrusted input**: a peer called `localhost` must not
+    become a rule.
+  - Rules are **sorted** so the 5s status poll does not republish the proxy
+    config under a live page load.
+- **`allowFailover` stays false.** It is the Network.framework default and it
+  is what makes a dead proxy fail the load instead of leaking a direct
+  connection. Flipping it would be a silent privacy regression with no visible
+  symptom.
+- **Swift 6 strict concurrency.** `SWIFT_STRICT_CONCURRENCY = complete`,
+  `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. The module is implicitly
+  `@MainActor` unless you opt out.
+- **iOS 26.0 deployment target**, `SDKROOT = iphoneos`. Built against the iOS
+  27 SDK; keep newer APIs behind availability guards.
+- **The app embeds `TailscaleKit.xcframework`**, which is not in git. Run
+  `make framework` first. A missing-framework error means only that.
+- **libtailscale is vendored source, not a submodule** (revision R16). It
+  lives in `ThirdParty/libtailscale/`, with the patched tailscale tree at
+  `ThirdParty/libtailscale/tailscale-patched/`. The first commit touching it
+  is a pristine, import-only copy; every change since is its own commit, so
+  `git log -- ThirdParty/libtailscale` is the complete delta from upstream.
+  Keep it that way: never fold a vendored-tree change into an unrelated
+  commit. Provenance and diff recipes are in `ThirdParty/VENDORED.md`.
+- **The old product name survives in three places on purpose. Do not tidy
+  them.** The app was renamed Latchkey → Latchkey on 2026-09-23 but **kept
+  its bundle id**, so anything keyed to that identity had to stay put:
+  - `net.lixom.latchkey` — bundle ids, the os_log subsystem, queue labels;
+  - `<Application Support>/Latchkey/` and its `-UI-Test*` siblings
+    (`App/Workspace/WorkspaceStore.swift`). Same bundle id means the same
+    container, so this directory is **live**: it holds each workspace's tsnet
+    state dir, i.e. the Tailscale node's identity. Renaming it logs the device
+    out and forces tailnet-lock re-signing and new grants, with no crash and
+    no error — the app just quietly starts over;
+  The node's **default** MagicDNS name is *not* in that list: it followed the
+  product to `latchkey-iphone` / `-ipad` later the same day. That is safe for
+  the opposite reason — it is only a default, a live install carries its own
+  hostname in `workspaces.json`, and the tailnet grant is scoped by address
+  range rather than node name. Storage identity must not move; a default may.
+
+  The vendored tree keeps its `latchkey_*` file and test names under R16, so
+  `scripts/test-all.sh` still runs `go test -run Latchkey`. Reasoning and the
+  scripted recipe: `scripts/rename-to-latchkey.py`, and the DECISIONS entry
+  of 2026-09-23.
+
+## How work arrives (from 2026-09-23)
+
+The project is no longer built from `../docs/PLAN.md`; its milestones are done
+bar the owner-and-device items. Work now comes as Olof's requests and
+feedback, and **every one of them gets a spec in `../docs/features/` before
+any code is written** — fine-grained enough to build from and to check
+afterwards. `../docs/features/README.md` states the rule and
+`TEMPLATE.md` the shape. Then: implement, test end to end, adversarial
+review, record in `../docs/DECISIONS.md`.
+
+**Tests are end-to-end.** A feature is done when a suite drives the real app
+against the fake-backed tailnet and asserts what the owner would see. Host
+unit tests are welcome for pure logic but do not substitute. Every test must
+be shown able to fail, and the spec says how.
+
+## Git workflow
+
+Single-developer repositories with no outside contributors, so:
+
+- **Commit directly to `main`** — here in `app/`, and in the parent repo
+  (whose one branch is `master`). No topic branches, no pull requests, no
+  merge commits of our own. If that changes, this section changes with it.
+- `app/` and the parent are **two separate git repositories** (the parent
+  gitignores `app/`). A milestone usually touches both: code here, docs and
+  the offline harness there. Commit each one.
+- `upstream` is tailscale/aperture-plus, kept only as a read-only fetch
+  source. Local `main` does not track it. Upstream is tracked by
+  **cherry-pick only** (revision R16) — never a merge. After the pbxproj
+  rewrites, the project rename and the vendoring, a merge would come back as
+  a wall of modify/delete conflicts, and merge compares tips rather than
+  commits, so careful commit hygiene here does not make it easier. Review
+  upstream commits touching `TSNet/` or the vendored tree and bring over the
+  ones worth having; record the last upstream SHA reviewed in
+  `../docs/DECISIONS.md`.
+- There are no remotes of our own: commits are local, and there is nothing to
+  push to.
+- New code goes in `App/`, not `TSNet/` — `TSNet/` is the upstream-shared
+  layer that cherry-picks land in, and new files there also need a
+  `membershipExceptions` pbxproj edit.
+
+## Adding source files (do NOT hand-edit project.pbxproj for new files)
+
+`App/` and `UITests/` are Xcode **synchronized folder groups**
+(`PBXFileSystemSynchronizedRootGroup`): a new `.swift` file dropped in either
+is compiled automatically, no project edit needed.
+
+`TSNet/` is the exception. It carries a `membershipExceptions` list in
+`project.pbxproj` naming the files that ARE compiled, and that list **does**
+gate compilation — a new file under `TSNet/` is silently not built until you
+add its name. This costs people an hour every time.
+
+Info.plist, assets and other non-source files are ordinary pbxproj references
+and do need a project edit.
+
+## Building
+
+```bash
+make framework     # TailscaleKit.xcframework (needs Go; slow the first time)
+make app           # simulator build
+make test-policy   # host-only unit tests, ~2s
+make help          # the rest
+```
+
+If you are an agent and the build fails with
+`sandbox-exec: sandbox_apply: Operation not permitted`, your shell forbids
+nested sandboxes. `make` detects this and adds `-disable-sandbox`; override
+with `NESTED_SANDBOX=1`/`0`. The giveaway that you have hit it *without* the
+fix is a flood of `cannot find '$binding' in scope` and `cannot assign to
+property: 'self' is immutable` errors, which look like Swift 6 concurrency
+breakage and are nothing of the kind — the real error is one
+`swift-plugin-server produced malformed response` line further up.
+
+Use the **simulator** for autonomous work: build, `simctl install`/`launch`,
+`simctl io booted screenshot` and XCUITest all work with no permission
+prompts. Device installs are `make device` (`scripts/device-run.sh`): the
+owner's free personal team is in the gitignored `.dev-team`, and it needs
+the phone paired with this Mac and connected; it stops with a plain reason
+if the phone is not ready. The signing certificate is made on the first
+device build.
+
+## Testing
+
+`../docs/PLAN.md` §6 is the strategy. The short version:
+
+- `make test-policy` — the host-only unit tests (split tunnel, hostname
+  qualification, log redaction), ~2s, no simulator. Run it after anything
+  touching routing, hostnames or logging.
+- The inherited XCUITest suite mostly needs a **real tailnet plus an auth key**
+  at `~/.aperture-ios-authkey`. Three tests are connection-independent:
+  `testAppLaunchesAndShowsStatus`, `testOpenAndCloseSettings`,
+  `testHomePageSettingPersistsAcrossSettingsReopen`.
+- The suites that need **no** tailnet, all driven from the parent repo:
+  - `scripts/test-offline.sh` — L1: the real app and WKWebView against a stub
+    SOCKS5 proxy and a fake dashboard, including the anti-leak tests.
+  - `scripts/test-tailnet.sh` — L2: the app's real tsnet node against a
+    host-side fake control plane (`testing/tsnet-harness`), with login and
+    device approval.
+  - `scripts/test-session.sh` — M4: the dashboard session against KiroCrew's
+    real 0.6.0 frontend, served by `testing/harness/fake_gateway.py`. It is
+    pinned to that bundle and refuses to run against another.
+  - `scripts/test-discovery.sh` — M5: gateway discovery on the L2 harness,
+    with a real-looking gateway peer, a non-gateway page, a dead peer and a
+    peer that never answers. It also enforces R26's timing budget from the
+    app's own log.
+
+  Each takes `--build`. Each fails unless every test in its file passed; a
+  stale build that runs nothing is not a pass. Add coverage there, not to
+  the tailnet-dependent suite.
+- **`scripts/test-all.sh` runs them by tier.** The default quick tier (about
+  4–5 min) is host tests, the vendored Go tests, L1 and L2, plus session or
+  discovery only when code they exercise changed since the last full pass.
+  `--full` (about 13 min) runs everything, including the inherited tests
+  (`scripts/test-inherited.sh`), and records what it passed. Use quick while
+  iterating and `--full` before every milestone or review commit.
+- The fake servers handshake TLS per connection (`testing/harness/
+  tls_accept.py`). Wrapping the listening socket instead lets one silent
+  client, such as a peer's half-open forward left by a killed app, stall
+  every later connection.
+
+Xcode 27 specifics worth knowing: `xcresulttool get object` is deprecated and
+needs `--legacy`; use `xcrun xcresulttool get test-results summary|tests`
+instead. `-resultBundlePath` errors if the path already exists. There is no
+`simctl suspend`, and `simctl status_bar` is cosmetic only — to simulate
+network loss, blackhole the stub proxy.
+
+## Other gotchas
+
+- **Logs** go to `os_log` under subsystem `net.lixom.latchkey`, category
+  `tsnet`, via `TSNet/Logging.swift`. Stream with
+  `xcrun simctl spawn booted log stream --predicate 'subsystem == "net.lixom.latchkey"'`.
+  In the app they are under Settings → Diagnostics → Logs, which is the only
+  diagnostic channel on a device that cannot be attached to a Mac.
+- **tsnet's own Go logs do not reach `os_log`.** The vendored library keeps
+  them in `Logs/tsnet.log` (`latchkey_locallog.go`, R29): capped, 0600,
+  redacted BEFORE writing (login links, query strings), and shown in Settings
+  → Node log. Raw process stderr goes to `stderr.log` (a Go panic from the
+  last run), and is not kept at all under Xcode or XCTest, where it mirrors
+  the unified log. `scripts/test-tailnet.sh` fails if any login link reaches
+  the app container. Anything that writes logs or caches to disk must keep
+  that true; LocalAPI sessions are ephemeral for the same reason.
+- **A vendored Go change needs `make framework`.** libtailscale's c-archive
+  targets never rebuild on their own; the app Makefile removes them and stamps
+  the xcframework with a hash of its sources. `make check-framework` (run by
+  every `make framework`) fails when they differ.
+- `TSNet/SocksLogProxy.swift` is a pass-through SOCKS5 relay in front of tsnet
+  that logs **every** connection attempt and its outcome. tsnet's own SOCKS
+  server logs only failures, and not the reply code, so without the relay the
+  absence of a log line is ambiguous. Disable with `-NoSocksLog`.
+- **iOS pre-filters by `matchDomains` against the literal URL host** before any
+  DNS search-path expansion, and never asks the proxy to decide. That is why a
+  bare `http://host/` must be rewritten to its FQDN to be routable.
+- **App Transport Security is on, with no exceptions** (R28). The app loads
+  one HTTPS gateway with a real certificate, and discovery probes HTTPS only
+  (R26). The LocalAPI and SOCKS traffic is loopback, which ATS does not
+  cover. Do not add `NSAllowsArbitraryLoads` back to reach a plain-HTTP
+  gateway: `chonk`'s `:5476` is out of v1 (D4).
+- One-shot surgery scripts live in `scripts/strip-*.py`, `scripts/prune-*.py`
+  and `scripts/repoint-*.py`. They are kept as the record of what was removed
+  from upstream and why. Upstream is tracked by cherry-pick only (R16), so
+  they are not something to re-run after a merge.
+- **Swift 6.4 `-O` hazard:** never pass an unapplied `someCharacterSet.contains`
+  as a predicate (`allSatisfy(set.contains)`). Under `-O` the compiler merged
+  two such thunks, and a whitespace check silently tested another set. Debug
+  and Testing (`-Onone`) were correct, so only Release would have broken.
+  Write the closure: `{ set.contains($0) }`. Host tests build with `-O` so
+  they catch this class of bug.

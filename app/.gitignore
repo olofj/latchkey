@@ -1,0 +1,21 @@
+*~
+.*~
+*.xcuserstate
+*/xcuserdata/*
+*.xcuserstate
+.DS_Store
+/build
+
+# Thunderboot kernel/initramfs are large binaries imported into the
+# working tree via `make stage-thunderboot-mac-app-artifacts` (or the
+# `mac-artifacts` alias). Only manifest.json is committed (hash reference).
+/MacApp/Thunderboot/Image
+/MacApp/Thunderboot/initramfs.cpio
+Packages/**/.build/
+Packages/**/.swiftpm/
+TODO.md
+TODO.workspaces.md
+
+# The owner's Apple Team ID for `make device` (DEVICE-CHECK.md); the project
+# leaves DEVELOPMENT_TEAM blank on purpose.
+/.dev-team

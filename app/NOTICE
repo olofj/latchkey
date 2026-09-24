@@ -1,0 +1,29 @@
+Latchkey
+=========
+
+This directory is a fork of:
+
+    tailscale/aperture-plus
+    https://github.com/tailscale/aperture-plus
+    forked at commit dba05551d3577825ecc44ca8dd0645c9eaca1f8c (2026-08-24)
+
+Copyright (c) Tailscale Inc & contributors.
+Licensed under the BSD 3-Clause License; see LICENSE.
+
+aperture-plus is an experimental WebKit browser for iOS and macOS with an
+embedded userspace Tailscale node, written almost entirely by Avery Pennarun.
+Latchkey strips it to a single-purpose client for a self-hosted KiroCrew
+dashboard: one window, one destination, no tabs, no address bar, no macOS
+target, and no virtualization.
+
+Modifications are copyright (c) 2026 Olof Johansson and are released under the
+same BSD 3-Clause License.
+
+It also vendors, as git submodules:
+
+    tailscale/libtailscale   ThirdParty/libtailscale
+    tailscale/tailscale      ThirdParty/libtailscale/tailscale-patched (patched)
+
+both BSD-3-Clause, Copyright (c) Tailscale Inc & contributors.
+
+Divergences from upstream are recorded in ../docs/DECISIONS.md.

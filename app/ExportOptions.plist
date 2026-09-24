@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- debugging = development signing for devices registered with the
+	     team (this method was formerly named "development"). Use
+	     "app-store" instead if you want to ship via TestFlight. -->
+	<key>method</key>
+	<string>debugging</string>
+	<!-- Latchkey: set this to your own Apple Developer team ID before
+	     running `make ipa`. Find it with:
+	         security find-identity -v -p codesigning
+	     or in Xcode > Settings > Accounts > (your Apple ID) > Manage
+	     Certificates. With a FREE personal team the reliable install path
+	     is Xcode's Run button, not `make ipa` — see docs/PLAN.md §4.3. -->
+	<key>teamID</key>
+	<string>REPLACE_WITH_YOUR_TEAM_ID</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>stripSwiftSymbols</key>
+	<true/>
+</dict>
+</plist>
