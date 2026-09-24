@@ -28,6 +28,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F7](F7-portable-discovery.md) | Discovery works on someone else's tailnet, and never overstates what it checked | **built** 2026-09-24 — discovery suite 10/10; one open question with a measurement behind it (§8) |
 | [F8](F8-node-start-failure.md) | A node that cannot start is a screen, not a crash | designed; ready to build. Extends F4 with one state (G7). Specced from the review's deferred finding, and found a **second** launch-path trap that fires earlier on the same fault |
 | [F9](F9-safe-area-insets.md) | The page gets the real safe-area insets (bug report: content bleeds into the Dynamic Island) | designed; ready to build. The dashboard is well-behaved — it declares `viewport-fit=cover` and uses `env(safe-area-inset-*)` 54 times — and we report zero |
+| [F10](F10-the-suite-can-see-the-screen.md) | The suite can see the screen: geometry has no instrument here, so layout bugs reach the owner first (F5, F9) | designed; ready to build. Keystone is fixture parity — the fake dashboard is *more forgiving* than the shipped frontend, so a correct safe-area test in L1 would still have passed |
 
 ## Still open, not yet answered
 
