@@ -4,11 +4,12 @@
 #
 #   make device [DEVICE=<udid>] [DEVELOPMENT_TEAM=<team id>]
 #
-# The team comes from DEVELOPMENT_TEAM, else app/.dev-team (gitignored; the
-# project leaves DEVELOPMENT_TEAM blank on purpose). A free personal team is
-# fine: automatic signing creates the certificate and a 7-day profile, and
-# registers the phone, on the first build (-allowProvisioningUpdates, using the
-# Apple ID in Xcode → Settings → Accounts).
+# The team comes from DEVELOPMENT_TEAM, else app/Local.xcconfig (gitignored,
+# and what the project itself reads, so Xcode's Run signs with the same team),
+# else the older app/.dev-team. The project carries no team of its own. A free
+# personal team is fine: automatic signing creates the certificate and a 7-day
+# profile, and registers the phone, on the first build
+# (-allowProvisioningUpdates, using the Apple ID in Xcode → Settings → Accounts).
 #
 # The phone must be paired with this Mac and reachable: a cable, or the same
 # local network once paired. Without DEVICE, the one paired physical device is
@@ -16,10 +17,30 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-TEAM="${DEVELOPMENT_TEAM:-$(cat .dev-team 2>/dev/null || true)}"
-if [[ -z "$TEAM" ]]; then
-    echo "error: no team: set DEVELOPMENT_TEAM, or put the Team ID in app/.dev-team" >&2
+# Local.xcconfig is the team Xcode's Run signs with (Latchkey.xcconfig
+# includes it). Signing with the same one here keeps the two installs one app:
+# the same bundle id under a different team is an install iOS refuses, and
+# removing the app to get past that deletes the node. .dev-team predates the
+# xcconfig and is still honoured, but the two must not disagree.
+XCCONFIG_TEAM=$(sed -nE 's/^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*([A-Za-z0-9]+).*/\1/p' \
+                    Local.xcconfig 2>/dev/null | tail -1 || true)
+DOTFILE_TEAM=$(cat .dev-team 2>/dev/null | tr -d '[:space:]' || true)
+if [[ -n "$XCCONFIG_TEAM" && -n "$DOTFILE_TEAM" && "$XCCONFIG_TEAM" != "$DOTFILE_TEAM" ]]; then
+    echo "error: app/Local.xcconfig says team $XCCONFIG_TEAM but app/.dev-team says $DOTFILE_TEAM." \
+         "Xcode's Run and this script would sign the same bundle id under different teams," \
+         "and iOS refuses the second install. Make them agree; Local.xcconfig is the one" \
+         "Xcode reads, so .dev-team can simply go." >&2
     exit 1
+fi
+TEAM="${DEVELOPMENT_TEAM:-${XCCONFIG_TEAM:-$DOTFILE_TEAM}}"
+if [[ -z "$TEAM" ]]; then
+    echo "error: no team: put 'DEVELOPMENT_TEAM = <Team ID>' in app/Local.xcconfig" \
+         "(docs/SETUP.md §3), or pass DEVELOPMENT_TEAM=<Team ID>" >&2
+    exit 1
+fi
+if [[ -n "${DEVELOPMENT_TEAM:-}" && -n "$XCCONFIG_TEAM" && "$DEVELOPMENT_TEAM" != "$XCCONFIG_TEAM" ]]; then
+    echo "note: signing with $DEVELOPMENT_TEAM from the environment; Xcode's Run would use" \
+         "$XCCONFIG_TEAM from app/Local.xcconfig, and the phone will not take both" >&2
 fi
 # The bundle id is a build setting from Latchkey.xcconfig (default) or
 # Local.xcconfig (yours), which an xcconfig outranks in xcodebuild's layering,
@@ -168,9 +189,10 @@ if ! build -allowProvisioningUpdates; then
         grep -E "error:|Signing|provisioning" build/device-build.log | sort -u | head -20 >&2
         if grep -q "No Accounts" build/device-build.log; then
             echo "note: no usable Apple ID here and no matching profile yet. Open Xcode," \
-                 "check Settings -> Accounts lists $(cat .dev-team 2>/dev/null), pick the" \
-                 "team under Latchkey -> Signing & Capabilities, and press Run once with" \
-                 "the phone selected. After that this script works on its own." >&2
+                 "check Settings -> Accounts lists team $TEAM (the project reads it from" \
+                 "app/Local.xcconfig, so there is nothing to pick under Signing &" \
+                 "Capabilities), select the phone and press Run once. After that this" \
+                 "script works on its own." >&2
         fi
         echo "error: device build failed; see app/build/device-build.log" >&2; exit 1
     fi
