@@ -38,6 +38,25 @@ struct GatewayPickerView: View {
     @State private var manualError: String?
     @State private var autoSelected = false
     @State private var shownAt = ContinuousClock.now
+    /// Collapsed by default: on a tailnet where every peer is the owner's, the
+    /// skipped list is empty, and an always-open section would be clutter for
+    /// the common case (F7 §8, Olof's to confirm).
+    @State private var showingSkipped = false
+
+    /// What the picker says when nothing answered. Never claims a count it did
+    /// not probe (F7 §4.2).
+    private var noneFoundText: String {
+        if discovery.candidateCount == 0 {
+            return "No computers on your tailnet could be a gateway. Enter one below."
+        }
+        if discovery.sweepTruncated {
+            return "No Kiro Crew gateway answered. Checked \(discovery.probedCount) of "
+                + "\(discovery.candidateCount) computer(s) before the search ran out of time — "
+                + "keep searching to try the rest, or enter one below."
+        }
+        return "No Kiro Crew gateway answered among all \(discovery.probedCount) "
+            + "computer(s) on your tailnet. Enter one below."
+    }
 
     private var ready: Bool { model.localStatus != nil && model.proxyConfiguration != nil }
 
@@ -63,11 +82,38 @@ struct GatewayPickerView: View {
                         .accessibilityIdentifier("gateway-\(gateway.host)")
                     }
                     if discovery.phase == .finished && discovery.gateways.isEmpty {
-                        Text(discovery.candidateCount == 0
-                             ? "No computers on your tailnet could be a gateway. Enter one below."
-                             : "No Kiro Crew gateway answered among \(discovery.candidateCount) computer(s) on your tailnet. Enter one below.")
+                        // Three cases, and none may name a number it did not
+                        // probe (F7 §4.2). This used to report candidateCount
+                        // as "checked", but the sweep abandons whatever is
+                        // pending at the 12 s deadline — so on a large tailnet
+                        // it claimed sixty machines when it checked about
+                        // twenty-four.
+                        Text(noneFoundText)
                             .foregroundStyle(.secondary)
                             .accessibilityIdentifier("gateway-none")
+                    }
+                    if !discovery.skipped.isEmpty {
+                        // Offered rather than hidden: a gateway declined for its
+                        // owner or its OS is exactly the machine someone on a
+                        // shared tailnet is looking for, and the filters stay on
+                        // by default because a personal tailnet is mostly phones.
+                        DisclosureGroup(isExpanded: $showingSkipped) {
+                            ForEach(discovery.skipped, id: \.host) { peer in
+                                Button {
+                                    discovery.probeAnyway(peer.host)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(peer.host).font(.body.monospaced())
+                                        Text(peer.reason).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                .accessibilityIdentifier("gateway-skipped-\(peer.host)")
+                            }
+                        } label: {
+                            Text("\(discovery.skipped.count) computer(s) were not checked")
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("gateway-skipped-summary")
+                        }
                     }
                     if discovery.phase == .proxyUnhealthy {
                         Text("The tailnet connection isn't passing traffic yet. Search again in a moment.")
@@ -77,9 +123,15 @@ struct GatewayPickerView: View {
                     // In the list, not the toolbar: the dashboard's gear sits
                     // over the navigation bar's trailing corner (M5 review).
                     Button {
-                        discovery.start(savedHost: savedHost, shownAt: .now)
+                        // Continue from where a truncated sweep stopped, so a
+                        // large tailnet's tail is reachable at all; a finished
+                        // sweep starts over as before (F7 §4.3).
+                        discovery.start(savedHost: savedHost, shownAt: .now,
+                                        continueFrom: discovery.sweepTruncated
+                                            ? discovery.nextCandidateIndex : 0)
                     } label: {
-                        Label("Search again", systemImage: "arrow.clockwise")
+                        Label(discovery.sweepTruncated ? "Keep searching" : "Search again",
+                              systemImage: "arrow.clockwise")
                     }
                     .disabled(discovery.phase == .probing || !ready)
                     .accessibilityIdentifier("gateway-refresh")

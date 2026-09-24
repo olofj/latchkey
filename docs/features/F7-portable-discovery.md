@@ -127,6 +127,35 @@ only cancels the previous run, bumps the generation and spawns the sweep
 The existing summary log line gains `probed=N/M truncated=yes|no`, so a device
 log answers this without a debugger.
 
+**As built, three corrections to the above** (2026-09-23) — each because the
+specified version would have let the picker state something untrue:
+
+1. **Truncation is derived after the task group, not set in the `.deadline`
+   case, and its test is "a candidate has no verdict" rather than "`pending`
+   still has an element".** A probe that was *dispatched* and was still in
+   flight when the deadline cancelled it has no verdict either, and the
+   specified version counted it as done. That both overstated the count and,
+   worse, made the resume cursor skip it for good. So: `sweepTruncated` and
+   `nextCandidateIndex` come from `plan.first { !probedHosts.contains($0.peer.host) }`,
+   and the cursor is the **first** candidate without a verdict, not where
+   dispatch stopped. Re-probing a few that did answer is the cheap side of
+   that trade. This buys the invariant §4.2's wording depends on: not
+   truncated means every candidate was probed.
+2. **`probedCount` counts distinct hosts, and accumulates across a chain of
+   continuations.** A counter would have been wrong twice: a continuation
+   always re-probes the saved gateway (it is candidate 0), and §4.3's resume
+   may re-probe a peer that timed out inside the dispatched window — so the
+   owner would read "checked 25 of 24". It is `probedHosts.count`, reset only
+   when `continueFrom == 0`. `probeAnyway` (§4.4) deliberately does **not**
+   count: that peer is not one of the candidates `candidateCount` counts, and
+   counting it would report more computers checked than there were to check.
+3. **`candidateCount` stays the whole ordered candidate list on a
+   continuation**, not the resumed slice. It is the denominator the picker
+   divides by, so shrinking it would turn "checked 16 of 17" into a
+   finished-looking search of a 40-machine tailnet. `gateways` is likewise
+   kept across a continuation: the tap means "find *more*", and clearing the
+   list would make what was already found vanish.
+
 ### 4.2 Say what was checked
 
 `GatewayPickerView`'s empty state (`:66-68`) becomes three cases, and no case
@@ -137,6 +166,13 @@ may claim a number it did not probe:
 | `candidateCount == 0` | unchanged (no candidates at all) |
 | `!sweepTruncated` | "No Kiro Crew gateway answered among all \(probedCount) computer(s) on your tailnet. Enter one below." |
 | `sweepTruncated` | "No Kiro Crew gateway answered. Checked \(probedCount) of \(candidateCount) computer(s) in \(elapsed) — the sweep ran out of time. Search again to continue." |
+
+As built, the truncated line drops `\(elapsed)` — the number the owner can act
+on is how many machines are left, and an elapsed time in a sentence about an
+incomplete search reads as an excuse — and says "keep searching to try the rest",
+matching the button, which relabels itself *Keep searching* when the sweep was
+truncated. The button's two jobs were otherwise indistinguishable: *Search
+again* meaning "start over" and meaning "continue" are different promises.
 
 ### 4.3 Continue rather than restart
 
@@ -166,10 +202,22 @@ unchanged. Offline and expired peers are **not** reported as skipped: they
 cannot answer, so listing them would be noise. The reported set is exactly the
 three §1.1 rules plus "no MagicDNS name".
 
+As built, the reported set is the three §1.1 rules **only**. "No MagicDNS name"
+is unreachable: the loop drops a peer with an empty host before `exclusion` is
+asked, and a peer with no name is nothing the owner could tap anyway.
+
 Tapping one probes that host with the same `probe(_:session:)` and, if it
 answers, appends it to `gateways` like any other. It is not persisted as an
 exception: if it is really the gateway, choosing it saves it, and the saved
 gateway is always probed first thereafter.
+
+`probeAnyway` applies the same split-tunnel gate the sweep does — a host no
+proxy rule carries is refused rather than probed, because that probe would go
+direct, off the tailnet. A skipped peer comes from the netmap, so in practice
+this only ever drops a malformed name; it is there so the tap cannot become the
+one path to the network that skips the check. A peer that is probed and does not
+answer stays listed, with "— tried, no answer" appended to its reason, so the
+owner can see the filter was not what hid a gateway.
 
 ### 4.5 Deliberately unchanged
 
