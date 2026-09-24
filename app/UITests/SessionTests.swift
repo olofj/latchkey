@@ -577,12 +577,20 @@ final class SessionTests: XCTestCase {
 
     /// Signs in the way a user does: mint a link at the gateway, put
     /// `kirocrew token`-shaped output on the clipboard, tap Paste.
+    ///
+    /// Also the positive control for `auth_me_ok` (review, 2026-09-23): the
+    /// sign-out and reset tests hold that counter FLAT -- "nothing answered
+    /// 200 since" -- and a counter the fake stopped reporting would hold
+    /// flat forever. A successful sign-in must move it: the app's own check
+    /// is a 200 from /api/auth/me, which the fake counts as auth_me_ok
+    /// before it counts app_auth_checks. If this does not move, those flat
+    /// assertions prove nothing, and this fails first.
     private func signIn(_ app: XCUIApplication, kind: String) async throws {
         let minted = try JSONSerialization.jsonObject(
             with: try await Self.post("\(Self.gatewayControl)/__mint?kind=\(kind)")) as? [String: Any]
         let url = try XCTUnwrap(minted?["url"] as? String)
         let link = try XCTUnwrap(minted?["link"] as? String)
-        let before = counter(try await gatewayState(), "app_auth_checks")
+        let before = try await gatewayState()
         UIPasteboard.general.string = """
             Dashboard sign-in links (valid 5 minutes):
               http://localhost:5476/?token=\(link)
@@ -595,8 +603,11 @@ final class SessionTests: XCTestCase {
         paste.tap()
         XCTAssertTrue(element(app, "token-sheet").waitForNonExistence(timeout: 30),
                       "signing in dismisses the sheet")
-        let after = counter(try await gatewayState(), "app_auth_checks")
-        XCTAssertGreaterThan(after, before, "the APP confirmed the session with its own /api/auth/me")
+        let after = try await gatewayState()
+        XCTAssertGreaterThan(counter(after, "app_auth_checks"), counter(before, "app_auth_checks"),
+                             "the APP confirmed the session with its own /api/auth/me")
+        XCTAssertGreaterThan(counter(after, "auth_me_ok"), counter(before, "auth_me_ok"),
+                             "and that check was a 200, counted as auth_me_ok: the counter the sign-out and reset tests hold flat is live")
     }
 
     /// How many times the page has asked for a token in this launch.
@@ -618,8 +629,19 @@ final class SessionTests: XCTestCase {
         try JSONSerialization.jsonObject(with: try await Self.get("\(Self.gatewayControl)/__state")) as? [String: Any] ?? [:]
     }
 
-    private func counter(_ state: [String: Any], _ name: String) -> Int {
-        (state["counters"] as? [String: Int])?[name] ?? 0
+    /// A gateway counter. Every name read here is one the fake initialises
+    /// (fake_gateway.py, `self.counters`), so a missing key is the fake no
+    /// longer reporting it: a failure, not a zero (review, 2026-09-23 -- an
+    /// assertion that a counter did not move passes on 0 == 0 forever).
+    private func counter(_ state: [String: Any], _ name: String,
+                         file: StaticString = #filePath, line: UInt = #line) -> Int {
+        let counters = state["counters"] as? [String: Any] ?? [:]
+        guard let value = counters[name] as? Int else {
+            XCTFail("the fake gateway reports no integer counter named \(name) (it has: \(counters.keys.sorted()))",
+                    file: file, line: line)
+            return 0
+        }
+        return value
     }
 
     private func violations(_ state: [String: Any]) -> Int {
