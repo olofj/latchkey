@@ -19,7 +19,8 @@ approval — there are four steps and none of them involves access control:
 
 1. Run KiroCrew on a computer, with authentication on.
 2. Put its dashboard on the tailnet with `tailscale serve`.
-3. Build the app onto your iPhone from Xcode, with your own signing team.
+3. Build the app onto your iPhone with your own signing team and bundle id,
+   set once in `app/Local.xcconfig` before the first install.
 4. Sign the app's node into your tailnet, pick the gateway, paste a token.
 
 Everything below is the detail, plus what changes if your tailnet is not flat.
@@ -89,38 +90,83 @@ manually* still works and is the answer. (Loosening these filters is tracked as
 
 ## 3. What your Mac needs
 
-- Xcode, and an Apple ID added under Settings → Accounts. A **free personal
-  team is enough** — there is no TestFlight or ad-hoc distribution here.
-- Go, for the first build of the embedded Tailscale library.
-- Your iPhone paired to this Mac by cable, with **Developer Mode** on
-  (Settings → Privacy & Security → Developer Mode, which only appears once the
-  phone has been connected to a Mac running Xcode).
+- Xcode (the author builds with Xcode 27; the app targets iOS 26), with an
+  Apple ID added under Xcode → Settings → Accounts. A **free personal team is
+  enough** — there is no TestFlight or ad-hoc distribution here. Note the
+  ten-character **Team ID** the Accounts pane shows next to it.
+- Go (the author builds with 1.27), for the embedded Tailscale library.
+- Your iPhone on iOS 26 or later, paired to this Mac by cable — unlock it and
+  tap *Trust* — with **Developer Mode** on (Settings → Privacy & Security →
+  Developer Mode; the switch only appears once the phone has been connected to
+  a Mac running Xcode, and turning it on restarts the phone).
 
-Set two things so you are not building under the author's identity:
+### Your identity: set once, before the first install
 
-```sh
-echo <YOUR-TEAM-ID> > app/.dev-team          # gitignored
-export LATCHKEY_BUNDLE_ID=com.example.latchkey
+Two build settings are yours to choose, and once an install exists, yours to
+keep: the **signing team** and the **bundle id**. The project ships with no
+team and with the author's bundle id as the default, which you must not reuse.
+Put both in `app/Local.xcconfig` (gitignored). The project reads that file, so
+Xcode's Run and `make device` see the same two values:
+
+```
+DEVELOPMENT_TEAM = ABCDE12345
+LATCHKEY_BUNDLE_ID = com.example.latchkey
 ```
 
-`LATCHKEY_BUNDLE_ID` defaults to the author's id, which you should not reuse:
-it decides your app's container, its Keychain access and how the tailnet node's
-state is stored. Set it once, before the first install, and do not change it
-afterwards — changing it later starts the app over with a fresh node.
+`ABCDE12345` is your Team ID; the bundle id is any reverse-DNS name you own.
+Do **not** `export` these in your shell instead: Xcode inherits nothing from a
+shell, and two builds that disagree on the bundle id install two apps — the
+second one empty, i.e. a brand-new Tailscale node. An exported value is ignored
+by design, and `make device` says so if it sees one.
 
-Then:
+Why "once": the bundle id decides the app's container on the phone, and the
+container holds the tsnet node's identity (its key), the gateway choice and the
+dashboard session. The team decides who signed the app. Changing either after
+the first install:
+
+| You change | What the phone does | What it costs |
+|---|---|---|
+| the bundle id | Installs a **second** app beside the first, with an empty container | The new app is a new node: new login, new approval or grant, new token. The old node stays in your tailnet until you remove it |
+| the team | **Refuses the install** — same bundle id, different signer | Nothing yet. The tempting fix, delete the app and install again, deletes the node with it |
+
+The safe order for either change is to open the app first and run **Settings →
+Reset app**, which signs out of the dashboard, logs the node out of the tailnet
+(expiring its key) and deletes everything stored on the phone. Then delete the
+app, change the setting, install. What is left is an expired node in your admin
+console to remove, not a live orphan.
+
+### Build and install
 
 ```sh
 cd app
 make framework     # embedded Tailscale library; needs Go, slow the first time
-make app           # simulator build, to check the toolchain
-make device        # install on the phone
+make app           # optional: simulator build, to check the toolchain
+make device        # build (Release), install and launch on the paired phone
 ```
 
-`make device` explains what is missing rather than failing obscurely. A free
-personal team can only install from Xcode on the paired Mac, so the very first
-install — the one that creates the signing certificate — may need a manual Run
-in Xcode.
+`make app` builds for a simulator named "iPhone 17"; pass
+`SIM_NAME="<a simulator Xcode lists>"` if you have no such device, or skip it.
+
+`make device` checks the phone first (paired, reachable, Developer Mode on) and
+explains what is missing rather than failing obscurely. It signs with the team
+in `Local.xcconfig`, installs, and launches whichever bundle id it just built.
+
+The very first install may still need Xcode: minting the signing certificate
+needs your Apple ID to be usable from the command line, and an account added in
+Xcode's UI sometimes is not (`make device` reports "no usable Apple ID here").
+If so, open `app/Latchkey.xcodeproj`, choose your phone as the destination and
+press Run once. There is nothing to pick under Signing & Capabilities — the
+team is already there from `Local.xcconfig`. After that `make device` works on
+its own, against the profile Xcode made. Both paths install the same app: same
+bundle id, same team.
+
+On the phone, the first time only: Settings → General → VPN & Device Management
+→ trust your developer profile. Until you do, the icon is there and the app
+refuses to open.
+
+**A free team's profile lasts 7 days.** After that the app stops launching; its
+data is intact, and `make device` (or Run) over the installed app renews the
+profile without touching the node. Deleting the app is the only thing that does.
 
 ## 4. First run on the phone
 
