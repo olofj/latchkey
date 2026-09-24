@@ -118,8 +118,11 @@ enum PageScriptSources {
     /// credentials is the contract -- `omit` would make the logout a no-op
     /// that still answers 200. The header only marks the app's own requests,
     /// so the test gateway can tell them from the page's identical calls;
-    /// servers ignore it. The abort is what keeps a sign-out from hanging on
-    /// a gateway that is down.
+    /// servers ignore it. The abort is what keeps a check or a sign-out from
+    /// hanging on a gateway that is down, or on a connection that is open
+    /// and answers nothing; every caller in the app passes a timeout
+    /// (`SessionManager.checkTimeout`, `DashboardSignOut.requestTimeout`).
+    /// 0 still means none, for the contract's sake, but nothing sends it.
     static let sessionFetch = #"""
     const controller = new AbortController();
     const timer = timeoutMs > 0 ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;

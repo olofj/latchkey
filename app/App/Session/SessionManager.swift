@@ -29,6 +29,9 @@
 //   - The R22 handshake: if a gateway document commits and the bridge does
 //     not say `ready` within `handshakeTimeout`, the page's own banner is put
 //     back, so a broken bridge cannot leave the user with no way to sign in.
+//   - Every question it asks the page is bounded (`checkTimeout`): a
+//     connection that is open but answers nothing must end in "unanswered",
+//     which R30 acts on, not in a check that never returns.
 //
 
 import Combine
@@ -54,9 +57,14 @@ protocol SessionHost: AnyObject {
 }
 
 extension SessionHost {
-    /// The M4 check: a GET, waited for.
+    /// The M4 check: a GET, waited for -- but only `SessionManager.checkTimeout`
+    /// long. `nil` here once meant "wait", and a connection that was open but
+    /// answered nothing made the check wait forever: `verify` never returned,
+    /// R30's unanswered-check probe never ran, and the token sheet kept its
+    /// spinner across close-and-reopen while sign-out, which always passed a
+    /// timeout, still worked.
     func sessionFetchStatus(_ path: String) async -> Int? {
-        await sessionFetchStatus(path, method: "GET", timeout: nil)
+        await sessionFetchStatus(path, method: "GET", timeout: SessionManager.checkTimeout)
     }
 }
 
@@ -91,6 +99,20 @@ final class SessionManager: NSObject, ObservableObject {
     static let messageName = "kiroSession"
     static let handshakeTimeout: Duration = .seconds(8)
     static let redemptionTimeout: Duration = .seconds(30)
+    /// How long one `/api/auth/me` check may wait for the page's fetch before
+    /// the abort in `PageScriptSources.sessionFetch` ends it.
+    ///
+    /// 4 s is R39's per-probe budget (`GatewayDiscovery.requestTimeout`),
+    /// sized from the device's own relayed intercontinental path for the
+    /// same shape of request -- TCP, TLS, one GET -- "with room to spare". A
+    /// check from an already-loaded page is at most that shape and usually
+    /// reuses the page's connection. `verify` asks twice with a 1 s pause,
+    /// so "unanswered" is reached after 9 s: inside the single 10 s the
+    /// sign-out request (`DashboardSignOut.requestTimeout`) has always had.
+    /// Erring short costs little -- an unanswered check decides nothing, and
+    /// the next navigation or bridge event asks again -- while no bound at
+    /// all is what left the sheet spinning.
+    static let checkTimeout: Duration = .seconds(4)
 
     private weak var host: SessionHost?
     /// Called when `/api/auth/me` got no answer twice in a row (R30 review):
@@ -310,6 +332,14 @@ final class SessionManager: NSObject, ObservableObject {
         let status = await host?.sessionFetchStatus("/api/auth/me")
         if status == 200 {
             logger.log("Session: auth-required during sign-in, but the session answers; ignored")
+            return
+        }
+        guard status != nil else {
+            // The server neither agreed nor disagreed within `checkTimeout`.
+            // Not evidence the link failed: the redemption timer verifies
+            // once more and, if still nothing, says the gateway did not
+            // answer, which is what happened.
+            logger.log("Session: auth-required during sign-in, and the check got no answer; the sign-in keeps waiting")
             return
         }
         if redemption != nil { failRedemption() }

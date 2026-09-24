@@ -58,7 +58,7 @@ function call(path, method, timeoutMs, behaviour) {
   expect(init.credentials === 'same-origin', "the page's cookies go along (credentials: same-origin)", JSON.stringify(init));
   expect(init.cache === 'no-store', 'never answered from a cache');
   expect(init.headers && init.headers['X-Latchkey-Check'] === '1', "marked as the app's own request");
-  expect(r.timers.set === 0, 'timeoutMs 0: no timer (the /api/auth/me check keeps its old behaviour)');
+  expect(r.timers.set === 0, 'timeoutMs 0: no timer (the contract; no caller in the app sends 0 any more -- test-session-manager.sh pins that)');
 
   r = await call('/api/auth/logout', 'POST', 10000, 200);
   init = r.calls[0].init;
