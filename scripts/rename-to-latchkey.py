@@ -39,8 +39,34 @@ and why `--check` looks in both directions: a run that leaves an old name
 behind is obvious, but a run that quietly corrupts `KiroCrew` into
 `Latchkeycrew` would pass a one-directional check and break discovery.
 
-Never add a bare `kiro` -> `latchkey` rule. Every rule below names a WHOLE
-former product token.
+Never match a bare `kiro`. The pattern below always requires a whole former
+product token: `kiro` plus a separator plus `roam` or `nomad`.
+
+WHY THE RULES ARE A PATTERN AND NOT A TABLE OF LITERALS
+------------------------------------------------------
+The first version of this script carried a hand-written list of spellings. Two
+things went wrong with that, both found afterwards:
+
+1. **A spelling nobody listed.** The probe header the app sends -- now
+   `X-Latchkey-Check` -- was Title-Case-Hyphenated, because that is what HTTP
+   headers look like, and Title-Case-Hyphenated was the one shape the table did
+   not have. It survived the rename, the history scrub and a passing `--check`:
+   live in `PageScriptSources.swift`, asserted by a host test, on the wire.
+   `docs/DECISIONS.md` records that the PREVIOUS rename of this same header
+   missed `.js` files. It is a header that gets missed.
+
+2. **The table could not survive the scrub.** A table of old spellings is a file
+   full of old spellings, so `scripts/history-scrub.py` rewrote this script's own
+   rules into `("Latchkey", "Latchkey")`. `--check` then read the NEW name as the
+   forbidden token and flagged every correct file in the repository -- a guard
+   that fails on everything is a guard nobody can use.
+
+A pattern assembled from `kiro` (which KiroCrew legitimately contains) and
+`roam`/`nomad` (ordinary words) fixes both: it matches every case and separator
+without enumerating them, and it contains no forbidden spelling, so a scrub has
+nothing to corrupt. It lives in `scripts/product_names.py`, shared with the
+history scrub, because two copies of this rule is how the shapes drifted apart
+in the first place.
 """
 
 import argparse
@@ -48,44 +74,13 @@ import os
 import subprocess
 import sys
 
-# Masked before any substitution and restored afterwards.
-PRESERVE = [
-    # The product this app is a client of. See the header.
-    "KiroCrew", "Kiro Crew", "kirocrew", "kiro_crew", "KIROCREW", "KIRO_CREW",
-    "kiro-crew",
-    # Upstream's identity, inherited with the fork and not ours to rename.
-    # `~/.aperture-ios-authkey` is a real path on the owner's machine and the
-    # two APERTURE_* variables are read by upstream-shared code.
-    "aperture-plus", "aperture-ios-authkey", "APERTURE_AUTHKEY",
-    "APERTURE_EPHEMERAL", "tailscale/aperture",
-]
+from product_names import LITERAL_SUBS, OLD_RE, PRESERVE, rewrite
 
-# Applied in order, longest first, once PRESERVE is masked. Both former
-# product names are here: the tree still carries `Latchkey` in the container
-# path and the vendored file names, and `Latchkey` everywhere else.
-SUBS = [
-    ("Latchkey", "Latchkey"),
-    ("Latchkey", "Latchkey"),
-    ("Latchkey", "Latchkey"),
-    ("Latchkey", "Latchkey"),
-    # Mixed-case spellings that occur in Go identifiers. `Latchkey` (capital K,
-    # lowercase r) was missed on the first vendored pass and survived as
-    # `TestLatchkeyLocalLog...`; --check skipped the vendored tree, so only a
-    # hand grep caught it. Both are listed now and --check covers that tree.
-    ("Latchkey", "Latchkey"),
-    ("Latchkey", "Latchkey"),
-    ("LATCHKEY", "LATCHKEY"),
-    ("LATCHKEY", "LATCHKEY"),
-    # The compile flag. It has no NOMAD/ROAM in it, so it needs its own rule.
-    ("LATCHKEY_TEST_HOOKS", "LATCHKEY_TEST_HOOKS"),
-    ("latchkey", "latchkey"),
-    ("latchkey", "latchkey"),
-    ("latchkey", "latchkey"),
-    ("latchkey", "latchkey"),
-    ("LatchkeyUITests", "LatchkeyUITests"),   # after the bare forms, harmless
-]
-
-# Paths to move, directories before their contents.
+# Paths to move, directories before their contents. SPENT: the project and
+# xcconfig have been moved, and both sides of these entries now read Latchkey.
+# Left as the record of what the move was, and harmless -- `run` skips entries
+# whose source equals their destination. `moves()` also FINDS paths carrying a
+# former token rather than relying on this list, so a file added later is caught.
 MOVES = [
     ("app/Latchkey.xcodeproj", "app/Latchkey.xcodeproj"),
     ("app/Latchkey.xcconfig", "app/Latchkey.xcconfig"),
@@ -108,8 +103,6 @@ EXTENSIONS = {".swift", ".plist", ".xcscheme", ".pbxproj", ".sh", ".py", ".md",
 NAMED = {"Makefile", "makefile", ".gitignore", "LICENSE", "NOTICE", "AGENTS.md",
          "README", "CLAUDE.md"}
 SKIP_DIRS = {".git", "build", "DerivedData", ".run", "node_modules", "__pycache__"}
-# Files that must spell the old names to do their job.
-SCRUBBERS = {"rename-to-latchkey.py", "history-scrub.py", "history-scrub.sh"}
 
 # The vendored tree is upstream source with OUR files added to it. Only the
 # files we added carry our name, and renaming them is a vendored change, which
@@ -128,21 +121,14 @@ def target_files(root):
     return out
 
 
-def rewrite_body(body):
-    for i, keep in enumerate(PRESERVE):
-        body = body.replace(keep, f"\x00P{i}\x00")
-    for old, new in SUBS:
-        body = body.replace(old, new)
-    for i, keep in enumerate(PRESERVE):
-        body = body.replace(f"\x00P{i}\x00", keep)
-    return body
+rewrite_body = rewrite          # the shared rule; see scripts/product_names.py
 
 
 def run(root, apply, vendored_only=False):
     changed, vendored_hits = [], []
     for path in target_files(root):
         rel = os.path.relpath(path, root)
-        if rel in DELETE or os.path.basename(rel) in SCRUBBERS:
+        if rel in DELETE:
             continue
         try:
             body = open(path, encoding="utf-8").read()
@@ -218,31 +204,70 @@ def all_text_files(root):
     return out
 
 
+def selfcheck():
+    """Prove the rule before trusting anything it says. Returns problems.
+
+    Two directions, on planted samples rather than on the repository, because a
+    guard that cannot demonstrate itself is only an opinion:
+
+      * every shape the old names were written in must be rewritten, including
+        the Title-Case-Hyphenated one that survived a whole rename;
+      * no preserved name may be touched -- `"Kiro Crew"` above all, because
+        `GatewayCandidates` recognises a gateway by matching that literal, and
+        corrupting it makes discovery find nothing with no error at all.
+
+    The second direction replaced a derived check that had never once run: it
+    compared each preserved name against `rewrite_body` OF that name, and
+    `rewrite_body` masks preserved names first, so the two sides were equal by
+    construction and the dict was always empty. It looked bidirectional for as
+    long as nobody printed it.
+    """
+    bad = []
+    planted = [
+        ("Kiro" "Nomad", "Latchkey"),            # Swift and Go identifiers
+        ("Kiro" " " "Roam", "Latchkey"),         # prose
+        ("X-Kiro" "-Nomad" "-Check", "X-Latchkey-Check"),   # the HTTP header
+        ("kiro" "-roam", "latchkey"),            # repository and directory names
+        ("KIRO" "_NOMAD", "LATCHKEY"),           # shell and build variables
+        ("KIRO" "_TEST_HOOKS", "LATCHKEY_TEST_HOOKS"),
+    ]
+    for sample, want in planted:
+        got = rewrite_body(sample)
+        if got != want:
+            bad.append(f"the rule itself is wrong: {sample!r} -> {got!r}, expected {want!r}")
+    for keep in PRESERVE:
+        if rewrite_body(keep) != keep:
+            bad.append(f"the rule eats a name that must survive: {keep!r} -> "
+                       f"{rewrite_body(keep)!r}")
+        if OLD_RE.search(keep):
+            bad.append(f"the pattern reaches inside {keep!r} -- it has been loosened, "
+                       "and discovery matches on that literal")
+    return bad
+
+
 def check(root):
     """Bidirectional. Neither an old name left behind nor a preserved one eaten."""
-    bad = []
-    old_tokens = [o for o, _ in SUBS]
-    # A corrupted preserved literal: what PRESERVE would look like if the
-    # substitutions HAD reached inside it. Derived, so a new PRESERVE entry is
-    # covered automatically.
-    corrupted = {rewrite_body(k): k for k in PRESERVE if rewrite_body(k) != k}
+    bad = selfcheck()
+    if bad:
+        return bad + ["refusing to check the repository: the rule is broken, so "
+                      "nothing it would say about your files can be trusted"]
     for path in all_text_files(root):
         rel = os.path.relpath(path, root)
-        # The scrubbers ARE the substitution tables: they necessarily spell the
-        # old names, and a checker that flagged them would be unusable.
-        if os.path.basename(rel) in SCRUBBERS:
-            continue
+        # NOTHING is exempt. The earlier version skipped the scrubbers, because
+        # a table of old spellings necessarily contains old spellings -- and that
+        # exemption is how the probe header and a mixed-case real tailnet name
+        # both stayed hidden. Now that every rule is a pattern assembled from
+        # harmless parts, no file needs to spell a forbidden name, so no file
+        # gets a pass.
         try:
             body = open(path, encoding="utf-8").read()
         except (UnicodeDecodeError, IsADirectoryError):
             continue
-        for tok in old_tokens:
-            if tok in body:
-                bad.append(f"{rel}: still carries the old token {tok!r}")
-        for wrong, right in corrupted.items():
-            if wrong in body:
-                bad.append(f"{rel}: {right!r} was corrupted into {wrong!r} -- "
-                           "discovery matches on that literal")
+        for hit in sorted({m.group(0) for m in OLD_RE.finditer(body)}):
+            bad.append(f"{rel}: still carries a former product name ({hit!r})")
+        for old, _ in LITERAL_SUBS:
+            if old in body:
+                bad.append(f"{rel}: still carries the old token {old!r}")
     # The fingerprint itself, by name, because it is the one that fails silently.
     fp = os.path.join(root, "app/App/Discovery/GatewayCandidates.swift")
     if os.path.exists(fp):

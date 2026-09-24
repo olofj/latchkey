@@ -2572,11 +2572,17 @@ whose name Olof's grants may not admit. Rename it only together with that
 grant.
 
 **Also renamed, in lockstep because both ends are ours:** the app's probe
-header `X-Latchkey-Check` → `X-Latchkey-Check`, sent by
-`App/Browser/PageScriptSources.swift` and counted by
-`testing/harness/fake_gateway.py`. A host test asserts the name
-(`scripts/test-session-fetch.js`) and caught the first pass, which had missed
-`.js` files entirely.
+header, now `X-Latchkey-Check`, sent by `App/Browser/PageScriptSources.swift`
+and counted by `testing/harness/fake_gateway.py`. A host test asserts the name
+(`scripts/test-session-fetch.js`).
+
+This header has now been missed by **two** renames out of two, for a different
+reason each time: the first pass did not look in `.js` files at all, and the
+second had no rule for the Title-Case-Hyphenated spelling that HTTP headers are
+written in, so it stayed on the wire as a former product name through a passing
+`--check` and a history rewrite. Both rename scripts now match a *pattern* —
+`kiro` + any separator + `roam`/`nomad`, case-insensitive — rather than a table
+of spellings, which is what a table can never be complete about.
 
 **Not renamed:** the repository directories (`~/src/latchkey`, and the
 `latchkey` / `latchkey-app` names in the GitHub question). Nothing in the
