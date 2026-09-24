@@ -2727,3 +2727,120 @@ because the failure mode matters more than the typo.
 
 **Still true and worth restating:** a policy here blocks the agent from pushing,
 so Olof performs the first upload to `origin` himself.
+
+## 2026-09-23 — Full adversarial review: one mistake wearing four costumes, and the rules adopted against it
+
+**Why:** three defects reached a "verified" state in one day because the checks
+meant to catch them could not fail. Olof asked for a full-codebase adversarial
+review. Seven reviewers ran in parallel over test integrity, concurrency,
+network invariants, secrets, harness fidelity, persistence and documentation;
+every finding below was reproduced against the code before it was accepted, and
+several of the reviewers' own best hypotheses were disproved by measurement and
+dropped.
+
+### The systemic finding, which is worth more than any single defect
+
+**Four protections had each been written correctly once and never carried to the
+sibling path**, and in three of the four a comment asserted the parity that did
+not exist:
+
+| Protection | Applied to | Missing from |
+|---|---|---|
+| real-tailnet-name guard | one hardcoded tailnet | every other real tailnet |
+| on-tailnet check before an origin is trusted | the gateway picker | Settings → Gateway |
+| fetch abort so a dead gateway cannot hang the app | sign-out | the session check |
+| case folding in the fixture-tailnet guard | the Swift half | the shell half |
+
+**Rule adopted:** a protection goes where every caller must pass through it, not
+at each call site. `GatewayCandidates.manualGateway` is now the only way to turn
+typed text into a trusted origin and its normaliser is `private`, so a third
+entry point cannot be added that forgets the check. Where two implementations of
+one rule must differ (the Go and Swift redactors), the divergence is stated at
+both sites with its reason.
+
+### Rules adopted about verification itself
+
+1. **A check's "not found" branch must never also be its error branch.** `grep`
+   exits 0 for a match, 1 for no match and **2 for an error**; three R1/R10 disk
+   scans put 1 and 2 in the same `else`, so an unreadable file plus a real token
+   hit printed "ok". Judge the output and the status separately.
+2. **A negative instrument needs positive evidence that it was looking.**
+   `check-no-log-upload.sh` concluded "no upload" from zero sockets, which is
+   also what a crashed app produces; it now requires the node alive and at least
+   one expected endpoint seen, and gained a `--replay` mode so the verdict itself
+   is testable.
+3. **A guard proves itself on planted input before it judges anything.**
+   `check-fixture-tailnets.sh` now self-checks on a mixed-case sample every run;
+   a broken guard announces itself instead of passing everything.
+4. **Match a secret literally, never by shape.** The login-link scan grepped for
+   a hex pattern; the shape belongs to the control server. It now greps for the
+   literal links the harness published, and an empty list is an error.
+5. **A rename verifier must check both directions.** `--check` listed leftover
+   old names and was blind to names the rename wrongly *changed* — which it had:
+   vendored `latchkey_*` references became `latchkey_*`, and a log predicate in
+   PLAN.md matched nothing. Now derived from `PRESERVE`; `--check --rev cbfdc31`
+   reproduces the four damaged lines.
+6. **Show the test failing, then say how.** Every fix here cites it: 26/34
+   workspace documents, 12/16 redaction rows, 7/18 session-manager rows, 7 of 52
+   Swift redaction rows, 4 gateway-gate rows.
+
+### Product defects fixed
+
+- **A main-frame 5xx committed as the document.** `decidePolicyFor
+  navigationResponse` never inspected the status. Behind `tailscale serve`, whose
+  reverse proxy has no error handler, a Kiro Crew restart answers **502 on a live
+  port**: TLS succeeds, no `NSURLError` fires, the relay renders no verdict, and
+  a blank page commits with no overlay and no retry. Specified in F4 as D10/D11
+  rather than patched, because **a `403` with `X-Auth-Required` must keep
+  committing** — refusing it would turn a gateway-refused sign-in into "couldn't
+  reach the gateway". The harness's "down" mode closes after TLS, which models a
+  host going away, not a restart; both shapes are needed.
+- **The session check could hang forever**, disabling R30's own detector. Bounded
+  at 4 s, derived from R39's probe budget and checked against sign-out's 10 s.
+- **Settings → Gateway trusted an off-tailnet host** and would have sent it a
+  pasted token. One gate now, failing closed, with the refusal displayed.
+- **D1: every navigation was submitted to the system fraud-check service.**
+  `isFraudulentWebsiteWarningEnabled = false`; the test asserts the OS default is
+  on first, so it cannot pass vacuously.
+- **Every SOCKS failure read as "URL format error"** (-1000 is what WebKit
+  reports for all of them). `.urlFormat` turns out to have **no live producer**.
+- **A malformed `workspaces.json` silently destroyed the node identity.** The
+  guarantee now lives in `save()`, which re-reads before every write and refuses
+  to clobber a file it cannot read — so no caller can reintroduce the loss. A
+  hand-written `init(from:)` tolerates missing fields, and `ephemeral` defaults
+  to **false, never the launch flag**, because control deletes offline ephemeral
+  nodes: the wrong default would *be* the identity loss. **New
+  `WorkspaceDefinition` fields must be added to `CodingKeys` and `init(from:)`
+  with a default or as optional** — F5 and F6 both claim safety via synthesized
+  `Codable` and must be updated.
+- **Login links reached disk unredacted.** Every node shares the process logtail,
+  whose filch buffer got the raw line while only the `tsnet.log` echo was
+  redacted; a process killed mid-login left it until next launch (5.8 KB of
+  undrained stderr found in the live container). Redaction now wraps the buffer,
+  proved by reading the file before any drain. Both rules are charset-agnostic
+  and case-insensitive; the L2 harness mints **hostile** login links by default
+  so this cannot regress silently.
+
+### Build identity
+
+`app/Latchkey.xcconfig` (tracked, default `net.lixom.latchkey`) including a
+gitignored `Local.xcconfig` is the single identity file, because an environment
+variable **cannot** work: `xcodebuild` imports the shell environment, Xcode.app
+inherits no shell, so an export gave the two different bundle ids — two apps,
+one with an empty container, i.e. a fresh node. The team leaves
+`project.pbxproj`: with it there, a `Local.xcconfig` team line was silently
+outranked. Safe order for any identity change: Reset app, then delete, then
+change, then install.
+
+### Left open, deliberately
+
+- `TSNetManager.startTailscale` calls `fatalError` when the node cannot be
+  created, so an unopenable state dir is a crash loop whose only exit is
+  deleting the app — which is identity loss. Needs a design, not a quick guard.
+- A relay with a dead upstream surfaces as `-1009`, which
+  `SocksRelayRecovery.isTransportFailure` does not classify. By design (the
+  status poll repairs it), recorded so the next reader does not treat it as a
+  gap.
+- The real tailnet name and two host addresses remain in **git history** (17 and
+  1 commit each). The working tree is clean; rewriting history is Olof's call and
+  is cheapest before the first push.
