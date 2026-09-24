@@ -208,6 +208,17 @@ struct SettingsView: View {
                     Button("Find gateways…") { showingGatewayPicker = true }
                         .disabled(viewModel.workspaceForSettings.model.proxyConfiguration == nil)
                         .accessibilityIdentifier("settings-find-gateways")
+                    // A refused entry must say so here. `commitGateway` now
+                    // goes through the same on-tailnet gate as the picker, so
+                    // typing a public host is rejected rather than trusted --
+                    // but a silent rejection would look like the field simply
+                    // not working, and the owner would retype it.
+                    if let error = viewModel.gatewayError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("settings-gateway-error")
+                    }
                     Text("Applied when you press Return or close Settings.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
