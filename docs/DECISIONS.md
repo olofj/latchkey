@@ -2853,6 +2853,47 @@ change, then install.
   1 commit each). The working tree is clean; rewriting history is Olof's call and
   is cheapest before the first push.
 
+## 2026-09-24 — F7 built: a test on a boundary is a coin flip
+
+F7 (portable discovery) is in, discovery suite 10/10. The feature itself is
+small — report what was probed, resume at a cursor, offer the peers a filter
+declined — and the interesting part was the fixture.
+
+**A large-tailnet test has to clear the boundary, not sit on it.** A 12 s sweep
+deadline at concurrency 12 with a 4 s probe timeout reaches roughly 36
+candidates. The first version of both large-tailnet tests presented 40 peers,
+and one run logged `probed=43/43 truncated=no` beside `probed=40/44
+truncated=yes` — the same mechanism, opposite verdicts, one candidate apart.
+Both now present 90. The rule worth keeping: when a test's subject is a
+threshold, pick a fixture at a multiple of it, and get the threshold from the
+code rather than from a guess.
+
+**Many online-but-unreachable peers delay the reachable ones.** With 40 such
+peers, probes to `gw` and `dash` — both genuinely reachable — reached the proxy
+(`socks[41] CONNECT gw…:443`) and never completed inside 4 s. Not the relay's
+session cap: `SocksRelayCapacity` logged no refusal or eviction in the whole
+run, which was worth checking before believing the tidier explanation. Mostly a
+fixture artefact, because a real tailnet reports an unreachable peer as
+**offline** and `exclusion` drops those before probing — but the one environment
+that does produce visible, traffic-dropping peers is a restricted tailnet during
+device purgatory, i.e. this one. Recorded as F7 §8 with the measurement, not
+waved off, and the test was rewritten to assert what the feature promises (the
+count climbs on every tap and reaches the total) rather than something the
+fixture cannot deliver.
+
+**Log lines that a script parses are instruments, and they have scopes.** F7
+first reworded `Discovery: probing N of M peer(s)` and appended its counters
+inside the sweep summary; both are parsed by `scripts/test-discovery.sh` and the
+summary's regex is anchored with `$`, so the parser silently recorded no sweep at
+all. Restored byte-for-byte, counters on their own line. Then the counters
+turned out to mean something different from the line above them — per-chain
+versus per-sweep, because `probedCount` counts distinct hosts across
+continuations — so `answered + failed == probed` holds only for a sweep that is
+not a continuation. The suite now checks both forms. A hardcoded allow-list of
+sweep signatures also had to go: it cannot survive tests whose probe counts vary
+by a dozen between runs, so it applies to the small fixed tailnet only and
+invariants apply everywhere.
+
 ## 2026-09-23 — two ways a green suite can mean nothing
 
 Both found in one evening, both while verifying work that had already been
