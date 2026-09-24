@@ -271,17 +271,29 @@ final class LatchkeyUITests: XCTestCase {
     /// Connection-independent: Settings is always reachable (from the gate's
     /// gear pre-connection, or the browser's gear post-connection).
     /// Hermetic: reads the original value, changes it, verifies, then restores.
-    func testHomePageSettingPersistsAcrossSettingsReopen() throws {
+    /// Settings refuses a gateway the tailnet does not carry, and says why.
+    ///
+    /// This test used to assert the opposite: that any URL typed here persisted
+    /// across a relaunch. That behaviour was removed deliberately (`65543c4`,
+    /// the M5 review's finding) — a gateway that is not on the tailnet would be
+    /// loaded DIRECT, off the tailnet, and would then be the origin a pasted
+    /// sign-in link is sent to. `commitGateway` now goes through the same gate
+    /// as the picker's manual entry, and this suite is connection-independent,
+    /// so there is no peer list to check a name against and every entry is
+    /// refused pending one.
+    ///
+    /// A silent refusal would look like the field simply not working, so the
+    /// reason must be on screen — that is the part worth pinning.
+    ///
+    /// The persistence property this test used to cover has not been dropped:
+    /// `DiscoveryTests.testTheChosenGatewayPersistsAcrossRelaunch` covers it
+    /// against a real tailnet, which is the only place it can now be true.
+    func testSettingsRefusesAGatewayTheTailnetDoesNotCarry() throws {
         let app = XCUIApplication()
-        // Start from a known home page so the test isn't polluted by whatever
-        // a prior run left in UserDefaults. (Cleared before the relaunch below
-        // so we observe what actually persisted, not a freshly-reset value.)
         app.launchArguments = ["-UITestResetHomePage", "-UITestResetLogin"]
         app.launch()
 
         XCTAssertTrue(waitForBrandHeader(app, timeout: 20))
-
-        // --- First visit: read the current value, then change it ---
         let settingsButton = app.buttons["settings-button"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 10),
                       "Settings gear should be reachable")
@@ -289,78 +301,53 @@ final class LatchkeyUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10),
                       "Settings screen should appear after tapping the gear")
 
-        let homePageField = app.textFields["home-page-field"]
-        XCTAssertTrue(homePageField.waitForExistence(timeout: 10),
-                      "Home Page text field should be present in Settings")
-        // A value guaranteed to differ from the reset default. The marker goes
-        // in the host, not the path: the gateway is persisted as its origin
-        // (revision R2), so a path would be dropped by design. Lowercase,
-        // because the stored origin's host is lowercased.
-        let marker = String(UUID().uuidString.prefix(8)).lowercased()
-        let newValue = "https://\(marker).example.test"
+        let field = app.textFields["home-page-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10),
+                      "the gateway field should be present in Settings")
+        let offTailnet = "https://\(String(UUID().uuidString.prefix(8)).lowercased()).example.test"
+        field.clearAndType(text: offTailnet)
+        XCTAssertEqual(field.value as? String, offTailnet, "typing should update the field")
 
-        homePageField.clearAndType(text: newValue)
-        XCTAssertEqual(homePageField.value as? String, newValue,
-                       "Typing should update the Home Page field")
+        // Return commits it, which is where the gate runs. Typed into the FIELD,
+        // not the app: `app.typeText` goes to whatever holds focus, which after
+        // `clearAndType` is not reliably this field.
+        field.typeText("\n")
+        // `descendants(matching: .any)`, not `app.staticTexts[...]`: an
+        // identifier on a Text inside a Form Section is not reliably surfaced as
+        // a staticText, and the narrow query found nothing while the app's own
+        // log showed the refusal had happened.
+        // Settings is a half sheet and a Form builds its rows lazily, so the
+        // Gateway section's rows leave the tree the moment the keyboard shifts
+        // the scroll position — the first attempt at this test found neither the
+        // error NOR the field it had just typed into. `reveal` scrolls it back.
+        let error = app.descendants(matching: .any)
+            .matching(identifier: "settings-gateway-error").firstMatch
+        if !error.reveal(scrolling: app.collectionViews.firstMatch) {
+            // Say what WAS on screen, so the next failure is diagnosable from
+            // the log rather than needing another run.
+            let ids = app.descendants(matching: .any).allElementsBoundByIndex
+                .prefix(60).map(\.identifier).filter { !$0.isEmpty }
+            XCTFail("a refused gateway must say so; a silent refusal reads as a "
+                    + "broken field. Identifiers on screen: \(ids)")
+        }
+        XCTAssertFalse(error.label.isEmpty, "and the reason must be readable: \(error.label)")
 
-        // Dismiss Settings WITHOUT pressing Return — this is exactly the
-        // scenario that was broken.
+        // And it is not kept. Dismiss, relaunch, look again: the field is back
+        // to whatever the reset default is, never the off-tailnet host.
         app.buttons["settings-done-button"].tap()
-        let backAtRoot1 = waitForHittable(app.buttons["settings-button"], timeout: 10)
-        if !backAtRoot1 { attachScreenshot(app, named: "homepage-not-back-to-root") }
-        XCTAssertTrue(backAtRoot1,
+        XCTAssertTrue(waitForHittable(app.buttons["settings-button"], timeout: 10),
                       "Should return to the root after Done")
-
-        // --- Kill and relaunch so a fresh SettingsViewModel reads from
-        // UserDefaults rather than a possibly-reused in-memory instance ---
-        app.launchArguments = ["-UITestResetLogin"]   // do NOT reset home page — we want to see what saved
+        app.launchArguments = ["-UITestResetLogin"]   // do NOT reset: see what saved
         app.terminate()
         app.launch()
-        XCTAssertTrue(waitForBrandHeader(app, timeout: 20),
-                      "App should relaunch")
-
-        // --- Second visit (fresh process): the change must have persisted ---
-        app.buttons["settings-button"].tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10),
-                      "Settings screen should reappear after relaunch")
-
-        let homePageFieldAfter = app.textFields["home-page-field"]
-        XCTAssertTrue(homePageFieldAfter.waitForExistence(timeout: 10))
-        let persistedValue = (homePageFieldAfter.value as? String) ?? ""
-
-        attachScreenshot(app, named: persistedValue == newValue ? "homepage-saved" : "homepage-lost")
-        XCTAssertEqual(persistedValue, newValue,
-                       "Home Page should persist across a relaunch after " +
-                       "dismissing Settings without pressing Return. Got " +
-                       "'\(persistedValue)', expected '\(newValue)'.")
-
-        // --- Restore the original value so the test is hermetic ---
-        // We do NOT restore by typing `originalValue` back into the field:
-        // `clearAndType`'s fixed-count delete clear is unreliable on longer
-        // strings, and a partial clear concatenates the typed text with
-        // leftover suffix from the old value (e.g. the default gateway URL +
-        // `FADC5F69`), writing a corrupted URL to
-        // UserDefaults that then makes every later connected test load a
-        // bogus path and 404. Instead, relaunch with `-UITestResetHomePage`,
-        // which resets each workspace's home page to the default at launch —
-        // 100% reliable, no typing. (The persistence-under-typing claim was
-        // already verified above; the restore is just cleanup.)
-        app.launchArguments = ["-UITestResetHomePage", "-UITestResetLogin"]
-        app.terminate()
-        app.launch()
-        XCTAssertTrue(waitForBrandHeader(app, timeout: 20),
-                      "App should relaunch after home-page reset")
-        // Verify the reset took: the home page field should show the default.
+        XCTAssertTrue(waitForBrandHeader(app, timeout: 20), "App should relaunch")
         app.buttons["settings-button"].tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10))
-        let restoredField = app.textFields["home-page-field"]
-        XCTAssertTrue(restoredField.waitForExistence(timeout: 10))
-        // Since M5 the default is "no gateway": the field is empty (XCUITest
-        // reports an empty field's placeholder as its value).
-        let restored = (restoredField.value as? String) ?? ""
-        XCTAssertTrue(restored.isEmpty || restored == restoredField.placeholderValue,
-                      "Home page should be reset to no gateway after the reset relaunch; got \(restored)")
-        app.buttons["settings-done-button"].tap()
+        let after = app.textFields["home-page-field"]
+        XCTAssertTrue(after.waitForExistence(timeout: 10))
+        let persisted = (after.value as? String) ?? ""
+        XCTAssertFalse(persisted.contains("example.test"),
+                       "a refused gateway must not be persisted; got '\(persisted)'")
     }
 
     // MARK: - Lifecycle / proxy-bounce integration tests
@@ -608,7 +595,7 @@ final class LatchkeyUITests: XCTestCase {
         // the `nav-error-overlay`. So: reach the URL, then assert the error
         // overlay did NOT appear. (A 404 would be a *successful* load from
         // WebKit's view — but the 404 flakiness was a test-isolation bug, now
-        // fixed: see testHomePageSettingPersistsAcrossSettingsReopen.)
+        // fixed: see testSettingsRefusesAGatewayTheTailnetDoesNotCarry.)
         let reached = waitForPageLoaded(in: app, contains: Self.defaultGatewayHostFragment, timeout: 60)
         attachScreenshot(app, named: reached ? "page-loaded" : "page-load-failed")
         XCTAssertTrue(reached,

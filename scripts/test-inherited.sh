@@ -15,7 +15,7 @@ APP="$ROOT/app"
 SIM_NAME="${SIM_NAME:-iPhone 17}"
 LOG_DIR="$APP/build/inherited-logs/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOG_DIR"
-TESTS=(testAppLaunchesAndShowsStatus testOpenAndCloseSettings testHomePageSettingPersistsAcrossSettingsReopen)
+TESTS=(testAppLaunchesAndShowsStatus testOpenAndCloseSettings testSettingsRefusesAGatewayTheTailnetDoesNotCarry)
 
 UDID=$(xcrun simctl list devices available -j | python3 -c "
 import json, sys

@@ -314,8 +314,15 @@ prior connected test logged the sim in):
 - `testOpenAndCloseSettings` — tap the gear → "Settings" → Done → back at the
   root (verified via the gear becoming hittable again — it's in both the gate
   and the browser).
-- `testHomePageSettingPersistsAcrossSettingsReopen` — hermetic Home-Page
-  persistence across a `terminate()` + `launch()` (see the test's doc comment).
+- `testSettingsRefusesAGatewayTheTailnetDoesNotCarry` — Settings → Gateway puts
+  a typed name through the same on-tailnet gate as the picker, shows the reason
+  when it refuses, and persists nothing. It replaced a test that asserted the
+  opposite — that any URL typed there survived a relaunch — which was the
+  behaviour the M5 review removed, because an off-tailnet gateway loads DIRECT
+  and then becomes the origin a pasted sign-in link is sent to. Gateway
+  persistence itself now lives in `DiscoveryTests`
+  (`testTheChosenGatewayPersistsAcrossRelaunch`), against a real tailnet, which
+  is the only place it can still be true.
 
 Connected (require a working tailnet connection; authenticate via an auth key —
 see below — and otherwise **fail** so a broken connection is never silently

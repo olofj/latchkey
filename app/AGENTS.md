@@ -213,7 +213,7 @@ device build.
 - The inherited XCUITest suite mostly needs a **real tailnet plus an auth key**
   at `~/.aperture-ios-authkey`. Three tests are connection-independent:
   `testAppLaunchesAndShowsStatus`, `testOpenAndCloseSettings`,
-  `testHomePageSettingPersistsAcrossSettingsReopen`.
+  `testSettingsRefusesAGatewayTheTailnetDoesNotCarry`.
 - The suites that need **no** tailnet, all driven from the parent repo:
   - `scripts/test-offline.sh` — L1: the real app and WKWebView against a stub
     SOCKS5 proxy and a fake dashboard, including the anti-leak tests.
