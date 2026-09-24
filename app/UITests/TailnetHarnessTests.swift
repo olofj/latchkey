@@ -357,17 +357,31 @@ final class TailnetHarnessTests: XCTestCase {
     }
 
     /// The PAGE is back, not just the node (R31 review): cut the page's
-    /// WebSocket at the dashboard, as a gateway restart does, and require a
-    /// reconnect received after the cut. The dashboard is reachable only
-    /// through the tailnet, so the report crossed the recovered node.
+    /// WebSocket at the dashboard, as a gateway restart does, and require
+    /// the SAME document to report a reconnect after the cut: its
+    /// `reconnects` counter above what it was, the socket open, the report
+    /// received after the cut. The page reports every second, so a report
+    /// that is merely newer than the cut is what a page that never lost its
+    /// socket sends too, and that is all the first version asked for
+    /// (review, 2026-09-23; LifecycleHarnessTests already requires the
+    /// counter). The dashboard is reachable only through the tailnet, so
+    /// the report crossed the recovered node.
     private func assertThePageReconnects(file: StaticString = #filePath, line: UInt = #line) async throws {
+        let before = try await waitForReport(timeout: 10) { $0["doc"] as? String != nil }
+        let doc = before["doc"] as? String ?? ""
+        let reconnectsBefore = before["reconnects"] as? Int ?? 0
         let cutAt = Date().timeIntervalSince1970
-        _ = try await Self.post("\(Self.dashboardControl)/__drop_ws")
+        let reply = try await Self.post("\(Self.dashboardControl)/__drop_ws")
+        let dropped = (try JSONSerialization.jsonObject(with: reply) as? [String: Any])?["dropped"] as? Int ?? 0
+        XCTAssertGreaterThanOrEqual(dropped, 1, "the dashboard dropped the page's WebSocket (nothing to reconnect from otherwise)",
+                                    file: file, line: line)
         let back = try await waitForReport(timeout: 30) {
-            $0["ws"] as? String == "ws:open" && ($0["received_at"] as? Double ?? 0) > cutAt
+            $0["doc"] as? String == doc && $0["ws"] as? String == "ws:open"
+                && ($0["reconnects"] as? Int ?? 0) > reconnectsBefore
+                && ($0["received_at"] as? Double ?? 0) > cutAt
         }
-        XCTAssertGreaterThan(back["received_at"] as? Double ?? 0, cutAt,
-                             "the page reconnected through the tailnet after the recovery", file: file, line: line)
+        XCTAssertGreaterThan(back["reconnects"] as? Int ?? 0, reconnectsBefore,
+                             "the same page reconnected through the tailnet after the recovery: \(back)", file: file, line: line)
     }
 
     /// The node's state as the app itself reports it (Settings → Status):
