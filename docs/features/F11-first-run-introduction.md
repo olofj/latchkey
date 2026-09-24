@@ -152,11 +152,13 @@ belongs to the same family as F10 §4.4 and should use that helper once it exist
 
 ## 8. Open questions and owner actions
 
-- **Does the grant step belong in the list?** "It needs access to the machine
-  running the dashboard" is accurate but assumes the reader administers their own
-  tailnet. For a user on someone else's tailnet the action is "ask an admin".
-  Proposed wording covers both: "it needs access to that machine — if the tailnet
-  is not yours, an admin grants it." Confirm with Olof.
+- ~~Does the grant step belong in the list?~~ **Settled 2026-09-24**: Olof
+  administers his own tailnet, so the step reads "it needs access to the machine
+  running the dashboard" — direct, in the second person, no conditional. The
+  "if the tailnet is not yours, an admin grants it" variant was considered and
+  dropped: it hedges the one sentence that has to be actionable, for a reader
+  this app does not yet have. Revisit if Latchkey is ever used on a tailnet the
+  user does not administer.
 - **Owner action:** criterion 5, on a device with no prior install. A reinstall
   over an existing container is not the same test.
 
