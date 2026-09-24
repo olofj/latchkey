@@ -152,11 +152,13 @@ Single developer, no outside contributors, so:
 - **The vendored delta is `git log -- app/ThirdParty/libtailscale`** (note the
   prefix). The app's 272 commits were rewritten to carry `app/` when the
   repositories were collapsed, precisely so this path-limited log still
-  returns the complete delta — it reports 32 commits, as it did before. Of
-  those, 13 are the delta (above the import commit), one is the import, and
-  the 18 below it are pre-R16 submodule-pointer bumps that only moved a
-  gitlink; `git diff <import> -- app/ThirdParty/libtailscale` (the
-  `VENDORED.md` recipe) shows the delta and nothing else.
+  returns the complete delta. Of those commits, the ones **above** the import
+  are the delta, one is the import itself, and the 18 **below** it are pre-R16
+  submodule-pointer bumps that only moved a gitlink; `git diff <import> --
+  app/ThirdParty/libtailscale` (the `VENDORED.md` recipe) shows the delta and
+  nothing else. This used to quote an exact count, which went stale the moment
+  another vendored commit landed and then read as a discrepancy to whoever
+  checked it — the structure above is the invariant, the number is not.
 - New code goes in `App/`, not `TSNet/` — `TSNet/` is the upstream-shared
   layer that cherry-picks land in, and new files there also need a
   `membershipExceptions` pbxproj edit.
