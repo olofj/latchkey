@@ -132,18 +132,32 @@ IP_ALLOWED = {
 # Personal details found in the pre-publish review, none of which the checks
 # above could see because none of them was looking: a personal email address, a
 # device UDID, a home directory. Checked as CLASSES, like the MagicDNS names, so
-# a new one fails without anyone having to name it. Our own files only: upstream
-# uses `user@gmail.com`-style examples, and those are R16's to keep.
+# a new one fails without anyone having to name it.
+#
+# Each carries an exclusion for the GENERIC forms, and both exclusions were
+# earned by a false positive on the pre-publish run rather than guessed:
+#
+#   * The email rule matched this file, because the comment here used to spell
+#     out a placeholder address as an example. A detector that trips over its own
+#     documentation is the third instance of that shape in this pass, so the
+#     placeholder local-parts are excluded AND the comment no longer spells one.
+#   * The path rule matched one inherited commit message -- upstream's macOS
+#     TestFlight commit, which pastes a build log full of its own build
+#     machine's home directory. That is upstream's, already published in
+#     tailscale/aperture-plus, and not the owner's to scrub. `admin` joins the
+#     generic account names for the same reason `runner` is already there.
 PERSONAL = {
     "a personal-provider email address":
-        re.compile(rb"(?i)\b[a-z0-9._%+-]+@(?:gmail|googlemail|icloud|me|mac|"
+        re.compile(rb"(?i)\b(?!(?:user|name|someone|owner|you|example)@)"
+                   rb"[a-z0-9._%+-]+@(?:gmail|googlemail|icloud|me|mac|"
                    rb"hotmail|outlook|live|yahoo|proton|protonmail)\.(?:com|me)\b"),
     # Modern iOS UDIDs: 8 hex, dash, 16 hex. The 0000 chip-id prefix keeps it from
     # matching arbitrary hex. Placeholders must be all zeros after the prefix.
     "an iOS device UDID":
         re.compile(rb"\b0000[0-9A-Fa-f]{4}-(?!0{16}\b)[0-9A-Fa-f]{16}\b"),
     "a home-directory path":
-        re.compile(rb"/(?:Users|home)/(?!runner\b|user\b|me\b|you\b)[a-z][a-z0-9._-]+/"),
+        re.compile(rb"/(?:Users|home)/(?!runner\b|user\b|me\b|you\b|admin\b)"
+                   rb"[a-z][a-z0-9._-]+/"),
 }
 # The identities allowed in commit headers: the owner's published one, and
 # upstream's authors, whose commits arrive with the vendored history.
