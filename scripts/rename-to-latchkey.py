@@ -108,6 +108,8 @@ EXTENSIONS = {".swift", ".plist", ".xcscheme", ".pbxproj", ".sh", ".py", ".md",
 NAMED = {"Makefile", "makefile", ".gitignore", "LICENSE", "NOTICE", "AGENTS.md",
          "README", "CLAUDE.md"}
 SKIP_DIRS = {".git", "build", "DerivedData", ".run", "node_modules", "__pycache__"}
+# Files that must spell the old names to do their job.
+SCRUBBERS = {"rename-to-latchkey.py", "history-scrub.py", "history-scrub.sh"}
 
 # The vendored tree is upstream source with OUR files added to it. Only the
 # files we added carry our name, and renaming them is a vendored change, which
@@ -140,7 +142,7 @@ def run(root, apply, vendored_only=False):
     changed, vendored_hits = [], []
     for path in target_files(root):
         rel = os.path.relpath(path, root)
-        if rel in DELETE or rel.endswith("rename-to-latchkey.py"):
+        if rel in DELETE or os.path.basename(rel) in SCRUBBERS:
             continue
         try:
             body = open(path, encoding="utf-8").read()
@@ -226,7 +228,9 @@ def check(root):
     corrupted = {rewrite_body(k): k for k in PRESERVE if rewrite_body(k) != k}
     for path in all_text_files(root):
         rel = os.path.relpath(path, root)
-        if rel.endswith("rename-to-latchkey.py"):
+        # The scrubbers ARE the substitution tables: they necessarily spell the
+        # old names, and a checker that flagged them would be unusable.
+        if os.path.basename(rel) in SCRUBBERS:
             continue
         try:
             body = open(path, encoding="utf-8").read()

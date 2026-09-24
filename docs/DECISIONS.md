@@ -2849,9 +2849,81 @@ change, then install.
   `SocksRelayRecovery.isTransportFailure` does not classify. By design (the
   status poll repairs it), recorded so the next reader does not treat it as a
   gap.
-- The real tailnet name and two host addresses remain in **git history** (17 and
-  1 commit each). The working tree is clean; rewriting history is Olof's call and
-  is cheapest before the first push.
+- ~~The real tailnet name and two host addresses remain in **git history**. The
+  working tree is clean; rewriting history is Olof's call and is cheapest before
+  the first push.~~ **Done 2026-09-24**, before the first push, by
+  `scripts/history-scrub.sh` — see that day's entry below. The "two host
+  addresses" turned out not to be his: the survey found only fixtures,
+  documentation examples, a public resolver, Tailscale's own range and
+  deliberately-named endpoints in the no-log-upload guard.
+
+## 2026-09-24 — Latchkey: the rename that moved the identity, and the history scrub
+
+The previous name was trademark-encumbered. Investigation the day before made
+that clear enough that it had to leave the product *and* the repository, so this
+rename is unlike September's in two ways.
+
+**It moved the app's identity.** September deliberately froze the bundle id, the
+os_log subsystem and `<Application Support>/` so the install kept its container,
+and therefore its tsnet node, its tailnet-lock signature and its grants — which
+is why that rename cost nothing. Here the encumbered string *was* the bundle id.
+So it became `net.lixom.latchkey`, the container moved with it, and **the app is
+a new node**: it logs in again, needs device approval, needs re-signing under
+tailnet lock, needs a grant for its new address, and the old node lingers in the
+admin console until removed. Olof accepted that explicitly beforehand. No
+migration was written — one install, and logging it back in is cheaper than code
+that runs once. Verified in the built product rather than the source:
+`Latchkey.app`, `CFBundleIdentifier net.lixom.latchkey`.
+
+**The one real hazard was the product this app is a client of.** That dashboard
+is a different, official project and is *not* renamed, so the code must keep
+naming it — and two of those uses are load-bearing rather than cosmetic:
+discovery recognises a gateway by matching its web-app manifest on a literal
+name, and pairs it with `X-Auth-Required`. Its lowercase spelling **contains**
+our old one. A substitution aimed at ours reaches inside it unless masked, and a
+run that corrupted it would pass a one-directional check while breaking
+discovery on every tailnet with no error at all — the sweep would simply report
+zero gateways. Hence `scripts/rename-to-latchkey.py` masks that family first,
+carries no bare four-letter rule, and checks **bidirectionally**.
+
+Three misses, all found by hand greps rather than by the checker meant to find
+them, and the third is the one worth remembering:
+
+- a mixed-case spelling (capital first letter, lowercase second word) was not in
+  the substitution list and survived as a Go test function name;
+- `--check` skipped the vendored tree;
+- **`--check` shared the rewriter's extension list.** A file the rewriter cannot
+  see is a file the checker cannot see either — which is how `app/NOTICE`, a
+  file with no extension, kept the old name through a *passing* check. The
+  checker now walks every non-binary file regardless of extension, deliberately
+  wider than the rewriter, and found it immediately. Same shape as this
+  codebase's recurring finding: a guard written once and not carried to its
+  sibling.
+
+### The history scrub
+
+Driven by `scripts/history-scrub.sh`, before the first push — which is the whole
+reason it is cheap: nothing has been published, so there is no clone to diverge
+and no force-push to explain. It removes the owner's real tailnet name (18
+commits) and both former product names, and `--prune-empty` drops the rename
+commits, which become no-ops once both sides of their diffs say Latchkey. The
+result reads as though the project was always called Latchkey. That is a mild
+fiction and it is the point: the encumbered name has to be *absent*, not merely
+superseded.
+
+The tailnet name is an **argument** to that script, never a constant in it. The
+scripts are committed, and baking the secret into the scrubber would put it
+straight back, in the one file guaranteed to be read.
+
+**No IP addresses were scrubbed, because none needed to be.** Olof's rule was
+that tsnet-side `100.x` may stay but his real addresses may not. A survey of
+every address in the history outside the vendored tree found: test fixtures,
+documentation examples, a well-known public resolver, Tailscale's own DERP
+range, and endpoints deliberately named in `check-no-log-upload.sh` so the app
+can be asserted never to talk to them. None of them is his. Addresses inside the
+vendored tree are upstream's own test data, and rewriting those would corrupt
+the R16 delta. Recorded because "we found nothing" is a result, and the next
+person should not have to redo the search to learn it.
 
 ## 2026-09-24 — F7 built: a test on a boundary is a coin flip
 
