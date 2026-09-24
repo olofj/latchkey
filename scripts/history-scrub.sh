@@ -71,41 +71,16 @@ git filter-branch --force --prune-empty \
 AFTER_COUNT=$(git rev-list --count HEAD)
 echo "::: rewritten: $BEFORE_COUNT commits -> $AFTER_COUNT"
 
-# --- verify, and say so in terms of what was supposed to happen --------------
-fail=0
-# Against the REWRITTEN branch only. `--all` reaches the backup tag and
-# refs/original/, which still point at the old history on purpose, so verifying
-# across them reports every scrubbed name as still present -- a false failure on
-# a scrub that worked, which is exactly what the first run produced.
-check_absent() {  # label, pattern
-    local n
-    n=$(git grep -I -l "$2" $(git rev-list HEAD) -- 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$n" != "0" ]]; then
-        echo "  FAIL: $1 still present in $n blob(s)" >&2
-        fail=1
-    else
-        echo "  ok: $1 is gone"
-    fi
-}
+# --- verify --------------------------------------------------------------
+# Delegated to scripts/history-verify.py, which scans the UNIQUE blobs
+# reachable from the branch and the commit messages. The check that used to
+# live here ran `git grep` once per revision -- O(commits x files) on a
+# repository carrying a vendored copy of tailscale -- and did not finish: the
+# first scrub's verification was killed partway and printed nothing, which is
+# worse than a slow check because it reads as success.
 echo "::: verification"
-check_absent "the real tailnet name" "$TAILNET"
-for p in Latchkey Latchkey latchkey latchkey Latchkey Latchkey; do
-    check_absent "$p" "$p"
-done
-
-# The other direction: what must have SURVIVED. A scrub that ate Kiro Crew
-# would pass every check above and break discovery on every tailnet.
-kept=$(git grep -I -l "KiroCrew" $(git rev-list HEAD) -- 2>/dev/null | wc -l | tr -d ' ')
-if [[ "$kept" == "0" ]]; then
-    echo "  FAIL: KiroCrew is gone from history; it is a different product and" >&2
-    echo "        discovery matches on its manifest name" >&2
-    fail=1
-else
-    echo "  ok: KiroCrew survives in $kept blob(s)"
-fi
-
-if [[ $fail -ne 0 ]]; then
-    echo "::: FAILED -- the old history is still at $BACKUP" >&2
+if ! python3 "$ROOT/scripts/history-verify.py" "$TAILNET"; then
+    echo "::: FAILED -- the previous history is at $BACKUP and refs/original/" >&2
     exit 1
 fi
 echo "::: passed. Old history kept at $BACKUP and refs/original/ until you delete them."
