@@ -2622,8 +2622,8 @@ of placeholder strings.
   tailnet passed a check that looked like it was checking. Replaced by
   `scripts/check-fixture-tailnets.sh`, which permits only `tail-scale.ts.net`
   and `example.ts.net` and fails on any other `*.ts.net`. Shown able to fail: a
-  planted `example.ts.net` is rejected, a missing file is an error rather
-  than a pass (the M3 review's lesson, preserved).
+  planted non-fixture tailnet name is rejected, a missing file is an error
+  rather than a pass (the M3 review's lesson, preserved).
 - **No real tailnet name remains anywhere** in either repo, verified
   case-insensitively — including host tests that had them in `expect(...)`
   strings, which the earlier greps missed twice: once because the parent's
