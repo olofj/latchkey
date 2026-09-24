@@ -14,6 +14,11 @@
 	<string>export</string>
 	<key>teamID</key>
 	<string>REPLACED_BY_SCRIPT</string>
+	<!-- Automatic, because the App Store profile Xcode's Organizer installs
+	     is Xcode-managed and manual signing refuses those. The script exports
+	     without -allowProvisioningUpdates, so this uses only profiles already
+	     on disk and never turns to cloud signing, which cannot authenticate
+	     from a non-GUI shell (docs/TESTFLIGHT.md). -->
 	<key>signingStyle</key>
 	<string>automatic</string>
 	<!-- The script stamps CURRENT_PROJECT_VERSION itself; don't let App Store

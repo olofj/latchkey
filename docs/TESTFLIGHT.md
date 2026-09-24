@@ -38,7 +38,11 @@ loop; the two installs coexist only if they use different bundle ids.
    Distribution.
 6. **An App Store provisioning profile for the bundle id, already on disk.** The
    certificate alone is not enough, and this is the step that is easy to miss
-   because nothing creates it for you from a shell. See below.
+   because nothing creates it for you from a shell. Distribute one build from
+   Xcode's Organizer (Distribute App → App Store Connect) and it installs
+   `iOS Team Store Provisioning Profile: <bundle id>`, valid for a year. `make tf`
+   checks for it before exporting and stops with that instruction if it is
+   missing. See below.
 
 ## What `make tf` does
 
@@ -49,9 +53,12 @@ loop; the two installs coexist only if they use different bundle ids.
   `BUILD_NUMBER=`.
 - Refuses to continue unless the archive carries **both** privacy manifests
   (below): App Store Connect reports a missing one only by email after upload.
-- Exports with `ExportOptions.AppStore.plist` and uploads with
-  `xcrun altool --upload-package`. The export is the step that needs signing
-  assets this machine may not have — see "Why a local certificate is not enough".
+- Looks for the App Store profile for the archive's bundle id: this team,
+  `get-task-allow` false, no device list, not expired, issued for a
+  distribution certificate in the keychain. Stops if there is none.
+- Exports with `ExportOptions.AppStore.plist` (automatic signing, but without
+  `-allowProvisioningUpdates`, so only on-disk profiles) and uploads with
+  `xcrun altool --upload-package`. See "Why a local certificate is not enough".
 
 ## Privacy manifests
 
@@ -104,17 +111,48 @@ The first line is misleading — the account holder cannot lack access to their
 own team's certificates. It is what cloud signing says after failing to
 authenticate, and the second line is the real consequence.
 
-So `make tf` cannot currently finish from a non-GUI shell on a machine that has
-never distributed this bundle id. It archives (that part works), then stops at
-the export. Two ways out, neither yet implemented:
+**What fixed it: distribute from Xcode once.** Xcode has the Apple ID session,
+mints the profile and leaves it on disk. After one Organizer upload on
+2026-09-24, `~/Library/Developer/Xcode/UserData/Provisioning Profiles/` held
+`iOS Team Store Provisioning Profile: net.lixom.latchkey` (Xcode-managed,
+`get-task-allow` false, no `ProvisionedDevices`, expires 2027-09-24, issued for
+the keychain's Apple Distribution certificate). With it, automatic signing
+signs locally and never needs the service. This needs a human at the GUI once
+per bundle id, and again when the profile expires or the certificate changes.
 
-* **Distribute the archive from Xcode once.** Xcode has the Apple ID session,
-  mints the profile, uploads, and leaves the profile on disk — after which the
-  CLI export has what it needs. Requires a human at the GUI, once per bundle id.
-* **Create the profile through the App Store Connect REST API** (`POST
-  /v1/profiles`, type `IOS_APP_STORE`) and export with `signingStyle: manual`.
-  Removes the GUI dependency entirely. Needs an ES256 JWT, and neither PyJWT nor
-  `cryptography` is installed here.
+`make tf` now exports **without** `-allowProvisioningUpdates` and the API key,
+so a missing profile cannot send it back to cloud signing; its own preflight
+reports the missing profile first. Two things that looked like better fixes did
+not work:
+
+* **`signingStyle: manual` with the profile pinned** fails: `Provisioning
+  profile "iOS Team Store Provisioning Profile: net.lixom.latchkey" is Xcode
+  managed, but signing settings require a manually managed profile.` Manual
+  signing would need a profile made in the developer portal or through the App
+  Store Connect REST API (`POST /v1/profiles`, type `IOS_APP_STORE`, which needs
+  an ES256 JWT; neither PyJWT nor `cryptography` is installed here). The
+  Xcode-managed one is enough, so that stays unimplemented.
+* **The export's store-configuration request** still fails from a shell
+  (`Unable to authenticate with App Store Connect … ITunesSoftwareService`)
+  when the API key is passed. It is only logged, not fatal; without the key the
+  export does not attempt it.
+
+**And then an unrelated failure: `error: exportArchive Copy failed`.** With
+signing solved, the export died building the `.ipa`. The distribution log
+(`$TMPDIR/Latchkey_<date>.xcdistributionlogs/IDEDistributionPipeline.log`)
+has the cause:
+
+```
+Running /usr/bin/rsync '-8aPhhE' …/Symbols '--link-dest' … …/Root
+rsync: on remote machine: --extended-attributes: unknown option
+rsync error: syntax or usage error (code 1) at main.c(1886) [server=3.5.0]
+```
+
+`/usr/bin/rsync` is Apple's openrsync, and it starts its other end as whatever
+`rsync` comes first on `PATH`. In a shell with Homebrew that is GNU rsync 3.5.0,
+which rejects openrsync's `-E`. Xcode.app is launched with launchd's `PATH`,
+without Homebrew, so the Organizer never meets it. `testflight.sh` runs the
+export with `/usr/bin` first on `PATH`.
 
 ## Troubleshooting
 
