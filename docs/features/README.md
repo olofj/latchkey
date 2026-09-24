@@ -30,6 +30,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F9](F9-safe-area-insets.md) | The page gets the real safe-area insets (bug report: content bleeds into the Dynamic Island) | **diagnosis reopened** — the measurement disproved §1: UIKit reports a correct 62pt inset, and the proposed fix would have doubled it to 124. Blocked on F10's fixture parity, since L1's fake cannot reproduce a `viewport-fit=cover` bug |
 | [F10](F10-the-suite-can-see-the-screen.md) | The suite can see the screen: geometry has no instrument here, so layout bugs reach the owner first (F5, F9) | designed; ready to build. Keystone is fixture parity — the fake dashboard is *more forgiving* than the shipped frontend, so a correct safe-area test in L1 would still have passed |
 | [F11](F11-first-run-introduction.md) | The first screen says what this is and what is about to be asked of you (bug report: first run is a bare "Login" button) | designed; ready to build. F4 hardened this screen's *failure* states; its initial state was never treated as one needing words |
+| [F12](F12-traceable-builds.md) | `make tf` refuses a dirty tree; the build records its commit (bug report) | designed; ready to build. Two builds were made from a dirty tree on the day it was reported, and neither artefact says so |
 
 ## Still open, not yet answered
 
