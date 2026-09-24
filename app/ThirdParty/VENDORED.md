@@ -45,9 +45,17 @@ collapsed into the parent and its history rewritten to keep this recipe true.)
 Because the import commit is pristine, the Latchkey delta is simply:
 
 ```bash
-IMPORT=$(git log --format=%H --diff-filter=A -- ThirdParty/VENDORED.md | tail -1)
-git diff "$IMPORT" -- ThirdParty/libtailscale
+IMPORT=$(git log --format=%H --diff-filter=A -- app/ThirdParty/VENDORED.md | tail -1)
+git diff "$IMPORT" -- app/ThirdParty/libtailscale
 ```
+
+The `app/` prefix dates from 2026-09-23, when the app's repository was collapsed
+into the parent. Pathspecs are resolved from the repository root, so the
+unprefixed form silently matched nothing from anywhere but `app/` itself — the
+same shape of breakage that took out two test suites' preflight that day.
+**This diff, not `git log`, is the precise instrument:** the log for this
+directory also contains 18 pre-R16 submodule-pointer bumps, so it over-reports
+what actually differs from upstream.
 
 To compare against a newer upstream revision, fetch it as above, export it,
 and diff the trees:

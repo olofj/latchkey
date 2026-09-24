@@ -416,7 +416,7 @@ messages and future log lines. 24 host checks in `make test-policy`. The
 *uploaded* after relaunch, which is exactly what D1 turns off.
 
 **libtailscale side** (`app/` `683532aa5`, post-import per R16): a Go
-`init()` in `ThirdParty/libtailscale/latchkey_nologs.go` calls
+`init()` in `app/ThirdParty/libtailscale/latchkey_nologs.go` calls
 `envknob.SetNoLogsNoSupport()`. Both upstream upload paths — the process
 logtail from `TsnetSetupLogs` and tsnet's per-node `startLogger` — build
 their HTTP client with `logpolicy.TransportOptions.New()`, which returns a
@@ -740,7 +740,7 @@ inline as a launch argument, so no files need sharing with the simulator.
 - **Never a real tailnet name or address in a test:** fixture addresses are
   `100.127.255.x` and never dialled. `scripts/test-offline.sh` fails on any
   any non-fixture tailnet in the test config, and **warns** when host Tailscale is up.
-  It is up on chonk (a `utun` holds `100.104.128.67`). Accepted per D7: leak
+  It is up on chonk (a `utun` holds a tailnet address). Accepted per D7: leak
   coverage for tailnet *IP* destinations is limited on this host, because a
   leak to a real tailnet IP would succeed through the host's VPN, and the
   tests deliberately use none.
@@ -1405,7 +1405,8 @@ Everything the app loads is HTTPS with a trusted certificate. The loopback
 LocalAPI and SOCKS traffic needs no exception: L2 passes 4/4 with the node's
 LocalAPI on loopback HTTP. L1 passes 9/9 and M4 12/12, both over HTTPS with
 the test CA trusted in the simulator. AGENTS.md now says not to add the keys
-back for a plain-HTTP gateway (chonk is out of v1, D4).
+back for a plain-HTTP gateway (chonk was out of v1 per D4 — **D4 is since
+superseded**, chonk serves on 443; R28 stands on its own).
 
 ## 2026-09-21 — M5: gateway discovery (R26)
 
@@ -2385,7 +2386,8 @@ That is grant 1 of D5 (chonk and air may reach the device) and the only rule
 the node has. Nothing grants the phone outbound access, which is why every
 dial ended in `context deadline exceeded` — dropped SYNs, not refusals — to
 byskebox AND chonk. The node itself was healthy throughout: address
-`100.82.1.100`, `machineAuthorized=true`, tailnet lock ok, DERP connected.
+the moved `kiro-clients` address, `machineAuthorized=true`, tailnet lock ok,
+DERP connected.
 The `kiro-clients` grant (`100.82.1.0/24` → `byskebox`, `box`, port 443) is
 still missing. Discovery cannot find a gateway the policy forbids, and no
 number of Search agains changes that.

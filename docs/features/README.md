@@ -19,7 +19,7 @@ the change, or by breaking it on purpose — and the spec says how.
 
 | # | Feature | Status |
 |---|---|---|
-| [F1](F1-gateway-port.md) | A gateway carries a port; 8443 is the standard one (R40) | designed; **blocked on an owner action** — 8443 is outside the gateway's origin allowlist (§4a) |
+| [F1](F1-gateway-port.md) | A gateway carries a port; **443 stays the default** (R40, number deferred) | designed; the port *mechanism* is live work, 8443-as-standard is deferred (§0, §4a) |
 | [F2](F2-connecting-state.md) | A visible connecting state for a page load in flight | superseded by F4 |
 | [F3](F3-share-into-a-session.md) | Share a link **or a document** from another app into a session on a gateway | designed; recommends stage 1 only (open item 1) |
 | [F4](F4-never-a-bare-screen.md) | Never a bare screen: connecting, scanning and empty states | designed; ready to build |
