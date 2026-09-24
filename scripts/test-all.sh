@@ -76,8 +76,35 @@ run() {  # name, command...
 build_flag() { if [[ $BUILD -eq 1 ]]; then BUILD=0; echo --build; fi; }
 
 run "host tests" make -C "$APP" --no-print-directory test-policy
-run "vendored Go tests" bash -c "cd '$APP/ThirdParty/libtailscale' && go test -run 'LocalLog|OSLog' . \
-    && cd tailscale-patched && go test ./logtail/ -run Latchkey"
+# The vendored Go tests are selected by NAME, and the names were frozen at the
+# rename (AGENTS.md: the latchkey_* files and their Test...Latchkey... tests)
+# precisely so these lines keep finding them. But `go test -run X` exits 0
+# when X matches nothing, so a rename that missed them would run nothing and
+# report ok (review, 2026-09-23). Each run must show as many top-level
+# `=== RUN` lines as the package's test files declare for the pattern, and
+# at least one.
+go_tests() {  # dir, -run pattern, package
+    local dir=$1 pattern=$2 pkg=$3 log rc=0 expected ran
+    log=$(mktemp)
+    (cd "$dir" && go test -count=1 -v -run "$pattern" "$pkg") > "$log" 2>&1 || rc=$?
+    grep -E '^(--- (PASS|FAIL)|ok |FAIL|panic:)' "$log" | sed 's/^/    /'
+    expected=$(grep -hoE '^func Test[A-Za-z0-9_]+' "$dir/$pkg"/*_test.go 2>/dev/null | sed 's/^func //' | grep -cE "$pattern" || true)
+    ran=$(grep -cE '^=== RUN   [^/]+$' "$log" || true)
+    if [[ $rc -ne 0 ]]; then rm -f "$log"; return 1; fi
+    if grep -q 'no tests to run' "$log" || [[ "$expected" -lt 1 || "$ran" -ne "$expected" ]]; then
+        echo "error: go test -run '$pattern' in $dir/$pkg ran $ran test(s); its test files declare $expected" >&2
+        echo "       matching that pattern. The names were frozen at the rename so this line keeps finding" >&2
+        echo "       them (AGENTS.md); a -run that matches nothing exits 0 having tested nothing." >&2
+        rm -f "$log"; return 1
+    fi
+    echo "    $ran/$expected tests ran (-run '$pattern')"
+    rm -f "$log"
+}
+vendored_go_tests() {
+    go_tests "$APP/ThirdParty/libtailscale" 'LocalLog|OSLog' . \
+        && go_tests "$APP/ThirdParty/libtailscale/tailscale-patched" Latchkey ./logtail/
+}
+run "vendored Go tests" vendored_go_tests
 run "L1 offline" "$ROOT/scripts/test-offline.sh" $(build_flag)
 run "L2 tailnet" "$ROOT/scripts/test-tailnet.sh" $(build_flag)
 if [[ $RUN_SESSION -eq 1 ]]; then run "session (M4)" "$ROOT/scripts/test-session.sh" $(build_flag)
