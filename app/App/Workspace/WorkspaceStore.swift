@@ -18,6 +18,8 @@
 //
 //    <Application Support>/Latchkey/
 //        workspaces.json                 # [WorkspaceDefinition] + activeId
+//        workspaces.json.rejected-<time> # the original, kept when save() had
+//                                        # to drop an entry it could not decode
 //        Workspaces/<id>/
 //            state/                       # tsnet state dir (tailscale_set_dir)
 //
@@ -67,6 +69,15 @@ struct WorkspaceDefinition: Codable, Identifiable {
     var dataStoreUUID: UUID
     /// Last-known identity, persisted for immediate display on next launch.
     var lastKnownIdentity: WorkspaceIdentity?
+
+    /// The on-disk keys, unchanged. Named so the tolerant `init(from:)` below
+    /// and the synthesized `encode(to:)` agree. **A new field goes here, in
+    /// `init(from:)` with a default or as an optional, and nowhere else** —
+    /// see the decoding rules on `init(from:)`.
+    enum CodingKeys: String, CodingKey {
+        case id, displayName, hostname, homePageURL, controlURL, ephemeral,
+             dataStoreUUID, lastKnownIdentity
+    }
 
     static let defaultDisplayName = "Latchkey"
 
@@ -146,6 +157,138 @@ struct WorkspaceDefinition: Codable, Identifiable {
 #else
         "latchkey"
 #endif
+    }
+}
+
+/// What the tolerant decoder filled in or threw away, collected through
+/// `Decoder.userInfo` so `WorkspaceStore.load` can report it. A class, so the
+/// value-typed `init(from:)` can append to it; `userInfo` values must be
+/// `Sendable`, hence the lock (the decode itself is synchronous, so it is
+/// never contended — it is there to make the promise checkable).
+nonisolated final class WorkspaceDecodeNotes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var repairLines: [String] = []
+    private var rejectedLines: [String] = []
+
+    /// A field that was absent, null or the wrong type and took its default.
+    var repairs: [String] { lock.withLock { repairLines } }
+    /// A list entry that could not be used at all (no usable `id`).
+    var rejected: [String] { lock.withLock { rejectedLines } }
+
+    func repaired(_ line: String) { lock.withLock { repairLines.append(line) } }
+    func rejected(_ line: String) { lock.withLock { rejectedLines.append(line) } }
+}
+
+extension CodingUserInfoKey {
+    static let workspaceDecodeNotes = CodingUserInfoKey(rawValue: "net.lixom.latchkey.workspaceDecodeNotes")!
+}
+
+extension WorkspaceDefinition {
+    /// Tolerant decoding: an entry is rejected only when it cannot be tied to
+    /// its state directory; every other field takes a default.
+    ///
+    /// Why this is hand-written. The synthesized decoder failed the **whole
+    /// list** when any one non-optional key was absent, null or the wrong
+    /// type, and `WorkspaceStore.load` reported that as "no file": the
+    /// manager then minted a new default and saved over the file, orphaning
+    /// `Workspaces/<old-id>/state` — the tsnet node's identity — with no log
+    /// line. Nothing in the file today can trigger it; the next field anyone
+    /// adds can, on the first launch after the upgrade. This makes that
+    /// impossible by construction rather than by remembering to write `?`.
+    ///
+    /// Which fields are load-bearing, and why:
+    ///
+    /// - `id` — **required.** It names `Workspaces/<id>/state`. Without it
+    ///   there is no way to know which directory this entry owns, and guessing
+    ///   (say, a new UUID) would silently orphan the real one, which is the
+    ///   exact defect. Foundation's `UUID(uuidString:)` also insists on
+    ///   hyphens; a 32-digit hex string names exactly one UUID, so that form
+    ///   is accepted too. An entry without a usable `id` is rejected on its
+    ///   own; `WorkspaceStore` keeps the others and reports the rejection.
+    /// - `dataStoreUUID` — defaults to a **fresh** UUID, with a note. It names
+    ///   the `WKWebsiteDataStore` (cookies, the dashboard's 30-day refresh
+    ///   cookie). Losing it costs one dashboard sign-in, which is recoverable;
+    ///   the node's identity is not, so the two are not treated alike.
+    /// - `ephemeral` — defaults to **false**, never to the launch flag. An
+    ///   ephemeral node is deleted by control when it goes offline: the wrong
+    ///   default here would *be* identity loss. `WorkspaceManager` still
+    ///   applies the test-only launch flag afterwards, as before.
+    /// - `hostname` — defaults to `defaultHostName`. The node key lives in the
+    ///   state dir, so the node stays the same node; a changed name costs at
+    ///   most the KiroCrew session, which is pinned to `login|node name`.
+    /// - `controlURL` — defaults to `kDefaultControlURL`, as `makeDefault`.
+    /// - `homePageURL` — defaults to `HomePage.defaultURL` ("no gateway
+    ///   chosen"): the picker appears, nothing is lost.
+    /// - `displayName` — cosmetic; defaults to `defaultDisplayName`.
+    /// - `lastKnownIdentity` — a display cache; absent, null or malformed
+    ///   reads as nil and is refreshed once the node connects.
+    ///
+    /// Every default is recorded in `WorkspaceDecodeNotes` (when the decoder
+    /// carries one) so the launch log says what was filled in. Unknown keys
+    /// are ignored, as before, so an older build can read a newer file.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let notes = decoder.userInfo[.workspaceDecodeNotes] as? WorkspaceDecodeNotes
+
+        guard let id = Self.uuid(in: c, forKey: .id) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id, in: c, debugDescription: "id is missing or not a UUID")
+        }
+        self.id = id
+
+        self.displayName = Self.field(.displayName, in: c, default: Self.defaultDisplayName, id: id, notes: notes)
+        self.hostname = Self.field(.hostname, in: c, default: Self.defaultHostName, id: id, notes: notes)
+        self.homePageURL = Self.field(.homePageURL, in: c, default: HomePage.defaultURL, id: id, notes: notes)
+        self.controlURL = Self.field(.controlURL, in: c, default: kDefaultControlURL, id: id, notes: notes)
+        self.ephemeral = Self.field(.ephemeral, in: c, default: false, id: id, notes: notes)
+
+        if let stored = Self.uuid(in: c, forKey: .dataStoreUUID) {
+            self.dataStoreUUID = stored
+        } else {
+            self.dataStoreUUID = UUID()
+            notes?.repaired("\(id): dataStoreUUID missing or not a UUID; a new web data store was assigned (the dashboard will ask for a sign-in; the node is unaffected)")
+        }
+
+        do {
+            self.lastKnownIdentity = try c.decodeIfPresent(WorkspaceIdentity.self, forKey: .lastKnownIdentity)
+        } catch {
+            self.lastKnownIdentity = nil
+            notes?.repaired("\(id): lastKnownIdentity unreadable; it will be refreshed from the node")
+        }
+    }
+
+    /// A field with a default: absent and null both read as the default;
+    /// so does the wrong type, since the alternative is losing the node over
+    /// a cosmetic value. Each is noted.
+    private static func field<T: Decodable>(_ key: CodingKeys, in c: KeyedDecodingContainer<CodingKeys>,
+                                            default value: T, id: UUID, notes: WorkspaceDecodeNotes?) -> T {
+        do {
+            if let stored = try c.decodeIfPresent(T.self, forKey: key) { return stored }
+            notes?.repaired("\(id): \(key.stringValue) missing; using the default")
+        } catch {
+            notes?.repaired("\(id): \(key.stringValue) is not a \(T.self); using the default")
+        }
+        return value
+    }
+
+    /// A UUID field, in the hyphenated form Foundation decodes or as 32 hex
+    /// digits. nil when absent, null or anything else.
+    private static func uuid(in c: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> UUID? {
+        if let stored = try? c.decodeIfPresent(UUID.self, forKey: key) { return stored }
+        guard let text = try? c.decodeIfPresent(String.self, forKey: key) else { return nil }
+        return uuid(fromUnhyphenated: text)
+    }
+
+    /// `0123456789ABCDEF0123456789ABCDEF` → the UUID it spells, or nil.
+    static func uuid(fromUnhyphenated text: String) -> UUID? {
+        let hex = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hex.count == 32, hex.allSatisfy({ $0.isHexDigit }) else { return nil }
+        var hyphenated = ""
+        for (offset, digit) in hex.enumerated() {
+            if offset == 8 || offset == 12 || offset == 16 || offset == 20 { hyphenated.append("-") }
+            hyphenated.append(digit)
+        }
+        return UUID(uuidString: hyphenated)
     }
 }
 
@@ -264,10 +407,55 @@ enum WorkspaceStore {
         var activeId: UUID?
     }
 
-    /// The same envelope, as read.
+    /// The same envelope, as read: one entry that does not decode is dropped
+    /// and reported, not allowed to take the others with it. A `workspaces`
+    /// key that is missing or not an array is still a decode failure — there
+    /// is no list to keep, and `{}` is not a first launch.
     private struct DecodedEnvelope: Decodable {
         var workspaces: [WorkspaceDefinition]
         var activeId: UUID?
+
+        enum CodingKeys: String, CodingKey { case workspaces, activeId }
+
+        init(from decoder: Decoder) throws {
+            let notes = decoder.userInfo[.workspaceDecodeNotes] as? WorkspaceDecodeNotes
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            var list = try c.nestedUnkeyedContainer(forKey: .workspaces)
+            var workspaces: [WorkspaceDefinition] = []
+            while !list.isAtEnd {
+                let index = list.currentIndex
+                let entry = try list.decode(Lossy<WorkspaceDefinition>.self)
+                if let value = entry.value {
+                    workspaces.append(value)
+                } else {
+                    notes?.rejected("entry \(index): \(describe(entry.error))")
+                }
+            }
+            self.workspaces = workspaces
+            do {
+                self.activeId = try c.decodeIfPresent(UUID.self, forKey: .activeId)
+            } catch {
+                self.activeId = nil
+                notes?.repaired("activeId is not a UUID; the first workspace will be active")
+            }
+        }
+    }
+
+    /// Decodes `Value` without ever throwing, so an unkeyed container moves
+    /// past a bad element instead of failing (a thrown `decode` leaves the
+    /// container's index where it was). The error is kept for the report.
+    private struct Lossy<Value: Decodable>: Decodable {
+        let value: Value?
+        let error: (any Error)?
+        init(from decoder: Decoder) {
+            do {
+                value = try Value(from: decoder)
+                error = nil
+            } catch {
+                value = nil
+                self.error = error
+            }
+        }
     }
 
     /// What was found at `definitionsFile`.
@@ -275,12 +463,12 @@ enum WorkspaceStore {
         /// No file: the first launch. Seeding a default and writing it is right.
         case absent
         /// A list. `repairs` are fields that took a default; `rejected` are
-        /// entries that could not be used. (Both empty until the decoder is
-        /// made tolerant; the shape is the contract the manager logs from.)
+        /// entries that could not be used (`save` keeps a copy of the original
+        /// file before the first write when there are any).
         case loaded(workspaces: [WorkspaceDefinition], activeId: UUID?, repairs: [String], rejected: [String])
         /// The file exists and could not be read or decoded — an I/O error, an
-        /// empty or truncated file. It, and every state directory it might
-        /// name, must be left exactly as they are.
+        /// empty or truncated file, no usable entry. It, and every state
+        /// directory it might name, must be left exactly as they are.
         case unreadable(reason: String)
 
         /// What the manager does with it. Pure, so the host test can pin the
@@ -332,20 +520,30 @@ enum WorkspaceStore {
         }
         if data.isEmpty { return .unreadable(reason: "is empty (0 bytes)") }
 
+        let notes = WorkspaceDecodeNotes()
+        let decoder = JSONDecoder()
+        decoder.userInfo[.workspaceDecodeNotes] = notes
         let env: DecodedEnvelope
         do {
-            env = try JSONDecoder().decode(DecodedEnvelope.self, from: data)
+            env = try decoder.decode(DecodedEnvelope.self, from: data)
         } catch {
             return .unreadable(reason: "does not decode: \(describe(error))")
         }
-        return .loaded(workspaces: env.workspaces, activeId: env.activeId, repairs: [], rejected: [])
+        if env.workspaces.isEmpty, !notes.rejected.isEmpty {
+            return .unreadable(reason: "has no usable entry (\(notes.rejected.joined(separator: "; ")))")
+        }
+        return .loaded(workspaces: env.workspaces, activeId: env.activeId,
+                       repairs: notes.repairs, rejected: notes.rejected)
     }
 
     /// Atomically writes the workspace list + active id — **unless the file
     /// on disk exists and cannot be read**, in which case nothing is written
     /// and the refusal is logged. That is the guarantee: a `workspaces.json`
     /// the app cannot decode is never replaced, whatever the caller thinks
-    /// the list is. Returns whether the file was written.
+    /// the list is. If the file decoded with entries rejected, a copy of it
+    /// is kept beside it (`workspaces.json.rejected-<time>`) before the first
+    /// write, so the bytes of the entry that was dropped are not lost either.
+    /// Returns whether the file was written.
     @discardableResult
     static func save(_ workspaces: [WorkspaceDefinition], activeId: UUID?) -> Bool {
         save(workspaces, activeId: activeId, to: definitionsFile)
@@ -354,8 +552,10 @@ enum WorkspaceStore {
     @discardableResult
     static func save(_ workspaces: [WorkspaceDefinition], activeId: UUID?, to file: URL) -> Bool {
         switch load(from: file) {
-        case .absent, .loaded:
+        case .absent:
             break
+        case .loaded(_, _, _, let rejected):
+            if !rejected.isEmpty, !keepCopy(of: file) { return false }
         case .unreadable(let reason):
             refuseWrite(because: "the file on disk \(reason)")
             return false
@@ -367,6 +567,24 @@ enum WorkspaceStore {
             return true
         } catch {
             logger.log("workspaces.json could not be written: \(describe(error))")
+            return false
+        }
+    }
+
+    /// Copies `file` to `<file>.rejected-<time>` before it is overwritten.
+    /// False, with a log line, if the copy could not be made — then the write
+    /// must not happen either.
+    private static func keepCopy(of file: URL) -> Bool {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "")
+        let copy = file.deletingLastPathComponent()
+            .appending(path: file.lastPathComponent + ".rejected-" + stamp)
+        do {
+            try FileManager.default.copyItem(at: file, to: copy)
+            logger.log("workspaces.json: an entry was rejected; the original file is kept as \(copy.lastPathComponent)")
+            return true
+        } catch {
+            refuseWrite(because: "its original, with a rejected entry, could not be copied aside (\(describe(error)))")
             return false
         }
     }

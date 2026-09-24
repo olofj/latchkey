@@ -78,7 +78,7 @@ final class WorkspaceManager: ObservableObject {
             defs = loaded
             activeId = loadedActiveId
             for line in repairs { logger.log("workspaces.json: \(line)") }
-            for line in rejected { logger.log("workspaces.json: entry REJECTED: \(line)") }
+            for line in rejected { logger.log("workspaces.json: entry REJECTED, kept in a copy beside the file: \(line)") }
         case .absent, .loaded:
             // First launch, or a decodable file whose list is empty: nothing
             // to keep, and the file (if any) is one save() may overwrite.
