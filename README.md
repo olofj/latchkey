@@ -8,18 +8,39 @@ Built as a fork of [tailscale/aperture-plus](https://github.com/tailscale/apertu
 (BSD-3-Clause), Avery Pennarun's experimental WebKit browser with an embedded
 userspace Tailscale node.
 
-**Status: planned, not yet implemented.**
+**Status: built and running on a real device.** The plan's milestones are done
+bar a few owner-and-device items; work now arrives as feature requests, each
+specified in [`docs/features/`](docs/features/) before it is built.
+
+## Is this for you?
+
+It is, if you run KiroCrew on your own machine and want it on your phone
+without turning on a system-wide VPN. You need a Tailscale tailnet, a computer
+running KiroCrew, an iPhone, and a Mac with Xcode — a **free** Apple ID is
+enough.
+
+**→ [`docs/SETUP.md`](docs/SETUP.md) is the setup guide.** It covers a flat
+tailnet (the short path: no access control to configure) and says separately
+what changes if your tailnet uses ACLs, device approval or tailnet lock.
+
+Nothing in the app assumes a particular tailnet policy. The author's own tailnet
+is locked down and its bring-up runbook
+([`docs/DEVICE-CHECK.md`](docs/DEVICE-CHECK.md)) names his hosts and his
+grants — that is one environment, not a requirement.
 
 ## Where things are
 
 | Path | What |
 |---|---|
-| `docs/PLAN.md` | The implementation plan — architecture, 9 milestones, test strategy. Start here. |
-| `docs/DECISIONS.md` | Append-only log of decisions made during implementation. |
+| `docs/SETUP.md` | **Setting this up yourself.** Start here if you want to run it. |
+| `docs/features/` | One spec per feature or bug, written before the code. Start here if you want to change it. |
+| `docs/PLAN.md` | The original implementation plan — architecture, 9 milestones, test strategy. Historical, and specific to the author's environment in places. |
+| `docs/DECISIONS.md` | Append-only log of decisions, with the evidence for each. |
+| `docs/DEVICE-CHECK.md` | The author's device bring-up runbook (environment-specific). |
 | `testing/harness/` | Offline test harness: a stub SOCKS5 proxy and a fake dashboard, so the WebKit proxy path can be tested with no Tailscale account. |
-| `app/` | The fork of aperture-plus (created in milestone M0). |
+| `app/` | The app itself, a fork of aperture-plus. Its own git repository. |
 
-## Quick start (once M0 is done)
+## Quick start
 
 ```bash
 cd app

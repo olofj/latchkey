@@ -38,21 +38,10 @@ say() { printf '::: %s\n' "$*"; }
 
 # ---------------------------------------------------------------- preflight --
 say "preflight"
-# grep exits 1 for "no match" and 2 for an error such as a missing file --
-# and 2 must not read as "clean" (M3 review).
-set +e
-grep -rIl "example" "$APP/UITests/DiscoveryTests.swift" "$TSNET"/*.go \
+# R10: only the fixture tailnets may be named (allow-list, not deny-list).
+"$ROOT/scripts/check-fixture-tailnets.sh" \
+    "$APP/UITests/DiscoveryTests.swift" "$TSNET"/*.go \
     "$TSNET/Makefile" "$HARNESS/leaf.cnf" "$APP/App/Discovery"
-PRE_RC=$?
-set -e
-if [[ $PRE_RC -eq 0 ]]; then
-    echo "error: the L2 test config references the real tailnet (example.ts.net)." >&2
-    echo "       Use the fixture tailnet, tail-scale.ts.net." >&2
-    exit 1
-elif [[ $PRE_RC -ge 2 ]]; then
-    echo "error: the preflight could not read a file it checks (renamed or missing?)" >&2
-    exit 1
-fi
 EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/DiscoveryTests.swift" || true)
 [[ "$EXPECTED" -gt 0 ]] || { echo "error: no tests found in DiscoveryTests.swift" >&2; exit 1; }
 

@@ -13,6 +13,16 @@ is redeemed.
 Steps marked **(Olof)** are §C owner actions in `PLAN-REVISIONS.md` that an
 agent cannot do.
 
+> **This runbook is written for one environment: Olof's.** It names his
+> gateway and assumes his tailnet policy — new devices land in a no-grant
+> address pool and a separate range is allowed to reach the gateway (D5). Step
+> O3 exists only because of that policy and is **meaningless on a flat
+> tailnet**, where a signed-in node can reach its peers immediately.
+>
+> If you are setting this up for yourself, use [`SETUP.md`](SETUP.md) instead.
+> Nothing in the app knows about purgatory, grants or address ranges; the
+> ordering constraint above is a property of this tailnet, not of the product.
+
 ---
 
 ## 1. Prerequisites

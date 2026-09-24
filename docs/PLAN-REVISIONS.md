@@ -90,8 +90,8 @@ These revisions come out of an adversarial review of the plan. Full findings, wi
 - `dash.tail-scale.ts.net` is NXDOMAIN, so a leaked direct connection fails the same as a proxied one — the current negative test proves nothing.
 - Serve the negative-test origin on a **publicly resolvable loopback name**. `dash.localtest.me` resolves to loopback on chonk; note it returns `::1` as well as `127.0.0.1`, so bind the test server on both families. Add it to the leaf cert's SAN.
 - Sequence: (1) **positive control** — prove a direct load of that origin succeeds without the proxy; (2) `--blackhole` run — assert the load fails, the stub journal shows the `connect`, and `dashboard.py` received **zero** requests. Add variants with the stub killed and with `-NoSocksLog` (with the relay on, WebKit always talks to an in-app listener, which masks the proxy-unreachable path).
-- **Never use `example.ts.net` names or real tailnet `100.x` addresses in any test** — on chonk they route through the host's own VPN and a leak would *succeed*.
-- Preflight in every simulator test script: **warn** (not fail) when host Tailscale is up, and fail if the test config contains any `example.ts.net` name. Record in DECISIONS that tailnet-IP leak coverage is limited on this host.
+- **Never use a real tailnet's `*.ts.net` names or real tailnet `100.x` addresses in any test** — on a Mac running Tailscale they route through the host's own VPN and a leak would *succeed*. Only the fixture tailnets (`tail-scale.ts.net`, `example.ts.net`) may appear.
+- Preflight in every simulator test script: **warn** (not fail) when host Tailscale is up, and fail if the test config names any tailnet that is not a fixture tailnet (`scripts/check-fixture-tailnets.sh`). Record in DECISIONS that tailnet-IP leak coverage is limited on this host.
 
 **R11 — Test override must exercise the production path** [H4]
 - An endpoint-only override never loads: `loadInitial()` waits for `.Running` and for `localStatus`, and `TailnetProxyPolicy.make(from: nil)` yields IP ranges only.

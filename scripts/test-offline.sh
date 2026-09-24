@@ -39,21 +39,11 @@ say() { printf '::: %s\n' "$*"; }
 # ---------------------------------------------------------------- preflight --
 say "preflight"
 # R10: a real tailnet name in a test config is how a leak turns into a pass.
-# grep exits 2 on a missing file, which must not read as "clean" (M3 review).
-set +e
-grep -rIl "example" "$APP/UITests/OfflineHarnessTests.swift" "$HARNESS"/*.py \
+# The check allow-lists the fixture tailnets rather than naming one real one,
+# so it protects every checkout and not just its author's.
+"$ROOT/scripts/check-fixture-tailnets.sh" \
+    "$APP/UITests/OfflineHarnessTests.swift" "$HARNESS"/*.py \
     "$HARNESS/Makefile" "$HARNESS/leaf.cnf"
-PRE_RC=$?
-set -e
-if [[ $PRE_RC -eq 0 ]]; then
-    echo "error: the offline test config references the real tailnet (example.ts.net)." >&2
-    echo "       On this Mac those names route through the host's own VPN, so a leak" >&2
-    echo "       would SUCCEED instead of failing. Use tail-scale.ts.net / localtest.me." >&2
-    exit 1
-elif [[ $PRE_RC -ge 2 ]]; then
-    echo "error: the preflight could not read a file it checks (renamed or missing?)" >&2
-    exit 1
-fi
 EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/OfflineHarnessTests.swift")
 if ifconfig 2>/dev/null | grep -A4 '^utun' | grep -qE 'inet 100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.'; then
     say "WARNING: the host's Tailscale is up (a utun interface holds a 100.64/10 address)."

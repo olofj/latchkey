@@ -1,11 +1,33 @@
-# F1 — A gateway carries a port; 8443 is the standard one
+# F1 — A gateway carries a port; 443 stays the default
 
 | | |
 |---|---|
-| **Status** | spec — buildable (design pass 2026-09-23; nothing implemented) |
+| **Status** | **deferred 2026-09-23 — "I'm fine with staying on 443 for now" (Olof).** The port-awareness work below stands and is buildable; making **8443** the standard does not happen yet |
 | **Requested** | 2026-09-23, by Olof: "maybe I want to move the serve off of 443 though, since it's the poplar local SSL port and might at some point overlap" … "Let's choose a standard port number and use it and have the app look for it too. We're setting the precedent here, no legacy we need to consider." |
 | **Revision** | R40 in `../PLAN-REVISIONS.md` (R39 sets the budgets this spec's arithmetic uses) |
 | **Touches** | `App/Discovery` (all three files), `App/Session/SessionManager.swift`, `App/Session/TokenEntrySheet.swift`, `App/Browser/DashboardRootView.swift`, `App/Browser/PageScriptSources.swift`, `App/Browser/BrowserViewModel.swift` (one signature), `App/Settings/SettingsView.swift` (one call site), `App/Diagnostics/DiagnosticsView.swift` (one row); `testing/tsnet-harness`, `testing/harness` (fake gateway, stub proxy map, leaf SANs); `scripts/test-discovery.sh`; the discovery, session and host suites |
+
+## 0. Where this stands (2026-09-23)
+
+Olof's answer to §4a's finding: **stay on 443 for now.** So this spec splits in
+two, and only the first half is live work:
+
+- **Live: a gateway carries a port, and the app handles one.** `GatewayEndpoint`,
+  the migration, the manual-entry table, port-aware origins and the origin check
+  of §4b are all still worth building. They cost nothing on 443 and they are
+  what makes any other port *possible* rather than silently broken.
+- **Deferred: 8443 as the standard, probed by default.** Not now. The reason is
+  §4a and it turned out to be a portability argument as much as a correctness
+  one: 443 works with a plain `tailscale serve --https=443` and no further
+  configuration, whereas 8443 needs `KIROCREW_CORS_ORIGINS` set on every
+  gateway and a restart — and when that is missed the failure is the silent
+  "loads fine, does nothing" one. Making the *standard* port the one that needs
+  extra server setup would hand that failure to every new user on their first
+  attempt. So 443 is the documented default (`../SETUP.md`), and a non-default
+  port is an explicit, documented opt-in.
+
+R40 in `../PLAN-REVISIONS.md` should be read with this in mind: the port
+*mechanism* is agreed, the port *number* is not changing yet.
 
 ## 1. Why
 

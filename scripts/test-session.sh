@@ -34,18 +34,10 @@ say() { printf '::: %s\n' "$*"; }
 
 # ---------------------------------------------------------------- preflight --
 say "preflight"
-set +e
-grep -rIl "example" "$APP/UITests/SessionTests.swift" "$HARNESS/fake_gateway.py" \
+# R10: only the fixture tailnets may be named (allow-list, not deny-list).
+"$ROOT/scripts/check-fixture-tailnets.sh" \
+    "$APP/UITests/SessionTests.swift" "$HARNESS/fake_gateway.py" \
     "$HARNESS/gateway_check.py" "$HARNESS/Makefile" "$HARNESS/leaf.cnf"
-PRE_RC=$?
-set -e
-if [[ $PRE_RC -eq 0 ]]; then
-    echo "error: the session test config references the real tailnet (example.ts.net)." >&2
-    exit 1
-elif [[ $PRE_RC -ge 2 ]]; then
-    echo "error: the preflight could not read a file it checks (renamed or missing?)" >&2
-    exit 1
-fi
 EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/SessionTests.swift")
 
 # ------------------------------------------------------------------ gateway --

@@ -9,7 +9,7 @@
 | Repo | `~/src/latchkey` |
 | Base | Fork of [tailscale/aperture-plus](https://github.com/tailscale/aperture-plus) @ `dba0555` (2026-08-24), BSD-3-Clause |
 | Target | iOS 26.0+, iPhone (iPad secondary) |
-| Owner | Olof (`owner@example.com`), tailnet `example.ts.net` |
+| Owner | Olof (`owner@example.com`), on a private tailnet (its name is not recorded here; tests may name only the fixture tailnets) |
 
 ---
 
@@ -121,7 +121,7 @@ shape the design, each verified in source:
 
 ### 2.4 A live finding worth keeping in mind
 
-During planning, simulator Safari (iOS 27) loaded `https://byskebox.example.ts.net`
+During planning, simulator Safari (iOS 27) loaded the owner's gateway over HTTPS
 over the tailnet and the dashboard **rendered correctly**. That is a live
 counter-test of [KiroCrew #9399](https://github.com/kirodotdev/KiroCrew/issues/9399)
 ("dashboard renders blank in all WebKit browsers over Tailscale"), which is open
@@ -393,7 +393,7 @@ Deletions first, then the pin. Keep each in its own commit.
 | 1.4 | Remove tabs | `App/Browser/TabbedBrowserView.swift`: drop the `TabOverview` sheet (`:82-87`) and the macOS `TabBar` (`:241-242`). Then delete `TabBar.swift`, `TabOverview.swift`. Collapse `TabManager` to a single tab (`maximumTabCount`, `TabManager.swift:20`) — do not delete `TabManager`; it owns tab persistence the workspace expects. |
 | 1.5 | Remove the address bar | `TabbedBrowserView.swift`: remove `browserToolbar` from the VStacks at `:244` and `:264`; the definition is `:356`. Delete `CompactBrowserToolbar.swift`. **Keep** `BrowserNavigator.swift`'s statics `trimmedURLInput` / `normalizedURLString` (still called from `SettingsViewModel.swift:297,300`) or inline them. |
 | 1.6 | Remove bookmarks | Delete `App/Bookmarks/Bookmark.swift`, `BookmarkEditor.swift`, `BookmarkList.swift`, `App/Browser/BookmarksSheet.swift`. **Keep** `App/Bookmarks/HomePage.swift` — it holds the start URL. |
-| 1.7 | Pin the start URL | `HomePage.swift:25` (`defaultURL`), `WorkspaceStore.swift:81-92` (`makeDefault()`), `TabManager.openChatTab()` (`TabManager.swift:73-79`). Temporarily hardcode `https://byskebox.example.ts.net`; M5 replaces this with the discovered gateway. |
+| 1.7 | Pin the start URL | `HomePage.swift:25` (`defaultURL`), `WorkspaceStore.swift:81-92` (`makeDefault()`), `TabManager.openChatTab()` (`TabManager.swift:73-79`). Temporarily hardcode the owner's gateway URL; M5 replaces this with the discovered gateway. |
 | 1.8 | Remove exit-node UI | `SettingsView.swift` exit-node section and `SettingsViewModel.runExitNodeDiagnostic` (`:203`) / `fetchEgressIP` (`:225`). Exit nodes are broken upstream (§7.4); shipping the toggle would be shipping a known-broken feature. Also drops the upstream-failing `testExitNodeChangesEgressIP`. |
 | 1.9 | Keep and re-point diagnostics | Keep `SettingsView.swift` routing section (`:182-232`), `App/Settings/LogViewer.swift`, `TSNet/Logging.swift`, `TSNet/SocksLogProxy.swift`, `App/Tailnet Status/StatusView*.swift` (this is the login UI — not optional). |
 | 1.10 | Fix the UI test suite | `UITests/ApertureUITests.swift` is 2,275 lines / 29 tests, many about tabs and bookmarks. Delete the tests for deleted features; keep and re-point the ones about connection, login, home page and keyboard layout. |

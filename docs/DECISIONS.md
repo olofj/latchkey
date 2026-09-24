@@ -739,7 +739,7 @@ inline as a launch argument, so no files need sharing with the simulator.
   127.0.0.1.
 - **Never a real tailnet name or address in a test:** fixture addresses are
   `100.127.255.x` and never dialled. `scripts/test-offline.sh` fails on any
-  `example` in the test config, and **warns** when host Tailscale is up.
+  any non-fixture tailnet in the test config, and **warns** when host Tailscale is up.
   It is up on chonk (a `utun` holds `100.104.128.67`). Accepted per D7: leak
   coverage for tailnet *IP* destinations is limited on this host, because a
   leak to a real tailnet IP would succeed through the host's VPN, and the
@@ -2598,3 +2598,64 @@ invisible to the container.
 - the script rewrote the bare old name inside the very comment that warns
   against renaming the data root, inverting its meaning — twice. The comment
   is now phrased without the literal.
+
+## 2026-09-23 — Portability: the app was already tailnet-policy agnostic; the specificity was in the guards and the docs
+
+**Decision:** make the project runnable by someone who is not its author,
+without loosening anything. Five changes went in directly; three behaviour
+changes went to a spec (`features/F7-portable-discovery.md`).
+
+**What the review established first, because it changes the shape of the
+answer:** there is **no** ACL, grant, purgatory, approval or address-range
+concept anywhere in `App/` or `TSNet/`. The only hardcoded network constant is
+Tailscale's own CGNAT range (`TailnetProxyPolicy.swift:93`). Purgatory appears
+in the runbook, the plan and the test harness — never in the product. So a flat
+tailnet needs no code change to work; its path is strictly shorter. The
+author-specific parts were the *documentation*, the *test guards* and a handful
+of placeholder strings.
+
+**Done directly:**
+
+- **The fixture-tailnet guard is now an allow-list.** Five suite preflights and
+  `TestNetworkFixture` each grepped for one hardcoded string — the author's own
+  tailnet — so the guard protected exactly one person: anyone else's real
+  tailnet passed a check that looked like it was checking. Replaced by
+  `scripts/check-fixture-tailnets.sh`, which permits only `tail-scale.ts.net`
+  and `example.ts.net` and fails on any other `*.ts.net`. Shown able to fail: a
+  planted `example.ts.net` is rejected, a missing file is an error rather
+  than a pass (the M3 review's lesson, preserved).
+- **No real tailnet name remains anywhere** in either repo, verified
+  case-insensitively — including host tests that had them in `expect(...)`
+  strings, which the earlier greps missed twice: once because the parent's
+  `grep` does not descend into `app/`, and once because the name was
+  mixed-case.
+- **Generic examples in the UI.** The gateway placeholder and the manual-entry
+  error named the author's own machine; they now say `gateway`.
+- **The bundle id is overridable**, `$(LATCHKEY_BUNDLE_ID:default=net.lixom.latchkey)`,
+  matching how `DEVELOPMENT_TEAM` already works via `app/.dev-team`. Verified
+  both ways: the default still resolves to `net.lixom.latchkey` (so this
+  device's container and node are untouched) and an override takes effect.
+- **The node's default name follows the product**, `latchkey-iphone`. Safe
+  where renaming the data root was not: it is only a *default*, a live install
+  carries its own copy in `workspaces.json`, and the tailnet grant is scoped by
+  address range, not node name. This reverses the cautious call made earlier
+  the same day, on that evidence.
+- **`docs/SETUP.md`**, written for someone else: a flat tailnet as the short
+  path, with approval, tailnet lock and ACLs as separate rows rather than
+  assumptions. `README.md` no longer claims the project is unimplemented, and
+  `DEVICE-CHECK.md` now says in its header that it describes one environment and
+  that its purgatory step is meaningless on a flat tailnet.
+
+**Deferred with it:** 8443 as the standard serve port (F1). On 443 a gateway
+needs nothing but `tailscale serve`; on 8443 it needs `KIROCREW_CORS_ORIGINS`
+and a restart, and missing that produces the silent "loads fine, does nothing"
+failure. Making the standard port the one that needs extra server setup would
+hand that to every new user on their first attempt. Olof: "I'm fine with staying
+on 443 for now."
+
+**Evidence:** `make test-policy` green; the full quick tier re-run after the
+changes. The three findings that are behaviour — discovery's owner/OS/sharee
+filters hiding a gateway silently, the sweep abandoning candidates past ~24, and
+the picker claiming it checked `candidateCount` when it probed fewer — are
+specified in F7 rather than changed here, because the spec-first rule applies to
+behaviour even when the change is small.
