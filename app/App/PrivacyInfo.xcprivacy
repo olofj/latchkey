@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Latchkey collects nothing and tracks no one. App Store Connect still
+         rejects an upload (ITMS-91053) that uses a required-reason API without
+         declaring it. The app's own use, measured 2026-09-24 (source grep and
+         the Release binary's strings): Diagnostics/NodeLog.swift reads its
+         log files' modification dates via FileManager.attributesOfItem.
+         TailscaleKit declares the Go runtime's uses in its own manifest
+         (ThirdParty/libtailscale/swift/PrivacyInfo.xcprivacy). No
+         UserDefaults, disk-space or keyboard APIs. -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <!-- Node log files inside the app container. -->
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

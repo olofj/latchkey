@@ -35,7 +35,10 @@ XCFRAMEWORK  := ThirdParty/libtailscale/swift/build/Build/Products/Release-iphon
 # bug that the vendoring fixes for free. Files not yet added count too (-co),
 # as they are while a change is being written and tested; generated headers
 # are gitignored, so they do not.
-LIBTSCALE_SOURCES := $(shell git -C ThirdParty/libtailscale ls-files -co --exclude-standard '*.go' '*.c' '*.h' 'swift/TailscaleKit/*.swift' 'swift/TailscaleKit/**/*.swift' | sed 's|^|ThirdParty/libtailscale/|')
+#
+# The privacy manifest counts too: ios-fat copies it into both slices, and a
+# framework built before it existed would upload without one (ITMS-91053).
+LIBTSCALE_SOURCES := $(shell git -C ThirdParty/libtailscale ls-files -co --exclude-standard '*.go' '*.c' '*.h' 'swift/TailscaleKit/*.swift' 'swift/TailscaleKit/**/*.swift' 'swift/PrivacyInfo.xcprivacy' | sed 's|^|ThirdParty/libtailscale/|')
 # What the framework was built from: a hash of those sources' contents,
 # written next to it by the rule that built it (check-framework).
 FRAMEWORK_STAMP := $(XCFRAMEWORK:.xcframework=.sources-sha256)
