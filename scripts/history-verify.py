@@ -67,8 +67,9 @@ TSNET_ALLOWED = {
     # The fixture-tailnet guard's own planted sample. It exists to be caught, in
     # scripts/check-fixture-tailnets.sh and its Swift twin's tests.
     b"some-real-net.ts.net", b"somereal.ts.net",
-    # Documentation placeholders addressed to a reader: app/README.md.
-    b"your-tailnet.ts.net",
+    # Documentation placeholders addressed to a reader: app/README.md, and the
+    # usage line of scripts/history-scrub.sh showing that it takes more than one.
+    b"your-tailnet.ts.net", b"older.ts.net",
     # Invented, in one UI-test comment describing a marker hostname. Verified
     # against the pre-scrub tree: it reads the same there, so it is someone's
     # invention and not a name the scrub mangled into looking invented.
@@ -176,10 +177,10 @@ def main():
             counts["a former product name"] += 1
             where["a former product name"] |= paths
             break
-        # Case-INSENSITIVELY, because the one occurrence that survived two scrubs
-        # was `example.ts.net` in a test of case-insensitive URL handling, and
-        # the previous version of this check looked for the lowercase literal --
-        # the same blind spot the scrub had, so it confirmed nothing.
+        # Case-INSENSITIVELY, because the occurrence that survived two scrubs was
+        # spelled `Mixed-Case.TS.net` in a test of case-insensitive URL handling,
+        # and the previous version of this check looked for the lowercase literal
+        # -- the same blind spot the scrub had, so it confirmed nothing.
         low = body.lower()
         for name, pat in literals.items():
             if pat.lower() in low:

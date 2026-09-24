@@ -69,10 +69,12 @@ def tailnet_patterns(names):
     runs used `str.replace`, which is case-sensitive, and one occurrence survived
     all of it:
 
-        expectEqual(GatewayAddress.origin(of: "HTTPS://ByskeBox.example.ts.net/"), ...
+        expectEqual(GatewayAddress.origin(of: "HTTPS://Box.Tail-Scale.TS.net/"), ...
 
     -- a test of case-insensitive origin normalisation, which is exactly the kind
-    of test that spells a hostname in mixed case. It sat in the history through
+    of test that spells a hostname in mixed case. (The tailnet there was the real
+    one; shown with the fixture name because an example written with the real name
+    is an example this scrub flattens into lowercase, taking the point with it.) It sat in the history through
     two rewrites and a verification that reported "0 blobs", because the
     verification looked for the same lowercase literal the scrub did. Both halves
     of a rule agreeing on the same blind spot is not confirmation.
