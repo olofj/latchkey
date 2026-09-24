@@ -144,6 +144,21 @@ nonisolated final class FakeUpstream: @unchecked Sendable {
         accepted.wait(timeout: .now() + seconds) == .success
     }
 
+    /// Consumes every accept signalled so far, after `settle` seconds for
+    /// relays still in flight to land, and says how many there were. The
+    /// relay's `stop()` and `restartListener` cancel the listener on their
+    /// own queue and return before the socket has closed, so for a moment
+    /// the old port still accepts; a probe that lands in that moment is
+    /// relayed like any client and counted here. That is the relay
+    /// behaving correctly, not a stray -- but left in the count it would
+    /// be mistaken for the next client's accept (the flake this fixes).
+    func drainAccepts(settle: TimeInterval = 0.2) -> Int {
+        Thread.sleep(forTimeInterval: settle)
+        var drained = 0
+        while accepted.wait(timeout: .now()) == .success { drained += 1 }
+        return drained
+    }
+
     func stop() {
         listener.cancel()
         lock.lock()
@@ -392,22 +407,45 @@ expect(!c1.isClosed, "sessions survive a listener restart")
 if restartedPort != strictPort {
     // The OS may hand the same ephemeral port out again; only when it did
     // not is the old port's refusal the old listener's absence.
-    expect(probe(strictPort) == .refused, "the old port no longer answers")
+    //
+    // restartListener has returned with the NEW listener ready, but it
+    // cancelled the old one asynchronously and NWListener closes the socket
+    // a beat after that, so the old port can still accept for a moment. A
+    // probe fired at once sometimes won that race: it was answered (this
+    // expectation failed) AND relayed, and the extra accept it left in the
+    // upstream's count shifted every accept/wait pairing after it, down to
+    // "(no stray accepts)" (the flake, seen once in three runs). Wait for
+    // the refusal instead.
+    expect(eventually { probe(strictPort, timeout: 0.5) == .refused }, "the old port no longer answers")
 } else {
     print("  (the OS reused the port; the old listener is gone by generation)")
 }
 expect(probe(restartedPort) == .answers, "the new port answers")
-expect(upstream.waitForAccept(), "(the probe's connection, relayed)")
+// A probe hangs up the moment it is answered, so whether it was relayed is
+// timing twice over: a probe of the OLD port may have been accepted before
+// the port closed (relayed, counted by the upstream), and any probe's dial
+// to the upstream may be cancelled before it went out (answered, NOT
+// counted -- the old "(the probe's connection, relayed)" expectation here
+// failed on exactly that). So no accept is paired with a probe: whatever
+// the probes left is drained, and the next accept is c4's. c4 stays open,
+// which is what proves the new listener relays.
+print("  (\(upstream.drainAccepts()) probe accept(s) drained)")
 expect(eventually { strict.activeSessionCount == 1 }, "still one session: \(strict.activeSessionCount)")
 let c4 = Client(port: restartedPort)
 expect(upstream.waitForAccept(), "a client of the new port is relayed")
 let c5 = Client(port: restartedPort)
 expect(c5.waitClosed(), "the new port applies the same cap")
-c1.cancel()
+// stop() is queue.async too, and returns before the listener closes. Here
+// the race is removed rather than waited out: c1 and c4 stay live, so the
+// cap is full and a probe that is still accepted is refused by policy --
+// closed at once, never dialled (the "refusing at the cap" section proved
+// that). So once the port refuses, "no stray accepts" is deterministic AND
+// still has teeth: an accept now would be the relay dialling the upstream
+// for a connection it refused.
 strict.stop()
 expect(eventually { probe(restartedPort, timeout: 0.5) == .refused }, "after stop() the port refuses the probe")
-expect(upstream.waitForAccept(0.2) == false, "(no stray accepts)")
-c3.cancel(); c4.cancel(); c5.cancel()
+expect(upstream.waitForAccept(0.2) == false, "(no stray accepts: the cap was full, so nothing was relayed)")
+c1.cancel(); c3.cancel(); c4.cancel(); c5.cancel()
 
 print("== the relay: evicting the quietest at the cap")
 let lenient = SocksLogProxy(upstreamHost: "127.0.0.1", upstreamPort: upstreamPort,
