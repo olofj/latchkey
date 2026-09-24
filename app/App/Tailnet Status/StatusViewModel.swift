@@ -17,6 +17,12 @@ final class StatusViewModel:  ObservableObject {
     @Published var tsnetState: Ipn.State?
     /// Logged in, waiting for an admin to approve the device (R17, R31).
     var needsMachineAuth: Bool { tsnetState == .NeedsMachineAuth }
+    /// G2 (F4 §3.6): the node has not reached a state that says anything yet.
+    /// Unbounded by design — it ends when the node gets somewhere — so the gate
+    /// puts a clock and a place to look on it rather than spinning silently.
+    var isStartingUp: Bool { tsnetState == nil || tsnetState == .NoState || tsnetState == .Starting }
+    /// G6: stopped, which said "Stopped" and nothing about what happens next.
+    var isStopped: Bool { tsnetState == .Stopped }
     /// True after the backend explicitly confirms authentication but before it
     /// reaches Running. During this interval the backend can legitimately keep
     /// reporting NeedsLogin while control finishes registration/netmap work;

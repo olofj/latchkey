@@ -144,7 +144,7 @@ struct GatewayPickerView: View {
                                     Text("Still waiting. Settings → Status shows the node's state.")
                                         .font(.footnote)
                                         .foregroundStyle(.secondary)
-                                        .accessibilityIdentifier("gateway-waiting-hint")
+                                        .accessibilityIdentifier("gateway-waiting-node-hint")
                                 }
                             }
                         }
@@ -195,7 +195,7 @@ struct GatewayPickerView: View {
                             Text(noneFound.advice)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
-                                .accessibilityIdentifier("gateway-none-advice")
+                                .accessibilityIdentifier("gateway-none-hint")
                         }
                     }
                     if !discovery.skipped.isEmpty {

@@ -9,32 +9,39 @@ import WebKit
 
 struct BrowserView: View {
     @ObservedObject var model: BrowserViewModel
+    /// D3: the chosen gateway is not in the tailnet. The banner above owns the
+    /// affordances; this only changes what the empty body says.
+    var gatewayMissing: Bool = false
+    /// Stops the load and opens the picker. One presentation path, owned by
+    /// `DashboardContent` (M5 review), so Find, Change, the connecting hint and
+    /// the error page cannot produce two overlapping sheets.
+    var onChooseGateway: () -> Void = {}
 
-    init(model: BrowserViewModel) {
+    init(model: BrowserViewModel, gatewayMissing: Bool = false,
+         onChooseGateway: @escaping () -> Void = {}) {
         self.model = model
+        self.gatewayMissing = gatewayMissing
+        self.onChooseGateway = onChooseGateway
     }
 
     var body: some View {
-        Group {
-            if let navError = model.navError {
-                // A failed navigation replaces the page, like a conventional
-                // browser error document. Because no old page remains visible,
-                // the chrome may safely show the attempted URL.
-                NavErrorPage(
-                    urlString: model.navErrorURLString ?? navError.url?.absoluteString ?? "",
-                    kind: model.navErrorKind,
-                    message: model.navErrorMessage
-                )
-            } else {
-                // The owned WKWebView extends beneath the notch/Dynamic Island.
-                // Pages using viewport-fit=cover can consume the real CSS safe-
-                // area values, matching Safari's edge-to-edge model.
-                RawWebView(model: model)
-                    // A WKWebView belongs to exactly one tab; prevent
-                    // UIViewRepresentable from reusing the previous tab's view.
-                    .id(ObjectIdentifier(model))
-                    .ignoresSafeArea(.container, edges: .top)
-            }
+        // A ZStack, not a Group with an `if`: the web view stays in the
+        // hierarchy in EVERY state (F4 §4.6). The old `if navError` branch
+        // removed it, which tears down the very load being described and costs
+        // a makeUIView on every retry.
+        ZStack {
+            // The owned WKWebView extends beneath the notch/Dynamic Island.
+            // Pages using viewport-fit=cover can consume the real CSS safe-
+            // area values, matching Safari's edge-to-edge model.
+            RawWebView(model: model)
+                // A WKWebView belongs to exactly one tab; prevent
+                // UIViewRepresentable from reusing the previous tab's view.
+                .id(ObjectIdentifier(model))
+                .ignoresSafeArea(.container, edges: .top)
+            PageStateView(state: model.pageState,
+                          gatewayMissing: gatewayMissing,
+                          onRetry: { model.reload() },
+                          onChooseGateway: onChooseGateway)
         }
         // Cover the instant before UIViewRepresentable installs WKWebView with
         // the same adaptive background used by RawWebView itself.
@@ -56,54 +63,60 @@ struct BrowserView: View {
 /// reports as -1000 "bad URL", reads "Connection error", never "URL format
 /// error" (F4 §4.3; the page itself is rebuilt by F4 §3.2).
 struct NavErrorPage: View {
-    let urlString: String
-    let kind: NavErrorKind?
-    let message: String?
+    let failure: PageState.Failure
+    var onRetry: () -> Void = {}
+    var onChooseGateway: () -> Void = {}
+
+    @State private var showingDetails = false
 
     var body: some View {
-        VStack(spacing: 10) {
+        let lines = PageFailureText.lines(for: failure)
+        return VStack(spacing: 14) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 36))
                 .foregroundStyle(.orange)
-                .padding(.bottom, 4)
-            Text("Unable to Load Page")
+            Text(lines.title)
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .accessibilityIdentifier("nav-error-title")
+            Text(lines.cause)
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+                .accessibilityIdentifier("nav-error-cause")
+            Text(lines.next)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .accessibilityIdentifier("nav-error-next")
 
-            // Category label — distinguishes a URL format problem (the URL
-            // itself is bad) from a retrieval problem (the URL is fine but we
-            // couldn't reach it). Helps the user know whether to fix the URL
-            // or check their connection.
-            if let kind, let label = categoryLabel(for: kind) {
-                Text(label.text)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(label.color)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            // Full opacity, over an opaque background: a control at opacity < 1
+            // over a WKWebView receives no taps (M8). Both buttons exist in
+            // every failure, because "try again" and "use a different gateway"
+            // are the only two things the owner can actually do.
+            HStack(spacing: 12) {
+                Button("Try again", action: onRetry)
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("nav-error-retry")
+                Button("Choose another gateway", action: onChooseGateway)
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("nav-error-choose-gateway")
             }
 
-            // The URL, escaped for diagnosis. Monospaced so the `\u{XXXX}`
-            // sequences align and any unexpected characters stand out.
-            VStack(alignment: .leading, spacing: 2) {
-                Text("URL (escaped for debugging):")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(debugEscaped(urlString))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+            // Collapsed: the diagnosis is read here when it is wanted, and D1
+            // means it is read HERE rather than sent anywhere.
+            DisclosureGroup("Details", isExpanded: $showingDetails) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(PageFailureText.details(for: failure, urlString: urlString), id: \.self) { line in
+                        Text(line)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                }
             }
-
-            if let message, !message.isEmpty {
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
+            .font(.footnote)
+            .accessibilityIdentifier("nav-error-details")
         }
         .padding(32)
         .frame(maxWidth: 520)
@@ -113,13 +126,10 @@ struct NavErrorPage: View {
         .accessibilityIdentifier("nav-error-overlay")
     }
 
-    /// A short label + color for each error category, or nil for `.other`
-    /// (page-closed / content-process crash — no useful category to show).
-    /// The words are `NavErrorKind.caption`'s, host-tested; only the colour
-    /// is decided here.
-    private func categoryLabel(for kind: NavErrorKind) -> (text: String, color: Color)? {
-        guard let text = kind.caption else { return nil }
-        return (text, kind == .urlFormat ? .orange : .secondary)
+    /// The URL for Details. Never the sign-in token: `BrowserViewModel` strips
+    /// it before the failure is built, and this reads only what it was given.
+    private var urlString: String {
+        failure.fqdn.isEmpty ? "" : "https://\(PageFailureText.displayHost(failure.fqdn, port: failure.port))/"
     }
 }
 

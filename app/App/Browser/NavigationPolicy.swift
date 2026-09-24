@@ -120,18 +120,11 @@ enum ResponsePolicy {
         return (500...599).contains(status) ? .refuse : .commit
     }
 
-    /// What the owner is told for a refused status. 502/503/504 are
-    /// `tailscale serve` answering for a Kiro Crew that is not running; 500 is
-    /// Kiro Crew itself failing on the document. Naming which one it is saves
-    /// the owner from debugging the tailnet when the gateway is simply down.
-    nonisolated static func refusalText(status: Int, host: String) -> String {
-        switch status {
-        case 502, 503, 504:
-            return "\(host) answered, but Kiro Crew isn't running behind it (HTTP \(status)). "
-                + "The tailnet and the gateway are fine — start Kiro Crew on that machine, then try again."
-        default:
-            return "Kiro Crew on \(host) failed to build the page (HTTP \(status)). "
-                + "The tailnet and the connection are fine; check the gateway's own log."
-        }
-    }
+    // `refusalText` lived here and is gone (F4 §3.2). It was a SECOND wording
+    // for a refused 5xx beside `PageFailureText.lines(for:)`'s, and once the
+    // rebuilt error page read the latter, the former was displayed nowhere while
+    // still being maintained and tested. Two texts for one state drift, and the
+    // one that drifts is the one nobody sees. The wording now lives in
+    // PageFailureText, tested there, including that 502 and 500 do not read
+    // alike.
 }

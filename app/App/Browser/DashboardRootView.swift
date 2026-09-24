@@ -49,8 +49,16 @@ struct DashboardRootView: View {
                     .id(ws.id)
             } else {
                 // No workspace — never happens (WorkspaceManager always seeds
-                // one), but keep the view tree valid rather than crashing.
-                ProgressView()
+                // one), but keep the view tree valid rather than crashing. It
+                // says something anyway (F4 §4.7 G1): an unreachable state that
+                // renders a bare spinner is indistinguishable, if it ever is
+                // reached, from the blank screens this feature removes.
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Starting Latchkey…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .background {
@@ -256,6 +264,15 @@ private struct DashboardContent: View {
                               onCancel: { showingGatewayPicker = false })
         }
 #if LATCHKEY_TEST_HOOKS
+        .overlay(alignment: .bottomLeading) {
+            // For UI tests: how many times the connecting block became visible
+            // for this tab (F4 §4.7). A block that flashes up and away between
+            // two looks is invisible to a poll but not to this number — which is
+            // the failure mode the 300 ms delay could introduce.
+            Text("connecting-shown:\(tab.viewModel.connectingShownCount)")
+                .accessibilityIdentifier("page-connecting-shown-count")
+                .opacity(0.01)
+        }
         .overlay(alignment: .bottom) {
             // For UI tests: how many times the page asked for a token, so a
             // sheet that flashes up and away between two looks is caught.
@@ -349,7 +366,18 @@ private struct DashboardContent: View {
                 GatewayUnreachableBanner(onSettings: onSettings,
                                          onFindGateways: { showingGatewayPicker = true })
             }
-            BrowserView(model: tab.viewModel)
+            // The one picker presentation lives here (F4 §4.7), so Find, Change,
+            // the connecting hint's button and the error page's all go through
+            // it and two sheets can never overlap (M5 review). The load is
+            // stopped first, which moves the page to a failed state with cause
+            // `stopped` — so cancelling the picker lands on an error page with
+            // Try again, never back on a blank web view.
+            BrowserView(model: tab.viewModel,
+                        gatewayMissing: homePageAvailability == .unavailable,
+                        onChooseGateway: {
+                            tab.viewModel.stopForGatewayChange()
+                            showingGatewayPicker = true
+                        })
                 .frame(minHeight: 0, maxHeight: .infinity)
                 .layoutPriority(-1)
             // R31, R33: the two clocks that end the app, warned about ahead.

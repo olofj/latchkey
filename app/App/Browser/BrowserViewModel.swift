@@ -52,6 +52,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// are still set beside it, so this commit changes no visible behaviour.
     @Published private(set) var pageState: PageState = .idle
 
+    /// How many times the page has entered `connecting` (F4 §4.7). Test builds
+    /// read it through `page-connecting-shown-count`: a block that appears and
+    /// vanishes between two polls is invisible to a test but not to a counter,
+    /// which is exactly the flicker the 300 ms show-delay could introduce.
+    @Published private(set) var connectingShownCount = 0
+
     /// Every transition writes one line (F4 §4.9), so a device run and a suite
     /// can both say which state was on screen and for how long. Assigning the
     /// same state twice is not logged: `@Published` fires `objectWillChange`
@@ -66,6 +72,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         case .holding(let host, _):
             logger.log("page-state: holding host=\(host)")
         case .connecting(let host, let port, let since, let attempt):
+            // Counted on entry from another state, not on each retry: the retries
+            // keep the same block on screen.
+            if attempt == 1 { connectingShownCount += 1 }
             logger.log("page-state: connecting host=\(host) port=\(port) attempt=\(attempt)"
                        + (attempt > 1 ? " after \(PageState.elapsedSeconds(since: since)) s" : ""))
         case .committed:
@@ -551,6 +560,29 @@ final class BrowserViewModel: NSObject, ObservableObject {
                 NSURLErrorNetworkConnectionLost,
                 NSURLErrorNotConnectedToInternet,
                 NSURLErrorCannotLoadFromNetwork].contains(ns.code)
+    }
+
+    /// Stops an in-flight load because the owner is about to pick another
+    /// gateway (F4 §3.1). The page moves to `failed(.stopped)` rather than back
+    /// to idle, so cancelling the picker leaves an error page with *Try again*
+    /// on it instead of the blank web view this whole feature exists to remove.
+    func stopForGatewayChange() {
+        startupRetryTask?.cancel()
+        startupRetryTask = nil
+        startupLoad = nil
+        webView?.stopLoading()
+        // Only from a state where something was actually in flight: stopping a
+        // committed page would replace a perfectly good page with an error.
+        switch pageState {
+        case .connecting, .holding:
+            let elapsed = elapsedSinceNavigationStart()
+            logger.log("page-state: stopped after \(PageState.milliseconds(elapsed)) ms")
+            setPageState(.failed(pageFailure(error: URLError(.cancelled) as NSError,
+                                             failedURL: url ?? initialURL,
+                                             cause: .stopped, elapsed: elapsed)))
+        case .idle, .committed, .failed:
+            break
+        }
     }
 
     func reload() {
@@ -1059,14 +1091,15 @@ extension BrowserViewModel {
         // as one: the gateway is reachable and answered, so say what it said.
         if let status = refusedResponseStatus {
             refusedResponseStatus = nil
-            let host = (webView?.url ?? initialURL).host() ?? "the gateway"
             navigationError(error, for: initialURL)
-            navErrorMessage = ResponsePolicy.refusalText(status: status, host: host)
             // navigationError decided the cause from WebKit's 102, which says
             // only "something cancelled it". The status is what the gateway
-            // actually answered, so it wins (F4 §4.13).
-            setPageState(.failed(pageFailure(error: error, failedURL: initialURL,
-                                             cause: .gatewayError(status: status))))
+            // actually answered, so it wins (F4 §4.13). The wording comes from
+            // PageFailureText, the single place that owns it.
+            let failure = pageFailure(error: error, failedURL: initialURL,
+                                      cause: .gatewayError(status: status))
+            navErrorMessage = PageFailureText.lines(for: failure).cause
+            setPageState(.failed(failure))
             return true
         }
         if webView?.url != nil {

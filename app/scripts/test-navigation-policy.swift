@@ -113,15 +113,11 @@ expectResponse(ResponsePolicy.decide(isMainFrame: true, statusCode: nil, authReq
                .commit, "a non-HTTP response commits")
 
 print("== responses: the wording tells a stopped gateway from a broken one")
-let downText = ResponsePolicy.refusalText(status: 502, host: "gw.example.ts.net")
-expectTrue(downText.contains("isn't running") && downText.contains("gw.example.ts.net")
-       && downText.contains("502"), "502 names the host, the status, and says Kiro Crew is not running")
-expectTrue(downText.lowercased().contains("tailnet and the gateway are fine"),
-       "502 says the tailnet is not the problem: that is the whole diagnostic value")
-let brokeText = ResponsePolicy.refusalText(status: 500, host: "gw.example.ts.net")
-expectTrue(brokeText.contains("failed to build the page"),
-       "500 blames Kiro Crew itself, not the serve front")
-expectTrue(downText != brokeText, "the two 5xx causes do not read the same")
+// The refusal WORDING moved to PageFailureText (F4 §3.2) and is checked in
+// scripts/test-page-failure-text.swift, which asserts the same properties: 502
+// blames what is behind the gateway, 500 blames Kiro Crew, and the two do not
+// read alike. What stays here is the DECISION -- which statuses are refused at
+// all -- above.
 
 if failures == 0 {
     print("\(checks)/\(checks) navigation policy checks passed")

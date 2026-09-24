@@ -241,7 +241,7 @@ final class DiscoveryTests: XCTestCase {
         // Purgatory is precisely the situation F4's unanswered-branch advice was
         // written for, so it must be the branch shown: the device is not allowed
         // to reach the peers yet, and searching again cannot change that.
-        let advice = element(app, "gateway-none-advice").label
+        let advice = element(app, "gateway-none-hint").label
         XCTAssertTrue(advice.contains("isn't allowed to reach"),
                       "the advice must name the real cause, not suggest retrying: \(advice)")
         let done = try sweepDone(app)

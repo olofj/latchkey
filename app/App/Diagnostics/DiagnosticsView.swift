@@ -128,7 +128,14 @@ struct DiagnosticsView: View {
                 Row(label: "Relay probes", value: "\(counters.socksRelayProbes) (\(counters.socksRelayProbesFailed) found it dead)"),
             ]),
             Block(title: "Page", rows: [
-                Row(label: "Last error", value: workspace.tabManager.currentTab?.viewModel.navErrorMessage ?? "none"),
+                // F4 §4.11. "Last error" was the only thing here, and it was
+                // whatever string the overlay happened to be showing; the state
+                // says what the page is doing NOW, which is what someone reading
+                // this on a device without a Mac needs. Read-only, and nothing
+                // leaves the device (D1).
+                Row(label: "State", value: pageStateSummary),
+                Row(label: "Last error", value: lastPageErrorSummary),
+                Row(label: "Last proxy reply", value: lastProxyReplySummary),
                 Row(label: "Web page restarts", value: "\(counters.webContentTerminations) (\(counters.webContentAutoReloads) reloaded)"),
             ]),
             Block(title: "App", rows: [
@@ -161,11 +168,45 @@ struct DiagnosticsView: View {
         return "on"
     }
 
+    private var pageStateSummary: String {
+        guard let vm = workspace.tabManager.currentTab?.viewModel else { return "no page" }
+        return PageFailureText.describe(vm.pageState)
+    }
+
+    /// The failure's own cause sentence, not whatever string the overlay is
+    /// showing: the two were the same before F4 and are not now.
+    private var lastPageErrorSummary: String {
+        guard let vm = workspace.tabManager.currentTab?.viewModel else { return "none" }
+        if case .failed(let f) = vm.pageState {
+            return PageFailureText.lines(for: f).cause
+        }
+        return vm.navErrorMessage ?? "none"
+    }
+
+    /// The last CONNECT the tailnet proxy refused. The only place the SOCKS
+    /// reply code survives: WebKit turns every one of them into -1000.
+    private var lastProxyReplySummary: String {
+        guard let r = model.lastProxyFailure else { return "none" }
+        return "\(r.target): \(r.reply) after \(PageState.milliseconds(r.elapsed)) ms"
+    }
+
     private var discoverySummary: String {
         switch discovery.phase {
         case .idle: return "not run"
-        case .probing: return "probing \(discovery.candidateCount)…"
-        case .finished: return "\(discovery.gateways.count) of \(discovery.candidateCount) candidate(s)"
+        case .probing:
+            return "probing \(discovery.probedCount) of \(discovery.candidateCount)…"
+        case .finished:
+            // The last sweep's own numbers (F4 §4.8), and whether it finished.
+            // "1 of 4 candidates" alone said nothing about a sweep that ran out
+            // of time, which on a large tailnet is most of them (F7).
+            guard let s = discovery.lastSweep else {
+                return "\(discovery.gateways.count) of \(discovery.candidateCount) candidate(s)"
+            }
+            let took = String(format: "%.1f s", Double(PageState.milliseconds(s.elapsed)) / 1000)
+            let probed = s.truncated ? "\(s.probed) of \(s.candidates)" : "all \(s.candidates)"
+            return "\(s.gateways) found; checked \(probed), \(s.answered) answered, "
+                + "\(s.unanswered) didn't, \(took)"
+                + (s.truncated ? " (ran out of time)" : "")
         case .proxyUnhealthy: return "proxy not answering"
         }
     }

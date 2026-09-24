@@ -26,6 +26,10 @@ struct StatusView: View {
     /// button returns to tappable; the spinner persisting that long is itself
     /// the "tap registered but stuck" signal.
     @State private var isStartingLogin = false
+    /// When the gate appeared, or when the node's state last changed, whichever
+    /// is later (F4 §4.10) — so a node that has been "Connecting…" for a minute
+    /// says so, and one that just changed state starts its 15 s afresh.
+    @State private var stateSince = ContinuousClock.now
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -43,6 +47,24 @@ struct StatusView: View {
                     .foregroundStyle(.primary)
 
                 Spacer()
+            }
+
+            // G2/G6 (F4 §3.6). "Connecting…" and "Starting…" are unbounded —
+            // the node reaches another state when it does — so after 15 s the
+            // gate says where to look instead of spinning silently. Three status
+            // polls: a node normally gets somewhere inside one.
+            if viewModel.isStartingUp {
+                StalledHint(since: stateSince, delay: .seconds(15),
+                            text: "Still starting after 15 s. Settings → Node log shows what the "
+                                + "node is doing.",
+                            identifier: "gate-starting-hint")
+            } else if viewModel.isStopped {
+                Text("Stopped. Latchkey starts the node again when it returns to the "
+                     + "foreground; if it doesn't, Settings → Node log.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("gate-stopped-hint")
             }
 
             if viewModel.needsMachineAuth {
@@ -83,6 +105,7 @@ struct StatusView: View {
         .onChange(of: viewModel.needsAuth) { _, needsAuth in
             if !needsAuth { isStartingLogin = false }
         }
+        .onChange(of: viewModel.statusText) { _, _ in stateSince = .now }
         .onChange(of: viewModel.authSessionEndedGeneration) { _, _ in
             isStartingLogin = false
         }

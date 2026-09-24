@@ -185,14 +185,16 @@ final class OfflineHarnessTests: XCTestCase {
         // Pin the cause. Without this the test would pass on any failure —
         // including the transport failures the other modes produce, which are
         // exactly what this test exists to distinguish itself from.
+        // The words are F4 §4.4's now, not ResponsePolicy.refusalText's: the
+        // rebuilt page owns its wording in one place (§3.2).
         let stopped = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS[c] %@", "isn't running")).firstMatch
+            NSPredicate(format: "label CONTAINS[c] %@", "restarting or stopped")).firstMatch
         XCTAssertTrue(stopped.waitForExistence(timeout: 5),
                       "the page should say Kiro Crew is not running behind the gateway")
         let reassurance = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS[c] %@", "tailnet and the gateway are fine")).firstMatch
+            NSPredicate(format: "label CONTAINS[c] %@", "but Kiro Crew behind it didn't")).firstMatch
         XCTAssertTrue(reassurance.exists,
-                      "and should say the tailnet is not the problem, so the owner does not debug grants")
+                      "and should blame what is behind the gateway, not the tailnet, so the owner does not debug grants")
         // The connection really was made and really was answered: this is not
         // a dial that failed.
         let connects = try await journalConnects()
@@ -389,12 +391,21 @@ final class OfflineHarnessTests: XCTestCase {
 
     private func assertConnectionFailure(_ app: XCUIApplication, _ message: String,
                                          file: StaticString = #filePath, line: UInt = #line) {
-        let cause = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "[NSURLErrorDomain ")).firstMatch
+        // The domain and code moved under the Details disclosure when the page
+        // was rebuilt (F4 §3.2): the owner gets a sentence, and the diagnosis is
+        // there when it is wanted. So open it before reading the code — this
+        // assertion is the only end-to-end proof that `allowFailover` is false
+        // and that the failure is the CONNECTION's, and it keeps that job.
+        let details = app.descendants(matching: .any).matching(identifier: "nav-error-details").firstMatch
+        if details.waitForExistence(timeout: 5), details.isHittable {
+            details.tap()
+        }
+        let cause = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "NSURLErrorDomain ")).firstMatch
         XCTAssertTrue(cause.waitForExistence(timeout: 5), "\(message): the error page names its NSURLError code",
                       file: file, line: line)
         let label = cause.label
-        let tail = label.components(separatedBy: "[NSURLErrorDomain ").last ?? ""
-        let code = Int(tail.components(separatedBy: "]").first ?? "")
+        let tail = label.components(separatedBy: "NSURLErrorDomain ").last ?? ""
+        let code = Int(tail.trimmingCharacters(in: .whitespaces).components(separatedBy: " ").first ?? "")
         XCTAssertTrue(code.map { Self.connectionFailureCodes.contains($0) } ?? false,
                       "\(message): the load must fail at the CONNECTION (-1004, -1005 or -1009), not before dialling; the error page says: \(label)",
                       file: file, line: line)
