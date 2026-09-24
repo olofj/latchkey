@@ -37,6 +37,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published var failedInitialURL: URL?
     @Published var navError: (err: Error, url: URL?)?
     @Published var navErrorMessage: String?
+    /// Set when `decidePolicyFor navigationResponse` refused a main-frame 5xx,
+    /// read once by `handlePolicyInterruption`, which sees only WebKit's
+    /// error 102 and cannot otherwise tell a refused response from a refused
+    /// redirect (F4 §4.13).
+    private var refusedResponseStatus: Int?
     @Published var navErrorKind: NavErrorKind?
     @Published var navErrorURLString: String?
 
@@ -805,12 +810,33 @@ extension BrowserViewModel: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
+        let response = navigationResponse.response
+        let http = response as? HTTPURLResponse
         if TestHooks.flag("-UITestLogResponses") {
-            let response = navigationResponse.response
             let url = response.url?.redactedForLog ?? "(nil)"
-            if let http = response as? HTTPURLResponse {
+            if let http {
                 logger.log("RESP-LOG response: \(http.statusCode) \(url) mime=\(response.mimeType ?? "?")")
             }
+        }
+        // F4 §4.13. A main-frame 5xx must not commit: behind `tailscale serve`
+        // a stopped Kiro Crew answers 502 on a live port, which produces no
+        // NSURLError at all, so without this the empty body becomes the
+        // document and the owner gets a blank screen with no explanation.
+        let authRequired = (http?.value(forHTTPHeaderField: "X-Auth-Required") ?? "")
+            .caseInsensitiveCompare("true") == .orderedSame
+        let decision = ResponsePolicy.decide(isMainFrame: navigationResponse.isForMainFrame,
+                                             statusCode: http?.statusCode,
+                                             authRequired: authRequired)
+        guard decision == .commit else {
+            // Record the status BEFORE cancelling: WebKit reports a cancelled
+            // response as WebKitErrorDomain 102, the same error a cancelled
+            // navigation gives, and handlePolicyInterruption would otherwise
+            // read this as "the policy refused a redirect" and say the wrong
+            // thing (or nothing, if a page is already showing).
+            refusedResponseStatus = http?.statusCode
+            logger.log("Response refused: HTTP \(http?.statusCode ?? -1) for \(response.url?.redactedForLog ?? "(nil)")")
+            decisionHandler(.cancel)
+            return
         }
         decisionHandler(.allow)
     }
@@ -911,6 +937,16 @@ extension BrowserViewModel {
     fileprivate func handlePolicyInterruption(_ error: NSError) -> Bool {
         guard error.domain == "WebKitErrorDomain", error.code == 102 else { return false }
         startupLoad = nil
+        // A response this app refused (F4 §4.13) arrives here as the same 102.
+        // It is not a redirect the policy declined, and it must not be treated
+        // as one: the gateway is reachable and answered, so say what it said.
+        if let status = refusedResponseStatus {
+            refusedResponseStatus = nil
+            let host = (webView?.url ?? initialURL).host() ?? "the gateway"
+            navigationError(error, for: initialURL)
+            navErrorMessage = ResponsePolicy.refusalText(status: status, host: host)
+            return true
+        }
         if webView?.url != nil {
             // A page is showing; leave it. The destination already went to
             // the system (or was refused) in decidePolicyFor.

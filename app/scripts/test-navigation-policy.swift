@@ -62,6 +62,67 @@ expect("https://www.youtube.com/embed/x", main: false, .allow, "cross-origin ifr
 expect("about:srcdoc", main: false, .allow, "srcdoc iframe")
 
 print("")
+// MARK: - ResponsePolicy (F4 §4.13, state D10)
+//
+// The delegate used to .allow every response without looking, so a 502 from
+// `tailscale serve` -- which is what a stopped Kiro Crew answers on a live
+// port 443 -- committed its empty body as the document. No NSURLError is
+// produced on that path, so nothing else in the app could notice.
+print("== responses: which ones commit")
+
+func expectTrue(_ got: Bool, _ what: String) {
+    checks += 1
+    if got { return }
+    print("  FAIL: \(what)")
+    failures += 1
+}
+
+func expectResponse(_ got: ResponseDecision, _ want: ResponseDecision, _ what: String) {
+    checks += 1
+    if got == want { return }
+    print("  FAIL: \(what): got \(got), want \(want)")
+    failures += 1
+}
+
+// The whole point: a gateway that is not there must not paint a blank page.
+for status in [500, 502, 503, 504, 599] {
+    expectResponse(ResponsePolicy.decide(isMainFrame: true, statusCode: status, authRequired: false),
+                   .refuse, "a main-frame \(status) is refused")
+}
+// A gateway that answered gets to show its own page, however unhappily.
+for status in [100, 200, 204, 301, 302, 304, 400, 401, 403, 404, 418, 499] {
+    expectResponse(ResponsePolicy.decide(isMainFrame: true, statusCode: status, authRequired: false),
+                   .commit, "a main-frame \(status) commits")
+}
+// KiroCrew's own voice is always shown. Refusing this would turn "that sign-in
+// link didn't work" into "couldn't reach the gateway" -- blaming the tailnet
+// for something the gateway said deliberately.
+for status in [401, 403] {
+    expectResponse(ResponsePolicy.decide(isMainFrame: true, statusCode: status, authRequired: true),
+                   .commit, "\(status) with X-Auth-Required commits (sign-in must not break)")
+}
+expectResponse(ResponsePolicy.decide(isMainFrame: true, statusCode: 503, authRequired: true),
+               .commit, "even a 5xx with X-Auth-Required commits, stated once")
+// Sub-frames are the page's own business, like their requests.
+for status in [500, 502, 503] {
+    expectResponse(ResponsePolicy.decide(isMainFrame: false, statusCode: status, authRequired: false),
+                   .commit, "a sub-frame \(status) is left alone")
+}
+// Nothing to inspect: about:blank, a scheme handler, a blob.
+expectResponse(ResponsePolicy.decide(isMainFrame: true, statusCode: nil, authRequired: false),
+               .commit, "a non-HTTP response commits")
+
+print("== responses: the wording tells a stopped gateway from a broken one")
+let downText = ResponsePolicy.refusalText(status: 502, host: "gw.example.ts.net")
+expectTrue(downText.contains("isn't running") && downText.contains("gw.example.ts.net")
+       && downText.contains("502"), "502 names the host, the status, and says Kiro Crew is not running")
+expectTrue(downText.lowercased().contains("tailnet and the gateway are fine"),
+       "502 says the tailnet is not the problem: that is the whole diagnostic value")
+let brokeText = ResponsePolicy.refusalText(status: 500, host: "gw.example.ts.net")
+expectTrue(brokeText.contains("failed to build the page"),
+       "500 blames Kiro Crew itself, not the serve front")
+expectTrue(downText != brokeText, "the two 5xx causes do not read the same")
+
 if failures == 0 {
     print("\(checks)/\(checks) navigation policy checks passed")
 } else {
