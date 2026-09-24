@@ -87,7 +87,9 @@ has no grants yet. That is expected, not a bug. *Choose a gateway* says one
 of two things, depending on whether the policy lets the node see its peers:
 - **"No Kiro Crew gateway answered among N computer(s) on your tailnet"**:
   the peers are visible but drop the node's traffic. The search ends in
-  about 1.5 s. In Settings → Logs, each `socks[n] CONNECT … request reached
+  about 4 s: every probe runs at once and each waits out the per-request
+  timeout (`GatewayDiscovery.requestTimeout`, 4 s since R39; it was 1.5 s
+  when this was written). In Settings → Logs, each `socks[n] CONNECT … request reached
   the tailnet proxy` is followed by `relay finished`, with no OK or FAILED
   line.
 - **"No computers on your tailnet could be a gateway"**: the node sees no
