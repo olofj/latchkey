@@ -127,6 +127,19 @@ only cancels the previous run, bumps the generation and spawns the sweep
 The existing summary log line gains `probed=N/M truncated=yes|no`, so a device
 log answers this without a debugger.
 
+**Wrong, and it broke the discovery suite for one commit.** That summary line and
+`Discovery: probing N of M peer(s)` are *instruments*:
+`scripts/test-discovery.sh` parses both (`:151`, `:155-156`), and the summary's
+regex is anchored with `$`. Appending the counters inside it, and rewording the
+probing line, made both regexes miss — at which point the parser records no sweep
+at all and the suite fails with "no sweep that found a gateway was logged; this
+measured nothing". Both lines are now restored byte-for-byte and the counters are
+on their own line, `Discovery: probed=N/M truncated=yes|no skipped=K [next=i]`,
+which the suite's pre-filter grep does not even select. F4 §4.8 states the rule
+this should have followed: **the existing lines do not change; new numbers get a
+new line.** Verified by running the suite's two regexes against both the restored
+and the broken strings.
+
 **As built, three corrections to the above** (2026-09-23) — each because the
 specified version would have let the picker state something untrue:
 

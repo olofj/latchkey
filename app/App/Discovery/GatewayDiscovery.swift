@@ -254,7 +254,17 @@ final class GatewayDiscovery: ObservableObject {
         candidateCount = ordered.count
         phase = .probing
         let started = ContinuousClock.now
-        logger.log("Discovery: probing \(candidates.count) of \(ordered.count) candidate(s), \(peers.count) peer(s)")
+        // BYTE-FOR-BYTE UNCHANGED, and it must stay that way: this line and the
+        // summary below are parsed by scripts/test-discovery.sh (its regexes at
+        // :151 and :155-156), and the summary's is anchored with `$`. F7 first
+        // rewrote this one and appended its new counters to the summary, which
+        // made both regexes miss; the suite's parser then recorded no sweep at
+        // all and would have failed with "this measured nothing". New numbers go
+        // on their OWN line (F4 §4.8).
+        logger.log("Discovery: probing \(candidates.count) of \(peers.count) peer(s)")
+        if continueFrom > 0 {
+            logger.log("Discovery: continuing at candidate \(continueFrom) of \(ordered.count)")
+        }
 
         guard !candidates.isEmpty else {
             // Nothing to wait for: do not sit out the deadline.
@@ -344,7 +354,10 @@ final class GatewayDiscovery: ObservableObject {
             proxyDead = !(await loopbackAnswers())
         }
         guard mine == generation else { return }
-        logger.log("Discovery: \(gateways.count) gateway(s); first after \(firstFound.map { "\($0.milliseconds) ms" } ?? "—"), sweep \(elapsed.milliseconds) ms; \(answered) answered, \(failures.count) failed; probed=\(probedCount)/\(candidateCount) truncated=\(sweepTruncated ? "yes" : "no") skipped=\(skipped.count); shown to first \(fromShown.map { "\($0.milliseconds) ms" } ?? "—")")
+        logger.log("Discovery: \(gateways.count) gateway(s); first after \(firstFound.map { "\($0.milliseconds) ms" } ?? "—"), sweep \(elapsed.milliseconds) ms; \(answered) answered, \(failures.count) failed; shown to first \(fromShown.map { "\($0.milliseconds) ms" } ?? "—")")
+        // F7's counters, on their own line so the summary above stays the
+        // instrument scripts/test-discovery.sh parses.
+        logger.log("Discovery: probed=\(probedCount)/\(candidateCount) truncated=\(sweepTruncated ? "yes" : "no") skipped=\(skipped.count)\(sweepTruncated ? " next=\(nextCandidateIndex)" : "")")
         if proxyDead {
             phase = .proxyUnhealthy
         } else {
