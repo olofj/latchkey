@@ -26,15 +26,25 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-if [[ $# -eq 0 ]]; then
-    echo "usage: scripts/history-scrub.sh <real-tailnet-name> [more...]" >&2
-    echo "  e.g. scripts/history-scrub.sh something.ts.net older.ts.net" >&2
-    echo "  More than one, because more than one turned out to be in here: a" >&2
-    echo "  tailnet the project had used earlier was still named in app code" >&2
-    echo "  and in a commit message." >&2
+TAILNETS=()
+IPS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ip) IPS+=("$2"); shift 2 ;;
+        *)    TAILNETS+=("$1"); shift ;;
+    esac
+done
+if [[ ${#TAILNETS[@]} -eq 0 && ${#IPS[@]} -eq 0 ]]; then
+    echo "usage: scripts/history-scrub.sh <real-tailnet-name> [more...] [--ip <addr>]..." >&2
+    echo "  e.g. scripts/history-scrub.sh something.ts.net older.ts.net --ip 203.0.113.9" >&2
+    echo "  More than one tailnet, because more than one turned out to be in" >&2
+    echo "  here: a tailnet the project had used earlier was still named in app" >&2
+    echo "  code and in a commit message." >&2
+    echo "  --ip takes a REAL observed address. Fixtures, resolvers and boundary" >&2
+    echo "  values must NOT be passed: they are what the tests assert about." >&2
     exit 2
 fi
-TAILNET="$*"
+TAILNET="${TAILNETS[*]}"
 
 # --- refuse to run on anything but a clean, unpushed, idle repository --------
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -64,6 +74,7 @@ echo "::: tagged the current history as $BACKUP ($BEFORE_COUNT commits)"
 # --prune-empty drops the commits that become no-ops, which is exactly what the
 # rename commits become: both sides of their diffs end up saying Latchkey.
 export SCRUB_TAILNET="$TAILNET"
+export SCRUB_IPS="${IPS[*]}"
 export FILTER_BRANCH_SQUELCH_WARNING=1
 
 git filter-branch --force --prune-empty \
@@ -82,7 +93,9 @@ echo "::: rewritten: $BEFORE_COUNT commits -> $AFTER_COUNT"
 # first scrub's verification was killed partway and printed nothing, which is
 # worse than a slow check because it reads as success.
 echo "::: verification"
-if ! python3 "$ROOT/scripts/history-verify.py" "$@"; then
+VERIFY_ARGS=("${TAILNETS[@]}")
+for ip in ${IPS[@]+"${IPS[@]}"}; do VERIFY_ARGS+=(--ip "$ip"); done
+if ! python3 "$ROOT/scripts/history-verify.py" ${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}; then
     echo "::: FAILED -- the previous history is at $BACKUP and refs/original/" >&2
     exit 1
 fi

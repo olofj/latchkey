@@ -38,6 +38,7 @@ version of this would have missed a name that appears only in prose.
 """
 
 import collections
+import ipaddress
 import re
 import subprocess
 import sys
@@ -95,6 +96,49 @@ from product_names import OLD_RE_BYTES as GONE_RE     # noqa: E402
 # the scrub ate it.
 MUST_STAY = ("KiroCrew", b"KiroCrew")
 
+# Every IPv4 literal in our own files, classified rather than eyeballed. The first
+# survey of these concluded "none is the owner's" from what the addresses looked
+# like; enumerating them found three captured from live runs, one of which
+# app/timing/README.md describes as `self.Addrs` -- the public address of the
+# network the owner was on.
+#
+# Whole CLASSES are fine and are not listed: 100.64.0.0/10 (tsnet-side, which the
+# owner said may stay), RFC1918, loopback, reserved, multicast, and RFC 5737
+# documentation space (192.0.2.0/24, which is what the scrub substitutes).
+IP_RE = re.compile(rb"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+IP_ALLOWED = {
+    # Public resolvers, named in proxy-policy fixtures as "not on the tailnet".
+    "1.1.1.1", "8.8.8.8",
+    # Deliberate boundary values: the addresses just OUTSIDE 100.64.0.0/10, which
+    # are the assertion in app/scripts/test-proxy-policy.swift. Scrubbing one of
+    # these would delete the test's point.
+    "100.5.5.5", "100.63.255.255", "100.128.0.0",
+    # A near-miss of 127.0.0.1, in app/scripts/test-control-plane.swift.
+    "128.0.0.1",
+    # A Google address: the app's "internet https by-IP" probe target, quoted in
+    # the proxy-policy explainer.
+    "142.250.80.46",
+    # Tailscale's own control-plane and log-service ranges, named on purpose in
+    # scripts/check-no-log-upload.sh so the app can be asserted never to reach
+    # them, plus the illustrative lsof line in that script's comment.
+    "192.200.0.0", "192.200.0.115", "199.165.136.0", "199.165.136.100",
+}
+
+
+def ip_class_is_fine(text):
+    """True for whole classes that need no review. None for "not an address"."""
+    try:
+        addr = ipaddress.IPv4Address(text)
+    except ValueError:
+        return None
+    if addr in ipaddress.ip_network("100.64.0.0/10"):
+        return True                     # tsnet-side; the owner said these may stay
+    if addr in ipaddress.ip_network("192.0.2.0/24"):
+        return True                     # RFC 5737, what the scrub substitutes
+    return (addr.is_private or addr.is_loopback or addr.is_multicast
+            or addr.is_reserved or addr.is_unspecified
+            or addr in ipaddress.ip_network("0.0.0.0/8"))
+
 
 def local_branches():
     out = subprocess.run(["git", "for-each-ref", "--format=%(refname:short)",
@@ -140,14 +184,14 @@ def vendored(paths):
 
 def main():
     argv = sys.argv[1:]
-    revs, tailnets = [], []
+    revs, tailnets, ips = [], [], []
     while argv:
         arg = argv.pop(0)
-        if arg == "--rev":
+        if arg in ("--rev", "--ip"):
             if not argv:
-                print("error: --rev needs a ref", file=sys.stderr)
+                print(f"error: {arg} needs a value", file=sys.stderr)
                 return 2
-            revs.append(argv.pop(0))
+            (revs if arg == "--rev" else ips).append(argv.pop(0))
         else:
             tailnets.append(arg.encode())
     revs = revs or local_branches()
@@ -158,6 +202,8 @@ def main():
         label = tailnet.split(b".")[0]
         if label != tailnet:
             literals[f"{label.decode()} (its bare label)"] = label
+    for ip in ips:
+        literals[f"{ip} (a real address)"] = ip.encode()
 
     paths_of = blobs(revs)
     ids = sorted(paths_of)
@@ -166,6 +212,7 @@ def main():
     where = collections.defaultdict(set)      # finding -> example paths
     counts = collections.Counter()
     tsnet = collections.defaultdict(set)      # magicdns name -> paths
+    addrs = collections.defaultdict(set)      # public IPv4 needing review -> paths
     kept = 0
     i = 0
     while i < len(out):
@@ -178,9 +225,10 @@ def main():
             where["a former product name"] |= paths
             break
         # Case-INSENSITIVELY, because the occurrence that survived two scrubs was
-        # spelled `Mixed-Case.TS.net` in a test of case-insensitive URL handling,
-        # and the previous version of this check looked for the lowercase literal
-        # -- the same blind spot the scrub had, so it confirmed nothing.
+        # spelled the way `Box.Tail-Scale.TS.net` is spelled -- in a test of
+        # case-insensitive URL handling -- and the previous version of this check
+        # looked for the lowercase literal, the same blind spot the scrub had. Two
+        # halves of one rule sharing a blind spot is not confirmation.
         low = body.lower()
         for name, pat in literals.items():
             if pat.lower() in low:
@@ -195,6 +243,10 @@ def main():
             # looked like it was checking.
             for found in {f.lower() for f in TSNET_RE.findall(body)}:
                 tsnet[found] |= paths or {"(unnamed blob)"}
+            for found in set(IP_RE.findall(body)):
+                text = found.decode()
+                if ip_class_is_fine(text) is False and text not in IP_ALLOWED:
+                    addrs[text] |= paths or {"(unnamed blob)"}
         if MUST_STAY[1] in body:
             kept += 1
         i = nl + 1 + int(size) + 1
@@ -242,6 +294,17 @@ def main():
     else:
         print(f"  ok: every MagicDNS name in our own files is a known-fictional one"
               f" ({len(tsnet)} distinct)")
+
+    if addrs:
+        print(f"  FAIL: {len(addrs)} public IPv4 address(es) in our own files that are"
+              f" neither a reviewed fixture nor a class the owner allowed. Each is"
+              f" either deliberate -- add it to IP_ALLOWED with its provenance -- or"
+              f" was captured from a live run, and has to be scrubbed:")
+        for ip, paths in sorted(addrs.items()):
+            print(f"        {ip:18} {show(paths)}")
+        bad = True
+    else:
+        print("  ok: every public IPv4 address in our own files is a reviewed fixture")
 
     if kept == 0:
         print(f"  FAIL: {MUST_STAY[0]} is absent -- the scrub ate a name it had to keep")
