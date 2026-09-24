@@ -29,7 +29,11 @@ Fields to fill in before posting: **KiroCrew version** (take
 platform-specific; observed in WebKit on iOS at a 402 px viewport). Attach the
 two screenshots from `../features/f5-measurement/` (`portrait-chips-overlap.png`,
 `landscape-chips-ok.png`), and the phone's own header screenshot if Olof
-supplies one (see F5 §11).
+supplies one (see F5 §11). **Also before posting:** the two "stop-gap"
+sentences (end of *Suggested fix*, end of *Context*) describe the client-side
+CSS injection F5 §6 *plans*; as of 2026-09-23 nothing in `app/App/` injects
+it (`chipRowStyle` is design only). They are written in the future tense to
+be true now — switch them to the present only once F5's half B has shipped.
 
 ---
 
@@ -134,8 +138,8 @@ actually is, while the content it must show is wider than that cell.
 
 ## Suggested fix
 
-Any one of these keeps the chips legible; the first is what our client injects
-locally as a stop-gap and is the least invasive:
+Any one of these keeps the chips legible; the first is the one we intend to
+carry client-side as a stop-gap, and is the least invasive:
 
 1. **Make the inline bar a horizontal strip on phones** — at `(width<=767px)`,
    `.tb-left > .instance-tab-bar-inline { overflow-x: auto }` and
@@ -154,6 +158,6 @@ locally as a stop-gap and is the least invasive:
 Found while building an iOS client for a self-hosted gateway over Tailscale,
 where the dashboard is used in portrait most of the time. The rest of the
 dashboard is fine at 402 px — the sessions panel, the composer, the chat all
-work — which is what made this one row stand out. The client carries fix (1)
-as an injected stylesheet gated to the gateway's origin until a release
-includes a fix; it will be removed when one does.
+work — which is what made this one row stand out. The client will carry
+fix (1) as an injected stylesheet gated to the gateway's origin until a
+release includes a fix, and drop it when one does.
