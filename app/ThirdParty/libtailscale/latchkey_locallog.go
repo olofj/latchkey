@@ -28,11 +28,13 @@
 //
 // Every line is redacted before it is written, by the same rules as the app's
 // LogRedaction: a URL loses its userinfo, query and fragment, a login code in
-// a path (/a/<code>, /auth/<id>) is cut, and a bare token= is dropped. tsnet
-// logs its login link every 5 s while it waits for a login ("go to: ..."),
-// and control logs it once ("AuthURL is ..."): a file that kept them would
-// hand the login to whoever copied the file. The app redacts again on
-// display. A line repeated back to back is written once, with a count.
+// a path (/a/<code>, /auth/<id>) is cut -- whatever its shape, in either
+// case, since control chooses it -- a bare token= is dropped, and an auth
+// key (tskey-…) is cut. tsnet logs its login link every 5 s while it waits
+// for a login ("go to: ..."), and control logs it once ("AuthURL is ..."): a
+// file that kept them would hand the login to whoever copied the file. The
+// app redacts again on display. A line repeated back to back is written
+// once, with a count.
 //
 // It never leaves the device: they are local files, and the directory is
 // excluded from backup (App/Workspace/BackupExclusion.swift).
@@ -125,21 +127,80 @@ func (s *splitLog) Write(p []byte) (int, error) {
 }
 
 var (
-	urlRE        = regexp.MustCompile("(?i)\\b[a-z][a-z0-9+.\\-]*://[^\\s\"'<>\\\\`{]+")
-	secretPathRE = regexp.MustCompile(`/(a|auth)/[A-Za-z0-9]{8,}`)
+	urlRE = regexp.MustCompile("(?i)\\b[a-z][a-z0-9+.\\-]*://[^\\s\"'<>\\\\`{]+")
+	// A login link's secret is whatever control put after /a/ or /auth/. The
+	// client does not build the URL, it logs the one it was sent
+	// (controlclient/direct.go, resp.AuthURL), so the segment's alphabet,
+	// case and length are Tailscale's to change without notice. The rule
+	// takes the rest of the token, whatever characters it holds, in either
+	// case; redactSecretPath gives back only the punctuation that closed the
+	// sentence around it. Over-inclusive on purpose: an ordinary /a/<x> path
+	// in a log line loses <x> too, and what is lost is a path, never the
+	// login. An earlier rule, /(a|auth)/[A-Za-z0-9]{8,}, left a hyphenated,
+	// short or /A/ link whole: TestRedactLineIsShapeAgnostic has the shapes.
+	secretPathRE = regexp.MustCompile("(?i)/(a|auth)/[^\\s\"'<>\\\\`]+")
 	bareTokenRE  = regexp.MustCompile(`(?i)\btoken=[^&\s"',;}]*`)
+	// An auth key (tskey-auth-…, tskey-client-…) outlives a login link by
+	// months and is reusable. The app hands one to this library
+	// (TsnetSetAuthKey), and upstream's client code today logs only its
+	// length (ipnlocal, "len=%v"; tsnet, "Authkey is set"), so the rule has
+	// no known trigger: it is there so that a future upstream message that
+	// quoted the key, arriving by cherry-pick, could not put it on disk. The
+	// prefix is Tailscale's documented key format, not a guess at one, and
+	// the gate below makes the rule free on every line without it.
+	authKeyRE = regexp.MustCompile("(?i)\\btskey-[^\\s\"'<>\\\\`]*")
 )
 
-// redactLine applies the app's LogRedaction rules (see the header).
+// redactLine applies the app's LogRedaction rules (see the header). It runs
+// on every line logtail buffers, verbose ones included, so the gate allocates
+// nothing: most lines hold none of the five markers and return as given.
 func redactLine(p []byte) []byte {
-	if !bytes.Contains(p, []byte("://")) && !bytes.Contains(p, []byte("/a/")) &&
-		!bytes.Contains(p, []byte("/auth/")) && !bytes.Contains(bytes.ToLower(p), []byte("token")) {
+	if !bytes.Contains(p, []byte("://")) && !containsFold(p, "/a/") && !containsFold(p, "/auth/") &&
+		!containsFold(p, "token=") && !containsFold(p, "tskey-") {
 		return p
 	}
 	s := urlRE.ReplaceAllStringFunc(string(p), redactURL)
-	s = secretPathRE.ReplaceAllString(s, "/$1/…")
+	s = secretPathRE.ReplaceAllStringFunc(s, redactSecretPath)
 	s = bareTokenRE.ReplaceAllString(s, "[token redacted]")
+	s = authKeyRE.ReplaceAllString(s, "tskey-…")
 	return []byte(s)
+}
+
+// containsFold reports whether p contains lower, an ASCII lower-case string,
+// ignoring ASCII case in p.
+func containsFold(p []byte, lower string) bool {
+	n := len(lower)
+next:
+	for i := 0; i+n <= len(p); i++ {
+		for j := 0; j < n; j++ {
+			c := p[i+j]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != lower[j] {
+				continue next
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// closers is punctuation that ends the sentence or bracket a link sits in
+// rather than belonging to it. It is given back after the marker, so the
+// line still reads as it did ("see login.tailscale.com/a/….").
+const closers = ".,;:!)]}"
+
+// redactSecretPath cuts everything after the /a/ or /auth/ of a secretPathRE
+// match, keeping the segment name as it was written.
+func redactSecretPath(m string) string {
+	i := strings.IndexByte(m[1:], '/') + 2 // just past the second slash
+	prefix, rest := m[:i], m[i:]
+	kept := strings.TrimRight(rest, closers)
+	if kept == "" {
+		kept = rest // nothing but punctuation: cut it all
+	}
+	return prefix + "…" + rest[len(kept):]
 }
 
 // redactURL drops a URL's userinfo, query and fragment, leaving a marker

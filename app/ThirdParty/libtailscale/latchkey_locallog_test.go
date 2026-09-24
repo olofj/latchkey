@@ -152,6 +152,42 @@ func TestLocalLogRedactsBeforeWriting(t *testing.T) {
 	}
 }
 
+// The login link is not built by the client: control sends it
+// (controlclient/direct.go, resp.AuthURL) and the client logs it as received.
+// Its alphabet, case and length are therefore Tailscale's to change, and a
+// rule that assumes one shape redacts only that shape. Each row is a shape
+// the R29 rule, /(a|auth)/[A-Za-z0-9]{8,}, let through whole or in part.
+func TestRedactLineIsShapeAgnostic(t *testing.T) {
+	const same = ""
+	cases := []struct{ name, in, want string }{
+		{"upstream's shape, 16 hex", "AuthURL is https://login.tailscale.com/a/0f1e2d3c4b5a6978", "AuthURL is https://login.tailscale.com/a/…"},
+		{"hyphens", "AuthURL is https://login.tailscale.com/a/0f1e-2d3c-4b5a", "AuthURL is https://login.tailscale.com/a/…"},
+		{"upper-case segment name", "AuthURL is https://login.tailscale.com/A/0f1e2d3c4b5a6978", "AuthURL is https://login.tailscale.com/A/…"},
+		{"upper-case AUTH", "go to: http://127.0.0.1:8490/AUTH/0123456789abcdef0123", "go to: http://127.0.0.1:8490/AUTH/…"},
+		{"mixed case, hyphens, 14 chars", "go to: http://127.0.0.1:8490/auth/0F1e-2d3C-4b5A", "go to: http://127.0.0.1:8490/auth/…"},
+		{"shorter than 8", "AuthURL is https://login.tailscale.com/a/ab1", "AuthURL is https://login.tailscale.com/a/…"},
+		{"dots, underscores, tildes", "AuthURL is https://login.tailscale.com/auth/0F1e.2d3C_4b5A~69", "AuthURL is https://login.tailscale.com/auth/…"},
+		{"percent-encoded", "AuthURL is https://login.tailscale.com/a/ab%2Fcd%20ef", "AuthURL is https://login.tailscale.com/a/…"},
+		{"non-ASCII", "AuthURL is https://login.tailscale.com/a/cödé-ünï", "AuthURL is https://login.tailscale.com/a/…"},
+		{"no scheme, sentence punctuation kept", "see login.tailscale.com/a/0f1e-2d3c.", "see login.tailscale.com/a/…."},
+		{"a query after the code", "AuthURL is https://login.tailscale.com/a/0f1e-2d3c?next=x", "AuthURL is https://login.tailscale.com/a/…"},
+		{"in logtail's JSON entry", `{"logtail":{"proc_seq":4},"text":"AuthURL is https://login.tailscale.com/a/0f1e-2D3c\n"}`, `{"logtail":{"proc_seq":4},"text":"AuthURL is https://login.tailscale.com/a/…\n"}`},
+		{"already redacted", "AuthURL is https://login.tailscale.com/a/…", same},
+		{"an auth key", "using tskey-auth-kAbC123CNTRL-xYz987wVu", "using tskey-…"},
+		{"an ordinary line", "magicsock: disco: node [abcd] d:1234 now using 127.0.0.1:41641", same},
+		{"a path with a/ inside a word", "peerapi: GET /v0/data/a-file.txt", same},
+	}
+	for _, c := range cases {
+		want := c.want
+		if want == same {
+			want = c.in
+		}
+		if got := string(redactLine([]byte(c.in))); got != want {
+			t.Errorf("%s:\n  in   %s\n  got  %s\n  want %s", c.name, c.in, got, want)
+		}
+	}
+}
+
 // tsnet repeats the login line every 5 s while it waits: one line and a
 // count, not a file full of them.
 func TestLocalLogCollapsesRepeats(t *testing.T) {
