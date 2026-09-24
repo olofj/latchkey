@@ -37,23 +37,62 @@ Four categories, and only the first changes:
      node was renamed. The Application Support names remain frozen, and that
      distinction is the point: storage identity must not move, a default may.
      See `App/Workspace/WorkspaceStore.swift` and the DECISIONS entries.
-  4. The vendored libtailscale tree (`ThirdParty/`), including
-     `latchkey_locallog.go` and `TestLatchkeyRawStderr...` -> PRESERVED,
-     because R16 keeps every vendored change as its own commit and a rename
-     there buys nothing but a `make framework` rebuild and a merge hazard.
+  4. The vendored libtailscale tree (`ThirdParty/`): its files
+     (`latchkey_locallog.go`, `latchkey_nologs.go`, `latchkey_locallog_test.go`,
+     `logtail/latchkey_rawecho_test.go`), its Go identifiers (`latchkeyLocalLog`)
+     and its test names (`TestLatchkeyRawStderr...`) keep the old name, because
+     R16 keeps every vendored change as its own commit and a rename there buys
+     nothing but a `make framework` rebuild and a merge hazard.
      `scripts/test-all.sh` therefore keeps `go test -run Latchkey`.
+
+     CORRECTION (the evening of the same day): the tree itself was never
+     touched -- `ThirdParty` is in SKIP_DIRS -- but the claim that these names
+     were preserved was only true for the two that were in PRESERVE
+     (`latchkey_locallog`, `latchkey_rawecho`). PRESERVE did not cover
+     `latchkey_nologs` or the camel-case `latchkeyLocalLog`, so every PROSE
+     mention of those outside the tree was rewritten: `docs/DECISIONS.md` now
+     names a `latchkey_nologs.go` that does not exist, a `latchkey_*.go`
+     glob that matches nothing, and a Go test that "drives latchkeyLocalLog".
+     `docs/PLAN.md`'s log predicate became `subsystem CONTAINS "latchkey"`,
+     which no process logs under (the subsystem is category 2 and stayed
+     `net.lixom.latchkey`). The missing names are in PRESERVE now, and
+     --check looks in both directions (below), so a re-run holds them and the
+     damage is listed rather than assumed away. The lines themselves were
+     corrected in their own files' commit (`0beac80`); `--check --rev cbfdc31`
+     shows the check catching them in the rename commit that made them.
 
 Mechanism: each preserved string is swapped for a sentinel, the renames run,
 then the sentinels are restored. That way a bare `Latchkey` can be renamed
 wholesale without a hand-maintained list of every safe occurrence, while the
 handful of identity strings are protected by name and are visible here.
 
-Run with --check afterwards: every remaining mention must be category 2, 3 or
-4, or this file's own text.
+The rewrite ran on 2026-09-23 when `app/` was still its own repository, once
+from each root; SKIP_DIRS still says so. It is kept as the record and is not
+something to run again.
+
+--check is BIDIRECTIONAL, from the repository root:
+
+  1. Leftovers: every remaining mention of the old name. Each must be
+     category 2, 3 or 4, or this file's own text. Informational.
+  2. New-name strings that must not exist: a preserved identity under its
+     new spelling -- `net.lixom.latchkey`, a `Latchkey` Application Support
+     path, `latchkey_*.go`, `latchkeyLocalLog`, `-run Latchkey`, a
+     `latchkey` os_log subsystem. The list is DERIVED from PRESERVE by
+     running each entry through REPLACEMENTS, so the two cannot drift; the
+     only hand-written parts are the CONTEXT_RULES (a spelling that cannot be
+     derived from one literal, such as a glob or a predicate), each keyed to
+     the PRESERVE entry it guards, and HAND_MOVED (a preserved literal whose
+     new spelling is legitimate in some places because it was moved by hand
+     later). A hit here is damage and the exit status is 1.
+
+A check that greps only for leftovers is blind by construction to names the
+script wrongly changed; that is how the corrected lines above went unnoticed
+for a day.
 """
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 
@@ -70,10 +109,15 @@ PRESERVE = [
     # -- category 3: tailnet hostnames, and the repo/directory name -----
     # Bare `latchkey` covers latchkey-iphone, latchkey-ipad, the repo
     # directory ~/src/latchkey and the GitHub repo names.
+    # (The hostname default and the GitHub name moved by hand later; see
+    # HAND_MOVED. The directory did not.)
     "latchkey",
     # -- category 4: the vendored tree, and the Go test name a script runs
     "latchkey_locallog",
+    "latchkey_nologs",     # missing on the first run: see the CORRECTION above
     "latchkey_rawecho",
+    "latchkeyLocalLog",    # missing on the first run: see the CORRECTION above
+    "TestLatchkey",        # TestLatchkeyRawStderr...; `-run Latchkey` below
     "-run Latchkey",
 ]
 
@@ -118,6 +162,44 @@ REPLACEMENTS = [
     ("Latchkey", "Latchkey"),
     ("latchkey", "latchkey"),
 ]
+
+# A preserved literal whose NEW spelling is nevertheless legitimate in some
+# places, because part of what it covered was moved by hand after the rewrite.
+# Such an entry is not checked as an exact new-name string; only its
+# CONTEXT_RULES are. The value says why, and is printed with the check.
+# (`latchkey` has no lower-case rule in REPLACEMENTS at all -- the script
+# never renamed it, PRESERVE was belt and braces -- so `latchkey` is not
+# derivable from it either way; the directory rule below is the whole check.)
+HAND_MOVED = {
+    "latchkey": "the hostname default (latchkey-iphone/-ipad) and the GitHub "
+                 "repo (olofj/latchkey) moved by hand later the same day; only "
+                 "the repository directory keeps the old name",
+}
+
+# New-name spellings that cannot be derived from one preserved literal -- a
+# glob, a predicate, a path spelled without the angle brackets. Each rule is
+# keyed to the PRESERVE entry it guards, and check() refuses a key that is not
+# in PRESERVE, so a rule cannot outlive or precede the identity it is for.
+CONTEXT_RULES = {
+    "net.lixom.latchkey": [
+        (r'subsystem\b[^\n]{0,40}?["\'][^"\'\n]*latchkey',
+         "an os_log predicate naming the subsystem under the new name; the "
+         "subsystem is net.lixom.latchkey and such a predicate matches nothing"),
+    ],
+    "<Application Support>/Latchkey/": [
+        (r'Application Support[^\n]{0,16}?Latchkey',
+         "the live data root spelled without the angle brackets"),
+    ],
+    "latchkey_locallog": [
+        (r'latchkey_[A-Za-z0-9_*]*\.go',
+         "a vendored file name, or a glob over them, under the new name; the "
+         "tree's files are latchkey_*.go"),
+    ],
+    "latchkey": [
+        (r'src/latchkey\b',
+         "the repository directory is ~/src/latchkey"),
+    ],
+}
 
 SKIP_DIRS = {".git", "build", "ThirdParty", "app", "logs", "__pycache__",
              "f5-measurement", "Assets.xcassets"}
@@ -189,23 +271,127 @@ def move(src: str, dst: str) -> None:
     print(f"  moved {src} -> {dst}")
 
 
-def check() -> int:
-    """List what still says Roam. Each hit must be category 2, 3 or 4."""
-    out = subprocess.run(["git", "grep", "-nI", "-e", "Latchkey", "-e", "Latchkey",
-                          "-e", "latchkey", "-e", "latchkey", "-e", "Latchkey"],
-                         capture_output=True, text=True).stdout.splitlines()
-    out = [h for h in out if not h.startswith("ThirdParty/")
-           and "rename-to-kiro" not in h]
-    print(f"{len(out)} remaining mention(s) — each must be bundle identity, a "
-          f"storage/hostname literal, or the vendored tree:")
-    for h in out:
+# ------------------------------------------------------------------ check --
+
+def renamed(literal: str) -> str:
+    """What REPLACEMENTS would make of a string that was NOT masked: the new
+    spelling of a preserved identity, i.e. the string that must not exist."""
+    for old, new in REPLACEMENTS:
+        literal = literal.replace(old, new)
+    return literal
+
+
+def forbidden_spellings() -> list[tuple[str, str, bool]]:
+    """(preserved, its new spelling, swift_only), derived from PRESERVE and
+    PRESERVE_SWIFT. Entries the rename would leave unchanged, and HAND_MOVED
+    entries (checked by context only), are left out."""
+    out = []
+    for keep in PRESERVE:
+        if keep in HAND_MOVED:
+            continue
+        new = renamed(keep)
+        if new != keep:
+            out.append((keep, new, False))
+    for keep in PRESERVE_SWIFT:
+        new = renamed(keep)
+        if new != keep:
+            out.append((keep, new, True))
+    return out
+
+
+def git_grep(top: str, patterns: list[str], rev: str | None = None) -> list[str]:
+    """`path:line:text` hits in the working tree, or in the tree at `rev`."""
+    args = ["git", "grep", "-nI"]
+    for p in patterns:
+        args += ["-e", p]
+    if rev:
+        args.append(rev)
+    out = subprocess.run(args, capture_output=True, text=True, cwd=top).stdout.splitlines()
+    if rev:
+        out = [h[len(rev) + 1:] if h.startswith(rev + ":") else h for h in out]
+    # The vendored tree keeps the old names on purpose (category 4), and the
+    # two rename scripts describe both spellings.
+    return [h for h in out if not h.startswith("app/ThirdParty/")
+            and not h.startswith("ThirdParty/") and "rename-to-kiro" not in h]
+
+
+def check(rev: str | None = None) -> int:
+    """Both directions: what still says Roam (each hit must be category 2, 3
+    or 4), and what says Nomad where a preserved identity belongs (each hit
+    is damage). Exit 1 on any of the latter. `rev` checks a committed tree
+    instead of the working tree -- how the check is shown able to fail:
+    `--check --rev cbfdc31` is the docs rename commit, with the damage in it."""
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    print(f"checking {'the tree at ' + rev if rev else 'the working tree'} under {top}")
+
+    unknown = set(CONTEXT_RULES) - set(PRESERVE)
+    if unknown:
+        print(f"CONTEXT_RULES keyed to strings that are not in PRESERVE: {sorted(unknown)}")
+        return 2
+    unknown = set(HAND_MOVED) - set(PRESERVE)
+    if unknown:
+        print(f"HAND_MOVED names strings that are not in PRESERVE: {sorted(unknown)}")
+        return 2
+
+    # 1. Leftovers of the old name.
+    olds = sorted({old for old, _ in REPLACEMENTS} | {"Latchkey", "Latchkey", "latchkey",
+                                                    "latchkey", "Latchkey"})
+    leftovers = git_grep(top, olds, rev)
+    print(f"{len(leftovers)} remaining mention(s) of the old name — each must be bundle "
+          f"identity, a storage/hostname literal, or the vendored tree:")
+    for h in leftovers:
         print("  " + h)
-    return 0
+
+    # 2. The new name where a preserved identity belongs.
+    spellings = forbidden_spellings()
+    news = sorted({new for _, new in REPLACEMENTS})
+    candidates = git_grep(top, news, rev)
+    violations: dict[str, list[str]] = {}   # "path:line:text" -> reasons
+
+    def flag(hit: str, reason: str) -> None:
+        violations.setdefault(hit, []).append(reason)
+
+    for keep, new, swift_only in spellings:
+        for h in candidates:
+            path = h.split(":", 1)[0]
+            if swift_only and not path.endswith(".swift"):
+                continue
+            if new in h.split(":", 2)[2]:
+                flag(h, f"`{new}` is preserved `{keep}` under its new spelling")
+    for keep, rules in CONTEXT_RULES.items():
+        for pattern, why in rules:
+            rx = re.compile(pattern)
+            for h in candidates:
+                if rx.search(h.split(":", 2)[2]):
+                    flag(h, f"{why} (guards `{keep}`)")
+
+    print()
+    print(f"checked {len(spellings)} derived new-name spelling(s): "
+          + ", ".join(f"`{new}`" + (" (Swift only)" if swift_only else "")
+                      for _, new, swift_only in spellings))
+    print(f"and {sum(len(r) for r in CONTEXT_RULES.values())} context rule(s); "
+          f"checked by context only, the bare new name being legitimate elsewhere: "
+          + ", ".join(f"`{k}` ({why})" for k, why in HAND_MOVED.items()))
+    print()
+    if not violations:
+        print("0 new-name string(s) where a preserved identity belongs")
+        return 0
+    print(f"{len(violations)} new-name string(s) where a preserved identity belongs — "
+          f"each of these is damage from the rename and must be corrected in its own file:")
+    for h in sorted(violations, key=lambda s: (s.split(":", 1)[0], int(s.split(":", 2)[1]))):
+        print("  " + h)
+        for reason in violations[h]:
+            print("      ^ " + reason)
+    return 1
 
 
 if __name__ == "__main__":
     if "--check" in sys.argv:
-        sys.exit(check())
+        rev = None
+        if "--rev" in sys.argv:
+            rev = sys.argv[sys.argv.index("--rev") + 1]
+        sys.exit(check(rev))
     roots = [a for a in sys.argv[1:] if not a.startswith("-")] or ["."]
     rewrite(roots)
-    print("done — review `git diff`, then run with --check in each repo")
+    print("done — review `git diff`, then run with --check from the repository root")
