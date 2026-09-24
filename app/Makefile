@@ -188,6 +188,7 @@ test-policy:  ## Run the host-only unit tests (fast; no simulator, no framework)
 	@./scripts/test-diagnostics.sh
 	@./scripts/test-socks-relay-policy.sh
 	@./scripts/test-signout.sh
+	@./scripts/test-fixture-tailnets.sh
 
 .PHONY: test-ios-ui
 test-ios-ui: framework app  ## Run every required iOS UI test on the simulator

@@ -22,7 +22,7 @@ import Combine
 @MainActor
 final class HomePage: ObservableObject {
     /// No gateway: the dashboard shows the gateway picker (M5) until one is
-    /// chosen. Until M5 this was a hardcoded `https://byskebox.<tailnet>`.
+    /// chosen. Until M5 this was a hardcoded `https://gateway.<tailnet>`.
     static let defaultURL = ""
 
     /// The current home-page URL. `@Published` so Settings' text field and the

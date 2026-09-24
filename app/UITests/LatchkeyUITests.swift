@@ -44,12 +44,25 @@ final class LatchkeyUITests: XCTestCase {
     /// The gateway these tailnet-dependent tests load. Since M5 the app has
     /// no default gateway (the picker chooses one), so `launchConnected` sets
     /// it explicitly with `-UITestHomePage`.
-    static let defaultGatewayURL = "https://byskebox.example.ts.net"
+    ///
+    /// **From the environment, never hardcoded.** This used to name the
+    /// author's own gateway on his own tailnet, which was wrong twice over: a
+    /// real tailnet name in a test is how a leak turns into a pass (R10), and
+    /// nobody else's checkout could run these tests at all. Set
+    /// `LATCHKEY_TEST_GATEWAY` to a full `https://` URL for a gateway on the
+    /// tailnet the simulator's node joins.
+    static var defaultGatewayURL: String {
+        ProcessInfo.processInfo.environment["LATCHKEY_TEST_GATEWAY"] ?? ""
+    }
 
     /// A substring of `defaultGatewayURL`'s host, used to recognise the loaded
-    /// page by its URL. Upstream matched on "ai", the short name of its chat
-    /// peer.
-    static let defaultGatewayHostFragment = "byskebox"
+    /// page by its URL: the first label of the host, e.g. `gateway` from
+    /// `gateway.<tailnet>.ts.net`. Upstream matched on "ai", the short name of
+    /// its chat peer.
+    static var defaultGatewayHostFragment: String {
+        URL(string: defaultGatewayURL)?.host()?
+            .split(separator: ".").first.map(String.init) ?? ""
+    }
 
     override func setUpWithError() throws {
         // Stop on the first failure so we get a clean signal.
@@ -533,6 +546,17 @@ final class LatchkeyUITests: XCTestCase {
         // No tab reset needed: nothing about the page is restored (R2).
         // -UITestHomePage wins over the reset (it is applied after it): the
         // app has no default gateway since M5.
+        // No gateway configured: fail loudly rather than launch at "" and time
+        // out 60 s later against a blank page, which is the same doctrine as
+        // the auth key below — a missing prerequisite must name itself.
+        guard !Self.defaultGatewayURL.isEmpty else {
+            XCTFail("""
+                These tests need a gateway on the tailnet the node joins. Set \
+                LATCHKEY_TEST_GATEWAY to its https:// URL, e.g. \
+                LATCHKEY_TEST_GATEWAY=https://gateway.<tailnet>.ts.net.
+                """)
+            return
+        }
         app.launchArguments += ["-UITestResetHomePage", "-UITestHomePage", Self.defaultGatewayURL]
         app.launch()
     }

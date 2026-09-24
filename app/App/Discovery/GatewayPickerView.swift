@@ -88,7 +88,7 @@ struct GatewayPickerView: View {
                 }
 
                 Section {
-                    TextField("byskebox, or byskebox.example.ts.net", text: $manual)
+                    TextField("gateway, or gateway.example.ts.net", text: $manual)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
@@ -162,7 +162,7 @@ struct GatewayPickerView: View {
         // off the tailnet, and become the sign-in origin (M5 review).
         if let host = URL(string: origin)?.host(), let policy = model.proxyPolicy,
            policy.matchingRule(for: host) == nil {
-            manualError = "\(host) isn't on your tailnet. Enter a tailnet name, like byskebox or byskebox.<tailnet>.ts.net."
+            manualError = "\(host) isn't on your tailnet. Enter the name of a computer on it, like gateway or gateway.<tailnet>.ts.net."
             return
         }
         manualError = nil

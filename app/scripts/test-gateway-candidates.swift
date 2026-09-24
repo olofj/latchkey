@@ -33,20 +33,20 @@ expect(GatewayCandidates.exclusion(peer("a.ts.net", os: ""), selfUserID: 7) == n
 expect(GatewayCandidates.exclusion(peer("a.ts.net", user: 0), selfUserID: 7) == nil, "owner 0 is unknown, not another owner")
 expect(GatewayCandidates.exclusion(peer("a.ts.net", user: 8), selfUserID: 0) == nil, "this node's owner 0 is unknown: no filter")
 expect(GatewayCandidates.exclusion(peer("a.ts.net", os: "tvOS"), selfUserID: 7) != nil, "tvOS is not a server OS")
-expect(GatewayCandidates.exclusion(GatewayPeer(host: "byskebox.ts.net", online: true, os: "linux", userID: 99, tagged: true),
+expect(GatewayCandidates.exclusion(GatewayPeer(host: "gateway.ts.net", online: true, os: "linux", userID: 99, tagged: true),
                                    selfUserID: 7) == nil,
        "a TAGGED server passes the owner filter (it reports the tagged-devices user)")
 expect(GatewayCandidates.exclusion(peer(""), selfUserID: 7) != nil, "no MagicDNS name is excluded")
 
 print("== order")
 let ps = [peer("zeta.ts.net."), peer("alpha.ts.net."), peer("phone.ts.net.", os: "iOS"),
-          peer("byskebox.ts.net.", online: true), peer("ALPHA.ts.net")]
-expect(hosts(GatewayCandidates.select(ps, selfUserID: 7, savedHost: nil)) == ["alpha.ts.net", "byskebox.ts.net", "zeta.ts.net"],
+          peer("gateway.ts.net.", online: true), peer("ALPHA.ts.net")]
+expect(hosts(GatewayCandidates.select(ps, selfUserID: 7, savedHost: nil)) == ["alpha.ts.net", "gateway.ts.net", "zeta.ts.net"],
        "filtered, deduplicated case-insensitively, trailing dots dropped, alphabetical")
-expect(hosts(GatewayCandidates.select(ps, selfUserID: 7, savedHost: "byskebox.ts.net"))
-       == ["byskebox.ts.net", "alpha.ts.net", "zeta.ts.net"], "the saved gateway comes first")
+expect(hosts(GatewayCandidates.select(ps, selfUserID: 7, savedHost: "gateway.ts.net"))
+       == ["gateway.ts.net", "alpha.ts.net", "zeta.ts.net"], "the saved gateway comes first")
 expect(hosts(GatewayCandidates.select(ps, selfUserID: 7, savedHost: "PHONE.ts.net."))
-       == ["phone.ts.net", "alpha.ts.net", "byskebox.ts.net", "zeta.ts.net"],
+       == ["phone.ts.net", "alpha.ts.net", "gateway.ts.net", "zeta.ts.net"],
        "the saved gateway is probed even if the filters would skip it")
 expect(GatewayCandidates.select(ps, selfUserID: 7, savedHost: "gone.ts.net").count == 3,
        "a saved gateway that is no longer a peer is simply absent")

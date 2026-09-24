@@ -66,8 +66,11 @@ non-goals, not omissions.
     state dir, i.e. the Tailscale node's identity. Renaming it logs the device
     out and forces tailnet-lock re-signing and new grants, with no crash and
     no error — the app just quietly starts over;
-  - `latchkey-iphone` / `-ipad`, the node's MagicDNS name, which the admin
-    console and any host-scoped grant refer to.
+  The node's **default** MagicDNS name is *not* in that list: it followed the
+  product to `latchkey-iphone` / `-ipad` later the same day. That is safe for
+  the opposite reason — it is only a default, a live install carries its own
+  hostname in `workspaces.json`, and the tailnet grant is scoped by address
+  range rather than node name. Storage identity must not move; a default may.
 
   The vendored tree keeps its `latchkey_*` file and test names under R16, so
   `scripts/test-all.sh` still runs `go test -run Latchkey`. Reasoning and the

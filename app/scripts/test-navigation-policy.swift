@@ -23,23 +23,23 @@ func expect(_ url: String?, main: Bool = true, origin: String? = gateway,
 
 func section(_ name: String) { print("\n== \(name)") }
 
-let gateway = "https://byskebox.example.ts.net"
+let gateway = "https://gateway.example.ts.net"
 
 section("main frame: the gateway origin is allowed")
-expect("https://byskebox.example.ts.net/", .allow, "gateway root")
-expect("https://byskebox.example.ts.net/chat/abc?sid=1#m", .allow, "any path, query, fragment")
-expect("https://byskebox.example.ts.net/?token=abc", .allow, "a sign-in link to the gateway itself")
-expect("https://BYSKEBOX.example.ts.net/", .allow, "host comparison is case-insensitive")
-expect("https://byskebox.example.ts.net:443/", .allow, "explicit default port is the same origin")
+expect("https://gateway.example.ts.net/", .allow, "gateway root")
+expect("https://gateway.example.ts.net/chat/abc?sid=1#m", .allow, "any path, query, fragment")
+expect("https://gateway.example.ts.net/?token=abc", .allow, "a sign-in link to the gateway itself")
+expect("https://GATEWAY.example.ts.net/", .allow, "host comparison is case-insensitive")
+expect("https://gateway.example.ts.net:443/", .allow, "explicit default port is the same origin")
 
 section("main frame: anything else leaves the app")
 expect("https://github.com/kirodotdev/KiroCrew", .openExternally, "a public site")
-expect("https://chonk.example.ts.net/", .openExternally, "another tailnet host")
-expect("http://byskebox.example.ts.net/", .openExternally, "same host, http: a different origin")
-expect("https://byskebox.example.ts.net:8443/", .openExternally, "same host, other port")
-expect("https://byskebox.example.ts.net.evil.example/", .openExternally, "suffix-extended look-alike")
-expect("https://evil.example/byskebox.example.ts.net", .openExternally, "gateway name in the path")
-expect("https://byskebox.example.ts.net@evil.example/", .openExternally, "gateway name as userinfo")
+expect("https://other.example.ts.net/", .openExternally, "another tailnet host")
+expect("http://gateway.example.ts.net/", .openExternally, "same host, http: a different origin")
+expect("https://gateway.example.ts.net:8443/", .openExternally, "same host, other port")
+expect("https://gateway.example.ts.net.evil.example/", .openExternally, "suffix-extended look-alike")
+expect("https://evil.example/gateway.example.ts.net", .openExternally, "gateway name in the path")
+expect("https://gateway.example.ts.net@evil.example/", .openExternally, "gateway name as userinfo")
 expect("mailto:someone@example.com", .openExternally, "mailto goes to the system")
 expect("tel:+15555550123", .openExternally, "tel goes to the system")
 
@@ -51,13 +51,13 @@ expect(nil, .cancel, "no URL at all")
 
 section("main frame: special cases")
 expect("about:blank", .allow, "about:blank is the unreachable-gateway fallback")
-expect("blob:https://byskebox.example.ts.net/6f0c-uuid", .allow, "same-origin blob (a download)")
+expect("blob:https://gateway.example.ts.net/6f0c-uuid", .allow, "same-origin blob (a download)")
 expect("blob:https://evil.example/6f0c-uuid", .cancel, "foreign blob")
-expect("https://byskebox.example.ts.net/", origin: nil, .openExternally,
+expect("https://gateway.example.ts.net/", origin: nil, .openExternally,
        "nothing loaded yet: no web origin is trusted")
 
 section("sub-frames are left alone")
-expect("https://byskebox.example.ts.net/sandbox-doc/w1", main: false, .allow, "same-origin widget iframe")
+expect("https://gateway.example.ts.net/sandbox-doc/w1", main: false, .allow, "same-origin widget iframe")
 expect("https://www.youtube.com/embed/x", main: false, .allow, "cross-origin iframe cannot take over the view")
 expect("about:srcdoc", main: false, .allow, "srcdoc iframe")
 

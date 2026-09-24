@@ -21,7 +21,7 @@
 //     tablets are the bulk of a personal tailnet's peers.
 //   - Same owner as this node -- unless the peer is tagged. A tagged server
 //     is owned by the tailnet, not a user, and reports the tagged-devices
-//     user; a tagged byskebox must not be filtered out (M5 review).
+//     user; a tagged gateway must not be filtered out (M5 review).
 //  The saved gateway is always probed, and first.
 //
 

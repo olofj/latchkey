@@ -41,7 +41,7 @@ enum NavigationPolicy {
     ///   - allowedOrigin: the origin the app itself last loaded, as produced
     ///     by `GatewayAddress.origin(of:)`. Taken from the app's own resolved
     ///     load rather than the raw setting, because a bare configured name
-    ///     (`http://byskebox`) is expanded to its FQDN before loading — checking
+    ///     (`http://gateway`) is expanded to its FQDN before loading — checking
     ///     against the raw value would send the app's own first load to Safari.
     nonisolated static func decide(url: URL?, isMainFrame: Bool,
                                    allowedOrigin: String?) -> NavigationDecision {

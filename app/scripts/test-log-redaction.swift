@@ -31,10 +31,10 @@ func section(_ name: String) { print("\n== \(name)") }
 let secret = "eyJhbGciOiJIUzI1NiJ9.SECRET-TOKEN-VALUE.sig"
 
 section("URL.redactedForLog keeps scheme, host, port, path")
-expectEqual(URL(string: "https://byskebox.example.ts.net/")!.redactedForLog,
-            "https://byskebox.example.ts.net/", "plain origin is unchanged")
-expectEqual(URL(string: "https://byskebox.example.ts.net/?token=\(secret)")!.redactedForLog,
-            "https://byskebox.example.ts.net/?…", "token query is dropped, marker kept")
+expectEqual(URL(string: "https://gateway.example.ts.net/")!.redactedForLog,
+            "https://gateway.example.ts.net/", "plain origin is unchanged")
+expectEqual(URL(string: "https://gateway.example.ts.net/?token=\(secret)")!.redactedForLog,
+            "https://gateway.example.ts.net/?…", "token query is dropped, marker kept")
 expectEqual(URL(string: "https://h.example:8443/a/b?x=1&token=\(secret)#frag")!.redactedForLog,
             "https://h.example:8443/a/b?…#…", "port and path kept; query and fragment dropped")
 expectEqual(URL(string: "https://user:pass@h.example/p")!.redactedForLog,
@@ -88,7 +88,7 @@ expectAbsent(LogRedaction.scrub("TOKEN=\(secret)"), secret, "case-insensitive")
 section("scrub: lines without URLs or tokens are untouched")
 let plain = "State: Running; 12 peers; proxyConfig: split tunnel, proxying 3 rule(s)"
 expectEqual(LogRedaction.scrub(plain), plain, "ordinary line is returned as-is")
-let socks = "socks[42] OK byskebox.example.ts.net:443 (14ms)"
+let socks = "socks[42] OK gateway.example.ts.net:443 (14ms)"
 expectEqual(LogRedaction.scrub(socks), socks, "SOCKS CONNECT line (host:port only) is untouched")
 
 section("scrub: login links carry their secret in the path (M8.3)")

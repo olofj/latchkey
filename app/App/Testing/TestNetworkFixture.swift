@@ -69,18 +69,20 @@ struct TestNetworkFixture {
             fatalError("-TestStatusFixture needs -TestProxyCredential")
         }
         let host = String(endpoint[..<colon])
-        if Self.mentionsRealTailnet(json) || host.hasSuffix(".ts.net") {
+        if let found = FixtureTailnets.foreign(in: json) {
             // R10: a real tailnet name in a test is how a leak turns into a
-            // pass. The fixture tailnet is tail-scale.ts.net; nothing else.
-            fatalError("test fixture references a real tailnet; use tail-scale.ts.net names only")
+            // pass. Allow-listed in FixtureTailnetCheck.swift, host-tested by
+            // scripts/test-fixture-tailnets.sh.
+            fatalError("test fixture references the tailnet '\(found)'; use \(FixtureTailnets.allowed.sorted().joined(separator: " or ")) names only")
+        }
+        // The proxy endpoint is stricter still: it must be loopback, so no
+        // `.ts.net` host at all, not even a fixture one.
+        if host.hasSuffix(".ts.net") {
+            fatalError("-TestProxyEndpoint must be a loopback host, not \(host)")
         }
         return TestNetworkFixture(status: status, proxyHost: host, proxyPort: port,
                                   credential: credential)
     }
 
-    /// Olof's tailnet. The fixture tailnet is `tail-scale.ts.net`.
-    private static func mentionsRealTailnet(_ json: String) -> Bool {
-        json.range(of: "example", options: .caseInsensitive) != nil
-    }
 }
 #endif

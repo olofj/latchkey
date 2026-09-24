@@ -104,10 +104,14 @@ Two things break that:
    node is named `latchkey-iphone` (Settings → Name). Do not rename it once
    the dashboard is signed in: KiroCrew ties the session to your login and
    the node name, and a rename signs it out.
-2. **Approval and purgatory.** If the tailnet requires device approval, the
-   gate says so and connects by itself once you approve the machine in the
-   admin console. Then move the node out of purgatory (O3b). Until that is
-   done the node is connected but can reach nothing — expected, not a bug.
+2. **Approval, and access control if your tailnet has any.** If the tailnet
+   requires device approval, the gate says so and connects by itself once you
+   approve the machine in the admin console. On a **flat tailnet with no ACLs
+   that is all** — the node can reach its peers immediately. If your tailnet
+   restricts access (this project's own does: new devices land in an address
+   pool with no grants), the node will be connected and still able to reach
+   nothing until a grant admits it. That is expected, not a bug, and it is the
+   single most confusing state to be in; see `../docs/SETUP.md`.
 3. **Find the gateway.** With no gateway saved, the app sweeps the tailnet
    for KiroCrew gateways: online peers of yours, probed over HTTPS through
    the node's own proxy, a match being `/manifest.json` named "Kiro Crew"
@@ -115,7 +119,7 @@ Two things break that:
    otherwise the "Choose a gateway" picker lists what it found, with
    "Search again" and "Enter manually". The choice is kept. Change it later
    under Settings → Gateway, or with "Find gateways…" there. A gateway looks
-   like `https://byskebox.tail-scale.ts.net/`.
+   like `https://gateway.example.ts.net/`.
 4. **Sign in to the dashboard.** The dashboard loads and asks for a token;
    the app puts up its own sheet. On a computer run `kirocrew token` and
    paste what it prints (a link or the bare token; the app applies it to the
@@ -134,7 +138,7 @@ Only **tailnet** destinations go through the embedded node's SOCKS5 proxy:
 | destination | route |
 | --- | --- |
 | Tailnet IPs (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) | via the tsnet proxy |
-| MagicDNS names — `https://byskebox.tail-scale.ts.net/` | via the tsnet proxy |
+| MagicDNS names — `https://gateway.example.ts.net/` | via the tsnet proxy |
 | Everything else (fonts, CDN scripts the dashboard loads) | **direct**, like any other app |
 
 This is least-privilege, and it is also required for correctness: routing

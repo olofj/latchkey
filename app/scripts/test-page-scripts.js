@@ -34,7 +34,7 @@ function expect(cond, what, detail) {
 
 console.log('\n== stripSignInToken');
 
-let c = run('https://byskebox.example.ts.net/?token=SECRET');
+let c = run('https://gateway.example.ts.net/?token=SECRET');
 expect(c.length === 1 && c[0].url === '/', 'bare sign-in URL becomes /', JSON.stringify(c));
 
 c = run('https://g.example/chat?sid=abc&token=SECRET&x=1#frag');

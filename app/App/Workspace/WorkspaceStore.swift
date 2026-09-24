@@ -88,21 +88,24 @@ struct WorkspaceDefinition: Codable, Identifiable {
     /// (`ts:node:<login>|<Name>`), so renaming the node after the first
     /// dashboard sign-in signs the app out. It is also what an admin sees
     /// when moving the node out of the purgatory pool (§C O3b). So it is
-    /// recognisable and set from the start. `latchkey-iphone` was proposed in
-    /// R6 and put to Olof; the iPad variant keeps the same shape.
+    /// recognisable and set from the start. R6 proposed the name and put it to
+    /// Olof; the iPad variant keeps the same shape.
     ///
     /// If a node with this name already exists in the tailnet — say, from an
     /// earlier install whose node was never logged out — control assigns the
     /// new one a suffixed MagicDNS name (`latchkey-iphone-1`). R32's "reset
     /// app" logs the node out so reinstalls do not accumulate.
-    /// Kept as `latchkey-*` through the 2026-09-23 rename to Latchkey. This
-    /// is a **tailnet identity**, not a brand string: it is the node's MagicDNS
-    /// name, it is what Olof's admin console and any host-scoped ACL grant
-    /// refer to, and a live install carries its own copy in `workspaces.json`
-    /// regardless of this default. Changing it would rename only future fresh
-    /// installs, producing a node Olof has to re-approve under a name his
-    /// grants may not cover — churn for a cosmetic gain. Rename it only
-    /// together with the grant that admits it.
+    ///
+    /// **This default follows the product name; the data root does not.** The
+    /// rename of 2026-09-23 moved it to `latchkey-*`, and that is safe where
+    /// renaming the Application Support directory would not have been: this
+    /// value is only a *default*, and a live install has its own copy in
+    /// `workspaces.json`, so an existing node keeps the name it registered
+    /// with and nothing is logged out. Only a fresh install picks up the new
+    /// name — and a fresh install has to be re-approved anyway, because its
+    /// node key is new. Checked against the tailnet policy too (D5): the grant
+    /// is scoped by *address range* (`kiro-clients`), not by node name, so a
+    /// renamed node needs no grant change.
     static var defaultHostName: String {
 #if canImport(UIKit)
         UIDevice.current.userInterfaceIdiom == .pad ? "latchkey-ipad" : "latchkey-iphone"

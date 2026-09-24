@@ -198,7 +198,7 @@ struct SettingsView: View {
                 }
 
                 Section(header: Text("Gateway")) {
-                    TextField("byskebox, or byskebox.example.ts.net", text: $viewModel.homePage)
+                    TextField("gateway, or gateway.example.ts.net", text: $viewModel.homePage)
 #if canImport(UIKit)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()

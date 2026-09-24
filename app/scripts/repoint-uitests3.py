@@ -24,7 +24,7 @@ CONSTANTS = '''
     /// shared -- keep the two in step. M5 replaces the app-side constant with
     /// a discovered gateway, at which point these tests should set a gateway
     /// explicitly instead of asserting the default.
-    static let defaultGatewayURL = "https://byskebox.example.ts.net"
+    static let defaultGatewayURL = "https://gateway.example.ts.net"
 
     /// A substring of `defaultGatewayURL`'s host, used to recognise the loaded
     /// page by its URL. Upstream matched on "ai", the short name of its chat

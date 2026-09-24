@@ -28,10 +28,15 @@ Four categories, and only the first changes:
   2. Bundle identity: `net.lixom.latchkey`, the os_log subsystem that mirrors
      it, the DispatchQueue labels, the future App Group -> PRESERVED.
   3. Storage and network identity: the Application Support directory names and
-     the default tailnet hostnames (`latchkey-iphone` / `-ipad`) -> PRESERVED.
-     A workspace already on disk carries its hostname in `workspaces.json`
-     anyway, so changing the default would only affect a future fresh install
-     while risking a mismatch with Olof's ACL grants.
+     the default tailnet hostnames -> PRESERVED **by this script**.
+
+     NOTE (later the same day): the hostname default was subsequently changed
+     to `latchkey-*` by hand, after checking that the tailnet grant is scoped
+     by address range and not by node name. It is only a default -- a live
+     install carries its own hostname in `workspaces.json` -- so no existing
+     node was renamed. The Application Support names remain frozen, and that
+     distinction is the point: storage identity must not move, a default may.
+     See `App/Workspace/WorkspaceStore.swift` and the DECISIONS entries.
   4. The vendored libtailscale tree (`ThirdParty/`), including
      `latchkey_locallog.go` and `TestLatchkeyRawStderr...` -> PRESERVED,
      because R16 keeps every vendored change as its own commit and a rename
