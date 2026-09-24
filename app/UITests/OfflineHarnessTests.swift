@@ -139,6 +139,7 @@ final class OfflineHarnessTests: XCTestCase {
         defer { app.terminate() }
 
         try assertErrorPage(app, "an unreachable proxy must fail the load")
+        assertConnectionFailure(app, "an unreachable proxy behind the relay (measured: -1009)")
         try await assertZeroRequests(host: "dash.localtest.me")
     }
 
@@ -153,6 +154,7 @@ final class OfflineHarnessTests: XCTestCase {
         defer { app.terminate() }
 
         try assertErrorPage(app, "an unreachable proxy must fail the load even without the relay")
+        assertConnectionFailure(app, "an unreachable proxy dialled by WebKit itself (measured: -1004)")
         try await assertZeroRequests(host: "dash.localtest.me")
     }
 
@@ -325,6 +327,35 @@ final class OfflineHarnessTests: XCTestCase {
                                  file: StaticString = #filePath, line: UInt = #line) throws {
         let errorPage = app.descendants(matching: .any).matching(identifier: "nav-error-overlay").firstMatch
         XCTAssertTrue(errorPage.waitForExistence(timeout: 40), message, file: file, line: line)
+    }
+
+    /// The proxy-gone tests are the only end-to-end proof of `allowFailover ==
+    /// false`, and "an error page, and zero requests" is also what a load
+    /// that failed BEFORE dialling leaves behind -- a bad URL, a policy
+    /// refusal, a certificate it would not trust -- which says nothing about
+    /// failover (review, 2026-09-23). So the failure must be the
+    /// connection's. The error page prints the cause as `[NSURLErrorDomain
+    /// <code>]`; measured over 25 runs each: -1009 with the relay in front
+    /// (the relay accepted, tsnet's port refused it, the relay closed on
+    /// WebKit) and -1004 without it (WebKit dialled the dead proxy itself);
+    /// -1005 is the same family. -1000 is not: it is what a SOCKS failure
+    /// REPLY produces (the blackholed test, which pins its cause through the
+    /// proxy journal instead) and what a URL never dialled produces too.
+    private static let connectionFailureCodes: Set<Int> = [
+        NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet,
+    ]
+
+    private func assertConnectionFailure(_ app: XCUIApplication, _ message: String,
+                                         file: StaticString = #filePath, line: UInt = #line) {
+        let cause = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "[NSURLErrorDomain ")).firstMatch
+        XCTAssertTrue(cause.waitForExistence(timeout: 5), "\(message): the error page names its NSURLError code",
+                      file: file, line: line)
+        let label = cause.label
+        let tail = label.components(separatedBy: "[NSURLErrorDomain ").last ?? ""
+        let code = Int(tail.components(separatedBy: "]").first ?? "")
+        XCTAssertTrue(code.map { Self.connectionFailureCodes.contains($0) } ?? false,
+                      "\(message): the load must fail at the CONNECTION (-1004, -1005 or -1009), not before dialling; the error page says: \(label)",
+                      file: file, line: line)
     }
 
     private func assertZeroRequests(host: String,
