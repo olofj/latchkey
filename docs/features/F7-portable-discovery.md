@@ -11,8 +11,9 @@
 
 The portability review found the app is **already agnostic** about tailnet
 policy: across `App/` and `TSNet/` there is no grant, ACL, address range or
-approval concept, and the only hardcoded network constant is Tailscale's own
-CGNAT range (`TailnetProxyPolicy.swift:93`). Purgatory appears in the docs, the
+approval concept, and the only hardcoded network constants are Tailscale's own
+address ranges — the IPv4 CGNAT range and the IPv6 ULA range
+(`TailnetProxyPolicy.swift:93-95`). Purgatory appears in the docs, the
 runbook and the test harness — never in the product. So a flat-tailnet user
 needs no code change to connect at all.
 
@@ -119,7 +120,9 @@ spec must not duplicate them.
 (`:170-180`). `sweepTruncated` is set in the `.deadline` case (`:164-168`) **only
 if `pending` still has an element** — a deadline that fires with an empty queue
 is not truncation, and conflating the two would cry wolf on every slow sweep.
-Both reset in `start()` next to `candidateCount = 0` (`:119`).
+Both reset at the top of `sweep()`, beside `gateways = []` (`:116`) — `start()`
+only cancels the previous run, bumps the generation and spawns the sweep
+(`:91-97`); `candidateCount` is likewise set inside `sweep()` (`:119`, `:131`).
 
 The existing summary log line gains `probed=N/M truncated=yes|no`, so a device
 log answers this without a debugger.
@@ -210,8 +213,11 @@ that is what makes the large-tailnet and skipped-peer cases testable at all.
 - `select`'s behaviour is unchanged for every input the host tests already
   cover.
 - The app still contains no ACL, grant or address-range concept — grep for
-  `grant`, `purgatory`, `100.8` in `App/` and `TSNet/` returns nothing but
-  Tailscale's CGNAT constant.
+  `grant`, `purgatory`, `100.8` in `App/` and `TSNet/` returns nothing in
+  code. (Today it returns only the doc comments in
+  `App/Workspace/WorkspaceStore.swift:90-158` that explain why the tsnet state
+  directory must not move in the author's environment; those are prose about
+  a policy, not an implementation of one, and may stay.)
 
 ## 8. Open questions and owner actions
 

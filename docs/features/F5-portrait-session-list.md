@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | **designed 2026-09-23 — two independent halves: legible chips (A + B) and a native gateway switcher (D)** |
 | **Requested** | 2026-09-23, by Olof (bug report): "the list of remotes on the top left isn't really visible on portrait mode phone. Works well on landscape. Not sure if it's fixable since it comes from the dashboard but it affects user experience." |
-| **Revision** | one entry when built (R41): the app injects a second stylesheet into the page (B, alongside R2/R22's scripts), and the gateway picker gains a remembered list (D, changes M5's picker) |
+| **Revision** | one entry when built (numbered then; none is reserved here): the app injects a second stylesheet into the page (B, alongside R2/R22's scripts), and the gateway picker gains a remembered list (D, changes M5's picker) |
 | **Touches** | B: `App/Browser` (`PageScriptSources`, `PageScripts`, `BrowserViewModel.loadResolved`), `scripts/test-page-scripts.sh`, the session suite and `testing/harness/fake_gateway.py`. D: `App/Settings`, `App/Workspace/WorkspaceStore.swift`, `App/Discovery`, the discovery suite and `testing/tsnet-harness` |
 | **Tracker** | would be issue #1 once the private repos exist; this document is the record until then |
 | **Upstream** | `../upstream/kirocrew-portrait-chip-overlap.md` — drafted, **not filed**; Olof authorises filing |
@@ -441,9 +441,16 @@ behaviour this design relies on rather than adds:
    host-scoped, so switching *back* finds the earlier gateway still signed in
    and the sheet does not reappear. This is the point of a switcher and it is
    asserted (§9). Sign-out (R32) still clears the whole store, all gateways.
-   Accepted wrinkle from F1: two ports on one host share the cookie name
-   `mc_token_5476` (R37), so `host:443` and `host:8443` would sign each other
-   out; a real distinction, and the picker already shows two rows for it.
+   Two ports on one host do **not** share a cookie name: KiroCrew names its
+   cookies after the port in the `Host` header, falling back to its own
+   listen port only when the header carries none — so `mc_token_5476` behind
+   serve on 443 (R37's case) and `mc_token_8443` behind serve on 8443 (F1
+   §4.6, which retracted its earlier "same name" draft). `host:443` and
+   `host:8443` therefore do not sign each other out. WebKit still scopes
+   cookies by host, so each origin is sent the other's cookies and ignores
+   them, and `SessionCookies.summaries(of:host:)` groups by the name's port
+   suffix (`app/App/Diagnostics/SessionCookies.swift:44-49`) so Status shows
+   one line per port. The picker shows two rows for the two ports either way.
 5. **F4 tells the truth about the new gateway.** A load in flight shows
    `page-connecting` with the host named; a dead one ends in `nav-error-overlay`
    with `nav-error-choose-gateway` (F4 §4), which opens the picker; a host that
