@@ -62,17 +62,43 @@ final class WorkspaceManager: ObservableObject {
         // the node keys, WebKit's store the 30-day refresh cookie.
         logger.log(BackupExclusion.apply(appSupportRoot: WorkspaceStore.appSupportDir))
 
-        // Load the workspace list (or seed a single default on first launch).
-        let loaded = WorkspaceStore.load()
+        // Load the workspace list, or seed a single default on first launch.
+        //
+        // Three answers, not two. "No file" and "a file that cannot be read"
+        // used to be the same nil, and both took the seed-and-save branch: a
+        // damaged workspaces.json was overwritten with a new default, and the
+        // old node's state directory — its identity — was orphaned without a
+        // log line. Now an unreadable file is left exactly as it is (save()
+        // refuses to write over it too), the app runs on a fixed recovery
+        // workspace so Settings → Logs stays reachable, and the log says what
+        // happened and where the file is. Nothing on disk is deleted.
         var defs: [WorkspaceDefinition]
-        if let loaded {
-            defs = loaded.workspaces
-            activeId = loaded.activeId
-        } else {
+        switch WorkspaceStore.load() {
+        case .loaded(let loaded, let loadedActiveId, let repairs, let rejected) where !loaded.isEmpty:
+            defs = loaded
+            activeId = loadedActiveId
+            for line in repairs { logger.log("workspaces.json: \(line)") }
+            for line in rejected { logger.log("workspaces.json: entry REJECTED: \(line)") }
+        case .absent, .loaded:
+            // First launch, or a decodable file whose list is empty: nothing
+            // to keep, and the file (if any) is one save() may overwrite.
             let d = WorkspaceDefinition.makeDefault()
             defs = [d]
             activeId = d.id
             WorkspaceStore.save(defs, activeId: activeId)
+        case .unreadable(let reason):
+            let d = WorkspaceDefinition.makeRecovery()
+            defs = [d]
+            activeId = d.id
+            logger.log("""
+                WORKSPACE FILE PRESERVED, NOT LOADED: workspaces.json \(reason). \
+                It has not been overwritten and no workspace directory has been deleted: every node's \
+                identity is still under Workspaces/. Running on the recovery workspace \(d.hostname) \
+                (\(d.id)); nothing is saved until the file is repaired or removed. To recover, fix or \
+                remove <Application Support>/Latchkey/workspaces.json from the app container \
+                (Xcode > Devices > download container).
+                """)
+            // Deliberately not saved. WorkspaceStore.save would refuse anyway.
         }
 
         // Hermetic multi-workspace UI-test hook. Remove all prior workspace

@@ -21,6 +21,9 @@
 //        Workspaces/<id>/
 //            state/                       # tsnet state dir (tailscale_set_dir)
 //
+//  workspaces.json is never written over a file that exists and does not
+//  decode (`load` / `save` below): those state dirs are each node's identity.
+//
 //  No page URL is stored anywhere (revision R2); `tabs.json` from earlier
 //  builds is deleted on sight.
 //
@@ -65,18 +68,49 @@ struct WorkspaceDefinition: Codable, Identifiable {
     /// Last-known identity, persisted for immediate display on next launch.
     var lastKnownIdentity: WorkspaceIdentity?
 
+    static let defaultDisplayName = "Latchkey"
+
     /// The single workspace created on first launch (or when the list is
     /// empty): a deliberate tailnet hostname, the default gateway, the default
     /// control URL, and the launch-arg ephemeral flag.
     static func makeDefault() -> WorkspaceDefinition {
         WorkspaceDefinition(
             id: UUID(),
-            displayName: "Latchkey",
+            displayName: defaultDisplayName,
             hostname: defaultHostName,
             homePageURL: HomePage.defaultURL,
             controlURL: kDefaultControlURL,
             ephemeral: TSNetManager.launchEphemeral(),
             dataStoreUUID: UUID(),
+            lastKnownIdentity: nil
+        )
+    }
+
+    /// The workspace the app runs on when `workspaces.json` exists but cannot
+    /// be read (`WorkspaceStore.LoadOutcome.unreadable`): the file and every
+    /// state directory are being preserved, and the app still needs one
+    /// workspace so Settings — and its Logs, the only place the owner can read
+    /// what happened on a device — stays reachable.
+    ///
+    /// The ids are **fixed**, so every launch in that state uses the same node
+    /// state dir and web data store: a sign-in made while degraded survives a
+    /// relaunch instead of being orphaned, and the container does not grow a
+    /// new directory per launch. The hostname is distinct, so a degraded node
+    /// is recognisable in the tailnet admin console and cannot take the real
+    /// node's name (which would hand the real node a `-1` suffix once the file
+    /// is repaired). `ephemeral` follows the launch flag as `makeDefault` does.
+    static let recoveryID = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
+    static let recoveryDataStoreUUID = UUID(uuidString: "00000000-0000-4000-8000-000000000002")!
+
+    static func makeRecovery() -> WorkspaceDefinition {
+        WorkspaceDefinition(
+            id: recoveryID,
+            displayName: "\(defaultDisplayName) (recovery)",
+            hostname: "\(defaultHostName)-recovery",
+            homePageURL: HomePage.defaultURL,
+            controlURL: kDefaultControlURL,
+            ephemeral: TSNetManager.launchEphemeral(),
+            dataStoreUUID: recoveryDataStoreUUID,
             lastKnownIdentity: nil
         )
     }
@@ -224,26 +258,149 @@ enum WorkspaceStore {
 
     // MARK: - Load / save
 
-    /// On-disk envelope for `workspaces.json`.
-    private struct Envelope: Codable {
+    /// On-disk envelope for `workspaces.json`, as written.
+    private struct Envelope: Encodable {
         var workspaces: [WorkspaceDefinition]
         var activeId: UUID?
     }
 
-    /// Loads the workspace list + active id, or nil if there's no file yet
-    /// (first launch) or it can't be decoded (treated as a fresh start).
-    static func load() -> (workspaces: [WorkspaceDefinition], activeId: UUID?)? {
-        guard let data = try? Data(contentsOf: definitionsFile),
-              let env = try? JSONDecoder().decode(Envelope.self, from: data)
-        else { return nil }
-        return (env.workspaces, env.activeId)
+    /// The same envelope, as read.
+    private struct DecodedEnvelope: Decodable {
+        var workspaces: [WorkspaceDefinition]
+        var activeId: UUID?
     }
 
-    /// Atomically writes the workspace list + active id.
-    static func save(_ workspaces: [WorkspaceDefinition], activeId: UUID?) {
+    /// What was found at `definitionsFile`.
+    enum LoadOutcome {
+        /// No file: the first launch. Seeding a default and writing it is right.
+        case absent
+        /// A list. `repairs` are fields that took a default; `rejected` are
+        /// entries that could not be used. (Both empty until the decoder is
+        /// made tolerant; the shape is the contract the manager logs from.)
+        case loaded(workspaces: [WorkspaceDefinition], activeId: UUID?, repairs: [String], rejected: [String])
+        /// The file exists and could not be read or decoded — an I/O error, an
+        /// empty or truncated file. It, and every state directory it might
+        /// name, must be left exactly as they are.
+        case unreadable(reason: String)
+
+        /// What the manager does with it. Pure, so the host test can pin the
+        /// decision per document (`scripts/test-workspace-store.sh`).
+        var decision: Decision {
+            switch self {
+            case .absent:
+                return .freshStart
+            case .loaded(let workspaces, _, _, let rejected):
+                // A decodable file with an empty list holds nothing to keep,
+                // and save() may overwrite it: the same fresh start as no file.
+                return workspaces.isEmpty ? .freshStart : .keep(workspaces: workspaces.count, rejected: rejected.count)
+            case .unreadable:
+                return .preserve
+            }
+        }
+    }
+
+    enum Decision: Equatable {
+        /// Seed the default workspace and write the file.
+        case freshStart
+        /// Run the workspaces that decoded.
+        case keep(workspaces: Int, rejected: Int)
+        /// Touch nothing on disk; run a recovery workspace; say so loudly.
+        case preserve
+    }
+
+    /// Loads the workspace list + active id.
+    ///
+    /// "No file" and "a file that cannot be read" are different answers.
+    /// The old `try?` chain returned nil for both, and the caller treated nil
+    /// as a first launch: a damaged `workspaces.json` was overwritten with a
+    /// new default and the old node's state directory was orphaned without a
+    /// log line. Only a missing file is `.absent`.
+    static func load() -> LoadOutcome {
+        load(from: definitionsFile)
+    }
+
+    static func load(from file: URL) -> LoadOutcome {
+        let data: Data
+        do {
+            data = try Data(contentsOf: file)
+        } catch {
+            let ns = error as NSError
+            let noSuchFile = (ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError)
+                || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT))
+            if noSuchFile { return .absent }
+            return .unreadable(reason: "cannot be read: \(describe(error))")
+        }
+        if data.isEmpty { return .unreadable(reason: "is empty (0 bytes)") }
+
+        let env: DecodedEnvelope
+        do {
+            env = try JSONDecoder().decode(DecodedEnvelope.self, from: data)
+        } catch {
+            return .unreadable(reason: "does not decode: \(describe(error))")
+        }
+        return .loaded(workspaces: env.workspaces, activeId: env.activeId, repairs: [], rejected: [])
+    }
+
+    /// Atomically writes the workspace list + active id — **unless the file
+    /// on disk exists and cannot be read**, in which case nothing is written
+    /// and the refusal is logged. That is the guarantee: a `workspaces.json`
+    /// the app cannot decode is never replaced, whatever the caller thinks
+    /// the list is. Returns whether the file was written.
+    @discardableResult
+    static func save(_ workspaces: [WorkspaceDefinition], activeId: UUID?) -> Bool {
+        save(workspaces, activeId: activeId, to: definitionsFile)
+    }
+
+    @discardableResult
+    static func save(_ workspaces: [WorkspaceDefinition], activeId: UUID?, to file: URL) -> Bool {
+        switch load(from: file) {
+        case .absent, .loaded:
+            break
+        case .unreadable(let reason):
+            refuseWrite(because: "the file on disk \(reason)")
+            return false
+        }
         let env = Envelope(workspaces: workspaces, activeId: activeId)
-        guard let data = try? JSONEncoder().encode(env) else { return }
-        try? data.write(to: definitionsFile, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(env)
+            try data.write(to: file, options: .atomic)
+            return true
+        } catch {
+            logger.log("workspaces.json could not be written: \(describe(error))")
+            return false
+        }
+    }
+
+    /// Logged once per reason per launch: identity refreshes persist too, and
+    /// the line should stay legible in Settings → Logs.
+    private static var lastRefusal: String?
+    private static func refuseWrite(because reason: String) {
+        guard lastRefusal != reason else { return }
+        lastRefusal = reason
+        logger.log("workspaces.json NOT written: \(reason). It is preserved as it is, and no workspace directory has been touched.")
+    }
+
+    /// A decode or I/O error, without an `NSError`'s userInfo dump. The values
+    /// in the file are hostnames and an origin, and the codingPath is enough
+    /// to point at the field; `Logger.log` scrubs the line again anyway.
+    nonisolated private static func describe(_ error: (any Error)?) -> String {
+        guard let error else { return "unknown error" }
+        if let decoding = error as? DecodingError {
+            let context: DecodingError.Context
+            switch decoding {
+            case .typeMismatch(_, let ctx), .valueNotFound(_, let ctx),
+                 .keyNotFound(_, let ctx), .dataCorrupted(let ctx):
+                context = ctx
+            @unknown default:
+                return "\(type(of: decoding))"
+            }
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            let text = context.debugDescription.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+            return path.isEmpty ? text : "\(path): \(text)"
+        }
+        let ns = error as NSError
+        let text = ns.localizedDescription.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        return "\(ns.domain) \(ns.code): \(text)"
     }
 
     /// Removes a workspace's entire on-disk directory (state + bookmarks).
