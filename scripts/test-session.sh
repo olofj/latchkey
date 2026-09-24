@@ -118,14 +118,34 @@ LEAK_RC=0
 CONTAINER=$(xcrun simctl get_app_container "$UDID" net.lixom.latchkey data 2>/dev/null || true)
 xcrun simctl spawn "$UDID" log show --last "$(( $(date +%s) - START + 30 ))s" \
     --predicate 'subsystem == "net.lixom.latchkey"' --style compact > "$LOG_DIR/unified.log" 2>/dev/null || true
+# grep exits 0 on a match, 1 on none and 2 on an error -- and `if grep ...;
+# then leak; else ok` read 1 and 2 alike as ok, so an unreadable file or a
+# missing directory printed "ok" over a real hit (review, 2026-09-23: grep
+# returns 2 even when it also matched). scan keeps the three apart: matches
+# go to the named file, errors are shown, and the status is grep's own.
+scan() {  # outfile, grep args...
+    local out=$1 rc=0; shift
+    grep "$@" > "$out" 2> "$out.err" || rc=$?
+    if [[ $rc -ge 2 ]]; then
+        echo "error: the scan could not read everything it was asked to (grep exit $rc):" >&2
+        sed 's/^/    /' "$out.err" | head -5 >&2
+    fi
+    return $rc
+}
 if [[ -z "$CONTAINER" ]]; then
     echo "error: app container not found" >&2; LEAK_RC=1
 else
-    if grep -rla "fk1\." "$CONTAINER/Library" "$CONTAINER/tmp" 2>/dev/null > "$LOG_DIR/link-leaks.txt"; then
+    SCAN_RC=0
+    scan "$LOG_DIR/link-leaks.txt" -rla "fk1\." "$CONTAINER/Library" "$CONTAINER/tmp" || SCAN_RC=$?
+    if [[ -s "$LOG_DIR/link-leaks.txt" ]]; then
         echo "error: a sign-in link was written to disk:" >&2
         sed "s|$CONTAINER/|    |" "$LOG_DIR/link-leaks.txt" >&2
         LEAK_RC=1
-    else
+    fi
+    if [[ $SCAN_RC -ge 2 ]]; then
+        echo "error: the disk scan is incomplete, so 'no link on disk' is not established" >&2
+        LEAK_RC=1
+    elif [[ $SCAN_RC -eq 1 ]]; then
         # Not vacuous only if there is web data to search. SessionTests
         # launch with -UITestKeepWebData, so every test's data store is
         # still here, not only the last one's.
@@ -137,11 +157,17 @@ else
             echo "    ok (disk: all of Library + tmp, $WK_FILES WebKit files among them)"
         fi
     fi
-    if grep -e "fk1\." -e "token=" "$LOG_DIR/unified.log" > "$LOG_DIR/link-in-os-log.txt"; then
+    SCAN_RC=0
+    scan "$LOG_DIR/link-in-os-log.txt" -e "fk1\." -e "token=" "$LOG_DIR/unified.log" || SCAN_RC=$?
+    if [[ -s "$LOG_DIR/link-in-os-log.txt" ]]; then
         echo "error: a sign-in link reached the unified log:" >&2
         head -5 "$LOG_DIR/link-in-os-log.txt" | sed 's/^/    /' >&2
         LEAK_RC=1
-    else
+    fi
+    if [[ $SCAN_RC -ge 2 ]]; then
+        echo "error: the unified-log scan is incomplete" >&2
+        LEAK_RC=1
+    elif [[ $SCAN_RC -eq 1 ]]; then
         echo "    ok (unified log: $(wc -l < "$LOG_DIR/unified.log" | tr -d ' ') lines)"
     fi
     N=$(grep -c "Session: redeeming a token" "$LOG_DIR/unified.log" || true)

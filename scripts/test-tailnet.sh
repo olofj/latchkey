@@ -143,15 +143,31 @@ if [[ -z "$CONTAINER" ]]; then
     echo "error: app container not found" >&2; TEST_RC=1
 else
     LINK_RE='/auth/[0-9a-f]{16,}|login\.tailscale\.com/a/[A-Za-z0-9]{8,}'
-    if grep -rlaE "$LINK_RE" "$CONTAINER/Library" "$CONTAINER/tmp" 2>/dev/null > "$LOG_DIR/login-link-leaks.txt"; then
+    # grep exits 0 on a match, 1 on none and 2 on an error -- and `if grep
+    # ...; then leak; else ok` read 1 and 2 alike as ok, so an unreadable
+    # file or a missing directory printed "ok" over a real hit (review,
+    # 2026-09-23: grep returns 2 even when it also matched). The matches and
+    # the status are judged separately.
+    SCAN_RC=0
+    grep -rlaE "$LINK_RE" "$CONTAINER/Library" "$CONTAINER/tmp" \
+        > "$LOG_DIR/login-link-leaks.txt" 2> "$LOG_DIR/login-link-leaks.txt.err" || SCAN_RC=$?
+    if [[ -s "$LOG_DIR/login-link-leaks.txt" ]]; then
         echo "error: a login link was written to disk:" >&2
         sed "s|$CONTAINER/|    |" "$LOG_DIR/login-link-leaks.txt" >&2
         TEST_RC=1
-    elif ! grep -rqa "/auth/…" "$CONTAINER/Library/Application Support/"*/Logs/tsnet.log* 2>/dev/null; then
-        echo "error: no redacted login link in tsnet.log, so the scan proved nothing" >&2
+    fi
+    if [[ $SCAN_RC -ge 2 ]]; then
+        echo "error: the scan could not read everything it was asked to (grep exit $SCAN_RC):" >&2
+        sed 's/^/    /' "$LOG_DIR/login-link-leaks.txt.err" | head -5 >&2
+        echo "error: the disk scan is incomplete, so 'no login link on disk' is not established" >&2
         TEST_RC=1
-    else
-        echo "    ok (all of Library + tmp; tsnet.log holds the links redacted)"
+    elif [[ $SCAN_RC -eq 1 ]]; then
+        if ! grep -rqa "/auth/…" "$CONTAINER/Library/Application Support/"*/Logs/tsnet.log* 2>/dev/null; then
+            echo "error: no redacted login link in tsnet.log, so the scan proved nothing" >&2
+            TEST_RC=1
+        else
+            echo "    ok (all of Library + tmp; tsnet.log holds the links redacted)"
+        fi
     fi
 fi
 

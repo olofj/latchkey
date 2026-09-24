@@ -137,17 +137,37 @@ fi
 say "R1: no sign-in token in the app container's logs"
 CONTAINER=$(xcrun simctl get_app_container "$UDID" "$BUNDLE" data 2>/dev/null || true)
 LEAK_RC=0
+# grep exits 0 on a match, 1 on none and 2 on an error -- and `if grep ...;
+# then leak; else ok` read 1 and 2 alike as ok, so an unreadable file or a
+# missing directory printed "ok" over a real hit (review, 2026-09-23: grep
+# returns 2 even when it also matched). scan keeps the three apart: matches
+# go to the named file, errors are shown, and the status is grep's own.
+scan() {  # outfile, grep args...
+    local out=$1 rc=0; shift
+    grep "$@" > "$out" 2> "$out.err" || rc=$?
+    if [[ $rc -ge 2 ]]; then
+        echo "error: the scan could not read everything it was asked to (grep exit $rc):" >&2
+        sed 's/^/    /' "$out.err" | head -5 >&2
+    fi
+    return $rc
+}
 if [[ -n "$CONTAINER" ]]; then
     # Everything the app can write: all of Library (Application Support,
     # WebKit's website data and caches, Cookies, HTTPStorages, Preferences)
     # and tmp. -a so binary stores (SQLite, the HTTP cache) are searched too;
     # the page no longer carries the token as a literal, so a hit is real.
-    if grep -rla -e "OFFLINE-TEST-TOKEN" -e "token=" "$CONTAINER/Library" "$CONTAINER/tmp" \
-            2>/dev/null > "$LOG_DIR/token-leaks.txt"; then
+    SCAN_RC=0
+    scan "$LOG_DIR/token-leaks.txt" -rla -e "OFFLINE-TEST-TOKEN" -e "token=" \
+        "$CONTAINER/Library" "$CONTAINER/tmp" || SCAN_RC=$?
+    if [[ -s "$LOG_DIR/token-leaks.txt" ]]; then
         echo "error: a sign-in token was written to disk:" >&2
         sed "s|$CONTAINER/|    |" "$LOG_DIR/token-leaks.txt" >&2
         LEAK_RC=1
-    else
+    fi
+    if [[ $SCAN_RC -ge 2 ]]; then
+        echo "error: the disk scan is incomplete, so 'no token on disk' is not established" >&2
+        LEAK_RC=1
+    elif [[ $SCAN_RC -eq 1 ]]; then
         # Not vacuous only if the sign-in run left WebKit data to search.
         WK_FILES=$(find "$CONTAINER/Library/WebKit" -type f 2>/dev/null | wc -l | tr -d ' ')
         if [[ "$WK_FILES" -eq 0 ]]; then
@@ -161,11 +181,17 @@ if [[ -n "$CONTAINER" ]]; then
     # The unified log is the other place the app writes. Scan this run's.
     xcrun simctl spawn "$UDID" log show --last "$(( $(date +%s) - START + 30 ))s" \
         --predicate "subsystem == \"$BUNDLE\"" --style compact > "$LOG_DIR/unified.log" 2>/dev/null || true
-    if grep -e "OFFLINE-TEST-TOKEN" -e "token=" "$LOG_DIR/unified.log" > "$LOG_DIR/token-in-os-log.txt"; then
+    SCAN_RC=0
+    scan "$LOG_DIR/token-in-os-log.txt" -e "OFFLINE-TEST-TOKEN" -e "token=" "$LOG_DIR/unified.log" || SCAN_RC=$?
+    if [[ -s "$LOG_DIR/token-in-os-log.txt" ]]; then
         echo "error: a sign-in token reached the unified log:" >&2
         sed 's/^/    /' "$LOG_DIR/token-in-os-log.txt" | head -5 >&2
         LEAK_RC=1
-    else
+    fi
+    if [[ $SCAN_RC -ge 2 ]]; then
+        echo "error: the unified-log scan is incomplete" >&2
+        LEAK_RC=1
+    elif [[ $SCAN_RC -eq 1 ]]; then
         echo "    ok (unified log: $(wc -l < "$LOG_DIR/unified.log" | tr -d ' ') lines scanned)"
     fi
     # Validate the instrument: a grep that finds nothing proves nothing unless
