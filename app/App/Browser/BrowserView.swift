@@ -123,28 +123,11 @@ struct NavErrorPage: View {
     }
 }
 
-/// Returns a diagnostic, escape-only representation of `s` for the error
-/// overlay: every Unicode scalar outside printable ASCII (0x20–0x7E) is
-/// rendered as `\u{XXXX}` so invisible/problematic characters the keyboard may
-/// have injected (non-breaking space U+00A0, zero-width space U+200B, smart
-/// quotes U+201C/201D, tabs, newlines, etc.) are visible. Printable ASCII
-/// (including the regular space) is shown as-is, so a clean URL reads normally.
-///
-/// Percent-encoding is decoded first, so a percent-encoded bad char (e.g.
-/// `%C2%A0` for a non-breaking space that `URL(string:)` encoded) reveals its
-/// true scalar (`\u{A0}`) rather than the opaque encoding.
-func debugEscaped(_ s: String) -> String {
-    let decoded = s.removingPercentEncoding ?? s
-    var out = ""
-    for scalar in decoded.unicodeScalars {
-        if scalar.value >= 0x20 && scalar.value <= 0x7E {
-            out += String(scalar)
-        } else {
-            out += String(format: "\\u{%X}", scalar.value)
-        }
-    }
-    return out
-}
+// `debugEscaped` lived here until F4. It moved to `PageFailureText.swift`, and
+// became `nonisolated`, for two reasons: the failure wording that calls it is
+// pure and host-compiled, and this file is a SwiftUI view the host test cannot
+// build. Leaving a copy behind is what the first attempt did, and the duplicate
+// declaration failed the build.
 
 struct LoadingView: View {
     var body: some View {

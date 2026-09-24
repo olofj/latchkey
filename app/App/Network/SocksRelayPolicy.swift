@@ -90,6 +90,45 @@ nonisolated struct SocksRelayCapacity: Sendable {
     }
 }
 
+/// The relay's record of a CONNECT tsnet refused (F4 §4.5): what it logs at
+/// `SocksLogProxy`'s "FAILED … could not connect" line, published on
+/// `TSNetModel.lastProxyFailure` so the page can say WHY a load failed.
+/// WebKit collapses every SOCKS reply code into -1000, so this is the only
+/// place the difference between "refused", "unreachable" and "no answer at
+/// all" survives. Only failures are recorded; the value stays in memory.
+///
+/// Here, not in `TSNetModel.swift` as F4 §4.5 first placed it, because the
+/// relay (`test-socks-relay-policy.sh`), the view model
+/// (`test-browser-view-model.sh`) and the wording (`test-page-failure-text.sh`)
+/// are all compiled on the host, and this file is the one all three already
+/// include. The field itself is on the model, as specified.
+nonisolated struct ProxyReply: Sendable, Equatable {
+    /// `host:port` exactly as WebKit asked for it.
+    let target: String
+    /// RFC 1928's name for the reply code: "general failure", "connection
+    /// refused", "host unreachable", "network unreachable", …
+    let reply: String
+    /// From the CONNECT reaching the relay to the reply.
+    let elapsed: Duration
+    let at: Date
+
+    nonisolated init(target: String, reply: String, elapsed: Duration, at: Date) {
+        self.target = target
+        self.reply = reply
+        self.elapsed = elapsed
+        self.at = at
+    }
+
+    /// Whether this reply is the one for a load of `fqdn:port` that began at
+    /// `navigationStartedAt`. Host names compare case-insensitively: the
+    /// qualifier lowercases what the app loads, and WebKit sends what it was
+    /// given.
+    nonisolated func matches(fqdn: String, port: Int, navigationStartedAt: Date) -> Bool {
+        target.caseInsensitiveCompare("\(fqdn):\(port)") == .orderedSame
+            && at >= navigationStartedAt
+    }
+}
+
 /// Whether a failed page load calls for a new relay listener.
 nonisolated enum SocksRelayRecovery {
     /// What WebKit reports when the transport under a load breaks. -1000 is
