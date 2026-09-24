@@ -2,16 +2,17 @@
 
 | | |
 |---|---|
-| **Status** | **spec — design pass 2026-09-23: every root-view state enumerated from the code, the blank screen's code path identified, ready to build** |
+| **Status** | **spec — design pass 2026-09-23: every root-view state enumerated from the code, the blank screen's code path identified; amended the same day with a second, faster path to the same screen (D10: a 5xx committed as the document) and the response rule that closes it (§4.13); ready to build** |
 | **Requested** | 2026-09-23, by Olof: "I entered byskebox manually, screen went blank. Not a great UI experience if it's stuck loading something." On discovery: "Is it giving up too quickly?" and "Did a couple more 'Search again' and nothing showed up." Later the same day: "The UI has some blank screens where you don't know what's going on, such as when there's no gateway available and all you have is the gear in the top right. That should be improved." and "Make sure the UI indicates the scan is going on." |
-| **Revision** | none. The retry policy (20 s, 1 s cadence), the `about:blank` fallback (R3), the discovery timeouts (R39) and the SOCKS dial timeout are all unchanged; this makes them visible. One label is corrected (a SOCKS failure is not a "URL format error"), which is a fix, not a policy change. |
+| **Revision** | one rule: a main-frame HTTP **5xx is refused** and shown as a failure instead of committing as the document (§4.13); every 2xx/3xx/4xx commits exactly as today, including KiroCrew's own `403` + `X-Auth-Required`. The retry policy (20 s, 1 s cadence), the `about:blank` fallback (R3), the discovery timeouts (R39) and the SOCKS dial timeout are all unchanged; this makes them visible. One label is corrected (a SOCKS failure is not a "URL format error"), which is a fix, not a policy change, and lands as its own commit ahead of this feature (§4.3). |
 | **Supersedes** | F2 (the connecting state). F2's four tests are carried over as tests 1, 3 and 12 below; its identifier `page-loading` is **not** used — `page-connecting` is. |
-| **Touches** | `App/Browser` (`BrowserView`, `BrowserViewModel`, `DashboardRootView`, new `PageState.swift`, `PageFailureText.swift`), `App/Discovery` (`GatewayDiscovery`, `GatewayPickerView`), `App/Tailnet Status/StatusView`, `TSNet/TSNetModel` + `TSNet/SocksLogProxy` (one published field, existing files), `testing/harness/socks5stub.py` (a stall mode), the L1 offline, L2 discovery and session suites, one host test |
+| **Touches** | `App/Browser` (`BrowserView`, `BrowserViewModel`, `DashboardRootView`, `NavigationPolicy.swift` gains a `ResponsePolicy`, new `PageState.swift`, `PageFailureText.swift`), `App/Discovery` (`GatewayDiscovery`, `GatewayPickerView`), `App/Tailnet Status/StatusView`, `TSNet/TSNetModel` + `TSNet/SocksLogProxy` (one published field, existing files), `testing/harness/socks5stub.py` (a stall mode), `testing/harness/fake_gateway.py` and `testing/harness/dashboard.py` (a 502 front and a 403 document mode, §6), the L1 offline, L2 discovery and session suites, two host tests |
 
 **The rule this feature asserts:** there is never a screen that tells the owner
 nothing. Every state — starting, connecting, holding, scanning, empty, failed,
-no gateway, gateway missing, node not ready — says **what is happening, how
-long it has been happening, and what to do next.**
+gateway answered but not with a page, no gateway, gateway missing, node not
+ready — says **what is happening, how long it has been happening, and what to
+do next.**
 
 ## 1. Why: the device pain, and what actually produced it
 
@@ -86,14 +87,78 @@ run on the device: it is armed for 20 s and the first failure came at 30 s.
 It is a real second hole, on a transport that fails *fast* — the L1
 blackhole test shows it, which is why `assertErrorPage` waits 40 s for a
 failure the stub refuses in milliseconds (`UITests/OfflineHarnessTests.swift:327`;
-20 s of 1-s retries, then the error page). Both holes are closed here; the
-spec no longer guesses which one a given screen came from because every
-state now logs its name and its elapsed time.
+20 s of 1-s retries, then the error page). Both holes — and the third, in
+§1.2 — are closed here; the spec no longer guesses which one a given screen
+came from because every state now logs its name and its elapsed time.
 
 Two things only Olof can confirm are in §8: which field he typed into, and
 whether he waited for the error page.
 
-### 1.2 The scan he could not read
+### 1.2 The same blank screen, the fast way: a live port that answers 502
+
+The design pass traced one path to the blank screen and stopped. There is a
+second, and it is faster. None of the 24 rows of §2 covered it, and the
+tests as first written would have passed against it.
+
+1. **The response delegate never looks at the status.** `decidePolicyFor
+   navigationResponse` (`BrowserViewModel.swift:744-754`) logs the response
+   under the `-UITestLogResponses` hook and then calls
+   `decisionHandler(.allow)` unconditionally (`:753`). Whatever the gateway
+   answers — 200, 403, 502 — commits as the document.
+2. **The gateway's front door answers 502 when Kiro Crew is not there.** The
+   gateway is published with `tailscale serve --bg --https=443
+   http://127.0.0.1:<port>` (kirocrew 0.6.0, `dashboard/tailnet_serve.py:526`).
+   serve's reverse proxy is a bare `httputil.ReverseProxy` with a `Rewrite`
+   and a `Transport` and **no `ErrorHandler`**
+   (`ThirdParty/libtailscale/tailscale-patched/ipn/ipnlocal/serve.go:959-994`),
+   so when its dial to the loopback port fails — Kiro Crew restarting,
+   stopped, or crashed — Go's default handler writes `502 Bad Gateway`
+   **with no body**. While serve itself is being reconfigured the same
+   handler answers `503 proxy is closed` (`:955-957`). Port 443 is live
+   throughout: it is tailscaled's, not Kiro Crew's.
+3. **So nothing fails.** The SOCKS CONNECT succeeds and the relay logs it as
+   such, TLS completes against serve's certificate, the GET is answered.
+   **No `NSURLError` is produced.** `SocksRelayRecovery`'s transport codes —
+   -1000, -1004, -1005 (`App/Network/SocksRelayPolicy.swift:95-102`) — never
+   fire, so the relay renders no verdict (`:180-193` is never asked).
+   `didCommit` runs (`:707-718`), then `didFinish` (`:756-760`) →
+   `session.navigationFinished()` → `verify` → a page-world fetch of
+   `/api/auth/me`, which meets the same 502 and answers nil twice →
+   `onUnansweredCheck` (`SessionManager.swift:176-184, 277-288`) → a relay
+   self-probe that finds the listener answering and leaves it. Every
+   instrument reports health.
+4. **What is on screen.** An empty document from the right origin: white in
+   light mode, black in dark, the gear at 0.45 opacity. `isLoading` is
+   false, so even this feature's connecting block as first designed goes
+   away at `didCommit` and shows exactly this. No error overlay, no button,
+   no text, no timer — and **unbounded**: nothing polls the main frame, so
+   the screen stays until the owner finds ⌘R or Settings. It takes about a
+   second to reach (TCP, TLS, one GET on a relayed path), not 30.
+
+**Why no suite ever saw it.** Every "gateway down" the harnesses can produce
+is a *transport* failure:
+
+- `fake_gateway.py`'s `__restart?down=S` (`:393-410`) accepts, completes the
+  TLS handshake (`HandshakeInThread.setup`, `tls_accept.py:29-36`) and then
+  `Page.handle` closes the connection without a byte (`:456-460`). CFNetwork
+  reports that as an `NSURLError` (a lost connection), which *is* in
+  `transportFailureCodes` and *does* reach `didFailProvisionalNavigation`.
+  The session suite's restart tests (`SessionTests.swift:245, 448`) exercise
+  exactly this shape.
+- The L1 `down` peer is a closed port (`testing/harness/Makefile:91`,
+  `127.0.0.1:9`): the stub's `create_connection` fails and it replies SOCKS
+  0x05, which is -1000. `dashboard.py` has no down mode at all
+  (`dashboard.py:18-29`).
+
+Measured both ways on 2026-09-23: the fake closes the connection;
+`tailscale serve` answers `502 Bad Gateway`. A build that commits every 5xx
+passes every existing test and every test in the first draft of §6, because
+none of them can make a gateway answer 502 on a live connection. §6 rule 6
+(`assertSomethingIsSaid`) would have failed the moment a test looked at this
+state — `connected-browser` counts only with the fake dashboard's report, and
+a 502 page reports nothing — but no test could produce the state to look at.
+
+### 1.3 The scan he could not read
 
 At the time of the device run a probe had 1.5 s and a sweep 5 s. Under the
 missing grant every probe hit its timeout, so a sweep ended after ~1.5 s
@@ -118,7 +183,7 @@ What R39 did not fix, and this does:
   Search agains changes that" (DECISIONS, "O4 answered"). The text did not
   say so, so he searched again, twice.
 
-### 1.3 Also found while enumerating
+### 1.4 Also found while enumerating
 
 - The unreachable-gateway fallback (`about:blank` + banner) leaves 95 % of
   the screen blank under a one-line banner (D3).
@@ -154,10 +219,12 @@ picker until a gateway is chosen (`:190-203`), else the page. Verdict:
 | D3 | Gateway **not in the tailnet**: `about:blank` fallback + banner | `HomePageAvailability.swift:34, 95`; `DashboardRootView.swift:348-351, 449-480` | banner over a blank body | "No KiroCrew gateway with this name is in your tailnet." | Find, Change | the peer appears (`:395-402`) or another gateway is chosen | thin — one line over a blank page |
 | D4 | **Connecting**: main-frame load in flight, nothing committed | `BrowserViewModel.swift:361-373` → `didCommit :707` | blank `WKWebView` + gear | none | gear | `didCommit`, or a failure: 30 s (dropped SYNs, `socks5.go:99`), 120 s (accepted, never answers, `:372`), or WebKit's own TLS timeout | **bare — Olof's screen** |
 | D5 | Connecting through **silent startup retries** | `BrowserViewModel.swift:378-400` | as D4 | none (a log line per retry, `:393`) | gear | commit, or the 20 s deadline (`:349`) → D6 | **bare** |
-| D6 | **Failed**: `NavErrorPage` | `BrowserView.swift:55-111`; `BrowserViewModel.swift:516-535` | icon, title, category, escaped URL, message | "Unable to Load Page" / "URL format error" (for **every** SOCKS failure, `:553-558`) / "bad URL [NSURLErrorDomain -1000]" | **none** (⌘R only, `DashboardRootView.swift:291`) | ⌘R, a gateway switch, a relay restart (`:262-266`), R7 | **misleading, and a dead end on a phone** |
+| D6 | **Failed**: `NavErrorPage` | `BrowserView.swift:55-111`; `BrowserViewModel.swift:516-535` | icon, title, category, escaped URL, message | "Unable to Load Page" / "URL format error" (for **every** SOCKS failure, `:553-558` — becoming "Connection error" in the label fix that lands ahead of this feature, §4.3) / "bad URL [NSURLErrorDomain -1000]" | **none** (⌘R only, `DashboardRootView.swift:291`) | ⌘R, a gateway switch, a relay restart (`:262-266`), R7 | **misleading, and a dead end on a phone** |
 | D7 | Failed: unknown / ambiguous short name | `BrowserViewModel.swift:494-514` | as D6 | "No device named “x” exists in this tailnet…" / "More than one…" | none | as D6 | thin — good text, no button |
 | D8 | **Painted** page; the page's own states, the token sheet, node banners, expiry warnings, return-to-dashboard | `DashboardRootView.swift:225-239, 338-367, 423-443`; `TokenEntrySheet` | web content | the page's | the page's | — | fine; **must never be covered by D4** |
 | D9 | Content process died | `BrowserViewModel.swift:883-905` | reload in place; after the budget, D6 with its own message (`:888`) | "The dashboard page stopped repeatedly…" | none | reload / ⌘R | fine text, needs D6's buttons |
+| D10 | **Gateway answered 5xx**: the main-frame response is a 5xx and its body commits as the document | `BrowserViewModel.swift:744-754` (`.allow` for every status, `:753`); produced by `tailscale serve` with Kiro Crew down (`serve.go:959-994`, no `ErrorHandler`) | the 5xx body — for serve's 502, **nothing** (Go writes the status and no body); for its 503, one line of plain text | none | none (⌘R only) | a reload or a gateway switch; nothing polls the main frame — **unbounded** | **bare — the second path to Olof's screen, reached in ~1 s rather than 30 (§1.2)** |
+| D11 | **KiroCrew's own 403 page** committed: `403` + `X-Auth-Required: true`, the "Sign in required — <reason>" document | `BrowserViewModel.swift:753`; served by `_deny` (kirocrew 0.6.0 `dashboard/token_auth.py:3097-3115`, body `:695-742`) when the peer's login is outside the gateway's allow-list (`:2169, :2203`), a sign-in link is bound to another device (`:2688-2690`), or a data path (`:599-610`) is opened as a document (`:2621, :2681`) | the gateway's page: a heading naming the reason, a paste field, Connect | the gateway's own | the page's field (navigates to `/?token=`, `:733-737`); no native sheet — the page fires no `mc-auth-required`, and `verify` does nothing with a 403 unless a sign-in is in flight (`SessionManager.swift:176-184, 289-306`) | a link pasted there; during a redemption, `failRedemption` → the sheet says the link didn't work (`:304-306, 324`) | fine — readable, the right words, the right origin; **must stay committed** (§4.13), and gets a log line |
 | P1 | Picker, node **not ready** (`localStatus` or `proxyConfiguration` nil), phase `.idle` | `GatewayPickerView.swift:42, 84, 134-138` | "Gateways" header, a **disabled** Search again, the manual section | none about the wait | manual entry | `ready` flips (first status poll); **unbounded** | **bare** about what it waits for |
 | P2 | Probing, no rows yet | `GatewayPickerView.swift:48-55` | spinner + one line | "Looking for Kiro Crew gateways on your tailnet…" | manual entry | `.finished` / `.proxyUnhealthy`, ≤ 12 s | thin — nothing moves for 12 s |
 | P3 | Probing, rows already listed (a re-scan) | `GatewayPickerView.swift:48` (`gateways.isEmpty`) | rows; Search again greyed | none about the scan | rows, manual entry | `.finished` | **bare** about the scan |
@@ -202,14 +269,15 @@ Elapsed times are whole seconds and tick once a second.
   committed page: a same-document navigation, a subresource, the page's own
   WebSocket reconnect, the session layer's fetches — none of them touch it.
 
-### 3.2 Failed (D6, D7, D9)
+### 3.2 Failed (D6, D7, D9, D10)
 
 The error page is rebuilt. Same identifier `nav-error-overlay`, new body:
 
 - title (`nav-error-title`): **"Couldn't reach byskebox"** for a retrieval
-  failure; **"Latchkey can't open this address"** for a URL format error;
-  **"The page stopped"** for a content-process failure; **"Stopped"** when
-  the owner stopped it.
+  failure; **"Couldn't reach Kiro Crew on byskebox"** when byskebox answered
+  but with a 5xx (D10); **"Latchkey can't open this address"** for a URL
+  format error; **"The page stopped"** for a content-process failure;
+  **"Stopped"** when the owner stopped it.
 - cause (`nav-error-cause`): one sentence from the table in §4.4, naming
   the host, the port, the elapsed time and the most likely reason.
 - what to do (`nav-error-next`): one sentence from the same table.
@@ -218,9 +286,10 @@ The error page is rebuilt. Same identifier `nav-error-overlay`, new body:
 - a **Details** disclosure (`nav-error-details`, collapsed): the escaped URL
   exactly as today (`debugEscaped`, it has caught invisible characters
   before), the error domain and code, the relay's reply name and its
-  timing when there is one, and "Settings → Status → Page keeps this; Logs
-  has the full record." D1 holds: nothing leaves the device; this is where
-  the diagnosis is *read*.
+  timing when there is one — or, for D10, the HTTP status, the response's
+  `Content-Type` and its body length (0 for serve's 502) — and "Settings →
+  Status → Page keeps this; Logs has the full record." D1 holds: nothing
+  leaves the device; this is where the diagnosis is *read*.
 
 ### 3.3 Holding (D2)
 
@@ -324,7 +393,8 @@ struct PageFailure: Equatable {
         case certificate         // -1200…-1206
         case unknownHost(String)  // D7
         case ambiguousHost(String, [String])
-        case redirectedAway(String)  // WebKitErrorDomain 102, nothing committed
+        case redirectedAway(String)  // WebKitErrorDomain 102, nothing committed, no refused-response record
+        case gatewayError(status: Int)  // D10: a main-frame 5xx, refused in decidePolicyFor navigationResponse (§4.13)
         case pageCrashed(times: Int, window: Int)  // D9 after the budget
         case stopped             // the owner chose another gateway mid-load
         case badAddress          // URL(string:) failed (reportURLParseFailure)
@@ -368,7 +438,39 @@ through a new `app/scripts/test-page-failure-text.sh` on the pattern of
   `proxyReply` looked up as in §4.5.
 - `categorize` (`:553-558`): `-1000` is `.retrieval` unless it came from
   `reportURLParseFailure`, which sets `.urlFormat` itself. The comment at
-  `:405-406` already states why.
+  `:405-406` already states why. This one line lands as its own fix ahead of
+  the rest of F4; until the page is rebuilt (§3.2) the `.retrieval` label is
+  today's **"Connection error"** (`BrowserView.swift:115-124`), so from that
+  commit on a SOCKS failure reads "Connection error" and never "URL format
+  error". Test 5 pins the function either way.
+- `decidePolicyFor navigationResponse` (`:744-754`): the `RESP-LOG` hook
+  stays; then
+  `ResponsePolicy.decide(isMainFrame: navigationResponse.isForMainFrame, statusCode: (response as? HTTPURLResponse)?.statusCode, authRequired: http?.value(forHTTPHeaderField: "X-Auth-Required")?.lowercased() == "true")`
+  (§4.13). `.commit` → `decisionHandler(.allow)` as today, plus the status
+  in the `committed` log line (§4.9). `.refuse` → record
+  `refusedResponse = (url: Self.withoutSignInToken(url), status: status)`,
+  log `page-state: refused status=<n> after <t> ms`, then
+  `decisionHandler(.cancel)`. WebKit reports the cancel to
+  `didFailProvisionalNavigation` as `WebKitErrorDomain` 102 — the same code
+  as a cancelled *action* — which is why the record exists.
+- `handlePolicyInterruption` (`:849-865`) **checks `refusedResponse`
+  first.** Without that, a 502 would be labelled "redirected to …" when
+  nothing has committed (`:861-863`) or swallowed with "keeping the current
+  page" over a committed one (`:852-856`) — the stale page staying up with
+  no word while the owner's reload was refused. With a record:
+  `startupLoad = nil`, cancel `startupRetryTask`,
+  `.failed(cause: .gatewayError(status: n))` with the usual `elapsed`,
+  `session?.signInLoadFailed()` when the original URL carried a token
+  (today `:781` runs *after* the interruption check, so a refused sign-in
+  load would otherwise wait out the 30 s redemption timer), clear the
+  record, return true. A new `didStartProvisionalNavigation` clears a stale
+  record.
+- **No silent startup retry for a refused response.** `isTransientStartupError`
+  (`:402-414`) exists because the node can publish `Running` a moment before
+  its first dial works; a 5xx is the gateway's answer over a working
+  transport, not the transport settling, and 20 s of silent retries against
+  it would be a fresh bare screen. The failed state's *Try again* is the
+  retry, and its cause line says a restart is normally over in seconds.
 - `stopForGatewayChange()`: `stopLoading()`, cancel `startupRetryTask`, clear
   `startupLoad`, `.failed(cause: .stopped)`.
 - Constants with their reasoning in a comment: `connectingHintDelay =
@@ -391,7 +493,9 @@ through a new `app/scripts/test-page-failure-text.sh` on the pattern of
 | `.certificate` | -1200…-1206 | Couldn't reach `<h>` | `<h>` answered on port `<p>`, but its certificate isn't valid for `<f>`. | Latchkey only opens a gateway with a valid certificate (R28). Check the gateway's `tailscale serve` certificate. |
 | `.unknownHost(x)` | today's text | Couldn't reach `<h>` | No device named “x” exists in this tailnet. | Check the name, or choose another gateway. |
 | `.ambiguousHost` | today's text | Couldn't reach `<h>` | More than one tailnet device matches “x”: a, b. | Enter the full name. |
-| `.redirectedAway(u)` | WebKitErrorDomain 102 | Couldn't open `<h>` here | `<h>` redirected to `u`, which isn't the gateway this app is set to, so it wasn't opened here. | Check the gateway address in Settings. |
+| `.redirectedAway(u)` | WebKitErrorDomain 102 with no refused-response record (§4.3) | Couldn't open `<h>` here | `<h>` redirected to `u`, which isn't the gateway this app is set to, so it wasn't opened here. | Check the gateway address in Settings. |
+| `.gatewayError(502/503/504)` | a main-frame 5xx refused in `decidePolicyFor navigationResponse` (§4.13), one of the reverse-proxy statuses | Couldn't reach Kiro Crew on `<h>` | `<h>` answered on port `<p>`, but Kiro Crew behind it didn't: `tailscale serve` returned `<status>` after `<t>` s, which is what it says when nothing is listening behind it. Kiro Crew is probably restarting or stopped on `<h>`. | Try again in a few seconds — a restart is normally over by then. If it keeps happening, Kiro Crew isn't running on `<h>`: start it there, or choose another gateway. |
+| `.gatewayError(other 5xx)` | any other main-frame 5xx | Kiro Crew on `<h>` hit an error | `<h>` answered `<status>` for the dashboard page after `<t>` s: Kiro Crew is running but couldn't serve it. | Try again. If it persists, Kiro Crew's own log on `<h>` says why. |
 | `.pageCrashed(n, w)` | R7 budget spent | The page stopped | The dashboard page stopped `n` times in `w` s, so automatic reloading has paused. This is the page itself, not the tailnet. | Try again. |
 | `.stopped` | owner action | Stopped | You stopped the connection to `<h>` after `<t>` s. | Try again, or choose another gateway. |
 | `.badAddress` | `URL(string:)` nil | Latchkey can't open this address | The address has a character it can't use; the details show it escaped. | Correct the gateway in Settings. |
@@ -492,7 +596,10 @@ page-state: holding host=<r>
 page-state: connecting host=<r> port=443 attempt=1
 page-state: connecting host=<r> port=443 attempt=7        (each retry)
 page-state: hint after 8004 ms
-page-state: committed after 812 ms
+page-state: committed status=200 after 812 ms
+page-state: committed status=403 auth-required after 640 ms      (D11)
+page-state: refused status=502 after 910 ms                      (D10)
+page-state: failed cause=gatewayError status=502 after 912 ms
 page-state: failed cause=noAnswer code=-1000 after 30012 ms reply="general failure"
 page-state: stopped after 9200 ms
 picker-state: waiting-node
@@ -550,6 +657,43 @@ Read-only, on device, nothing leaves (D1).
 - the node's own banners (login, approval, expiry) keep priority: they are in
   the layout above `BrowserView` and are unaffected by the page block.
 
+### 4.13 Which main-frame responses commit (`ResponsePolicy`, in `App/Browser/NavigationPolicy.swift`)
+
+`NavigationPolicy` decides *requests*; this decides *responses*, by status
+alone, in the main frame alone, and it lives in the same pure-Foundation
+file so `scripts/test-navigation-policy.sh` compiles and tests it on the host
+(test 18).
+
+```swift
+enum ResponseDecision: Equatable, Sendable { case commit, refuse }
+
+enum ResponsePolicy {
+    /// - statusCode: nil for anything that is not an HTTP response.
+    /// - authRequired: `X-Auth-Required: true` — KiroCrew's own signature.
+    nonisolated static func decide(isMainFrame: Bool, statusCode: Int?,
+                                   authRequired: Bool) -> ResponseDecision
+}
+```
+
+| Response | Decision | Why |
+|---|---|---|
+| Not the main frame | commit | Frames are the page's own (`/sandbox-doc/`); `NavigationPolicy` leaves them alone for the same reason (`NavigationPolicy.swift:17-18`). A widget's 502 is the widget's business. |
+| Not HTTP (`about:blank`, a `WKURLSchemeHandler` scheme, a blob) | commit | Nothing to inspect. |
+| 1xx, 2xx | commit | The document. |
+| 3xx | commit | WebKit follows redirects before the response reaches this delegate — each hop is a fresh `decidePolicyFor navigationAction`, where `NavigationPolicy` already sends an off-origin hop to the system and the app shows `.redirectedAway` (`:849-865`). A 3xx that *does* arrive here is one WebKit could not follow and is the gateway's own document. KiroCrew's one document redirect is its canonical-host 302 (`dashboard/server.py:2697-2709`, `urls.py:325`), which is exactly the `.redirectedAway` case. |
+| **304** | commit | **Never a failure**: it is the document the web view already has. CFNetwork normally answers a revalidation with the cached 200, so this delegate rarely sees a 304 at all; the rule is written so that if it does, nothing is refused. |
+| **`401`/`403` with `X-Auth-Required: true`** | **commit** | KiroCrew speaking — the very signature discovery uses to recognise a gateway (`GatewayCandidates.swift:106-108`, `GatewayDiscovery.swift:14-17`). Its body is KiroCrew's own sign-in page (D11). What follows is today's behaviour, unchanged: `didFinish` → `navigationFinished` → `verify` → `/api/auth/me` (`SessionManager.swift:176-184, 277-307`). **Refusing it would break sign-in.** A redemption load (`loadSessionURL`, `BrowserViewModel.swift:915-922`) that the gateway refuses — a link bound to another device (`token_auth.py:2688-2690`), a login outside the allow-list (`:2169`) — is answered with this 403, and `verify(afterRedemption: true)` is what turns it into "That sign-in link didn't work. Links last 5 minutes and work only on the gateway that made them" (`SessionManager.swift:304-306, 324`). Cancelled, `didFinish` never runs, `signInLoadFailed` says "Couldn't reach the gateway to sign in" (`:190`), and the owner is told the tailnet is broken when the gateway said no. Test 16 pins this. |
+| Any other 4xx | commit | The gateway answered about the request with a body of its own, same-origin: a 404 for a path the dashboard linked to is the dashboard's page, and this feature never covers a page the gateway meant to show. For `/` KiroCrew never answers 4xx without the header — the shell is served to any unauthenticated document GET (`token_auth.py:661-690, 2617, 2669`) — so a bare 4xx in the main frame is a link inside the dashboard, not the startup load. |
+| **5xx** | **refuse** → `.failed(.gatewayError(status:))` | None is a page the owner can use, and 502's body is nothing at all. 502/503/504 are `tailscale serve` speaking for a Kiro Crew that is not there (`serve.go:959-994` with Go's default error handler: 502, no body; `:955-957`: 503 while serve reconfigures); 500 is Kiro Crew itself failing on the document. The wording in §4.4 tells the two apart. |
+| 5xx **with** `X-Auth-Required: true` | commit | Does not occur (`_deny` is always 403), but the rule is "KiroCrew's own voice is always shown", stated once. |
+| `canShowMIMEType == false` | unchanged (allow, as today) | Not this feature's. |
+
+What the rule never does: read the body, read any header but
+`X-Auth-Required`, refuse anything under 500, or touch a sub-frame. Refusal
+is by status alone, so a gateway that is up and answering — however
+unhappily — always gets to show its page; only a gateway that is *not there*
+is replaced by ours.
+
 ## 5. State and migration
 
 Nothing is persisted. `pageState`, the discovery counters and
@@ -571,6 +715,34 @@ then **hold the socket silent for N seconds and reply 0x01 general failure**
 duration the test chooses. `stall=0` clears it. The stub's `--map` and the
 relay in front stay as they are, so `lastProxyFailure` is populated in L1
 exactly as on the device.
+
+**Harness change (session and L1): a 502 on a live connection.** Today no
+fake can produce what `tailscale serve` produces with Kiro Crew down (§1.2):
+`fake_gateway.py`'s `__restart?down=S` closes after the TLS handshake
+(`:456-460`), which is an `NSURLError`; `dashboard.py` has no down mode; the
+L1 `down` peer is a closed port (`testing/harness/Makefile:91`). So:
+
+- `fake_gateway.py` gains `POST /__mode?front=502[&for=S]`: after the
+  handshake (`HandshakeInThread.setup` must still run — TLS completing is
+  the point), every request is answered as Go's `httputil.ReverseProxy`
+  default error handler answers when its dial fails: `HTTP/1.1 502 Bad
+  Gateway`, `Content-Length: 0`, no `Content-Type`, no body, the connection
+  kept as HTTP/1.1 keeps it. Counted in `/__state` as `front_502`. `front=0`
+  (or `for=S` elapsing) restores the gateway with its boot id, chains and
+  sessions untouched — serve outlives a Kiro Crew restart and a CLI session
+  is boot-unbound, so the page comes straight back on *Try again*. `down=S`
+  stays: a host going away is also real, and the restart tests keep it.
+- `fake_gateway.py` gains `POST /__mode?document=403[&reason=…]`: every
+  document GET (a path `_is_spa_shell_request` would give the shell) is
+  answered as `_deny` answers — `403`, `X-Auth-Required: true`,
+  `text/html`, the "Sign in required — <reason>" page with its paste field
+  (`token_auth.py:695-742`). API paths answer as before. Counted as
+  `document_403`.
+- `dashboard.py` (L1) gains `POST /__mode?status=502`: the same 502 shape
+  for every request until `status=0`; counted per host in `/__state`.
+- Each fake's self-test (`--check-bundle`, `ws_drop_probe`) gains one check:
+  with the mode on, a TLS client receives exactly `502` with an empty body
+  on a connection that completed the handshake.
 
 **Why a test that waits for a spinner to appear is racy, and what these do
 instead.** `waitForExistence` polls the accessibility tree; a state present
@@ -615,6 +787,10 @@ wait on a transient passes even when the state is stuck. So:
 | 12 | `testAPaintedDashboardNeverShowsTheConnectingState` | session | With the real bundle live: read `page-connecting-shown-count` after the first paint (c₀ ≤ 1); through the page's own WebSocket reconnect (`/__drop_ws`), its refetches and a sign-in navigation, the count stays c₀ and `page-connecting` is absent. | Driving `pageState` from `isLoading` KVO or from `didStartProvisionalNavigation`. |
 | 13 | `testASlowGatewayShowsConnectingUntilItsTimeout` | discovery | Manual entry of `slow` (accepts on 443, never answers): `page-connecting` at 1 s, 10 s, 20 s with elapsed monotonic; the test terminates the app at 25 s (WebKit's own timeout for this shape is not yet measured; §8). | Against today's build: blank. |
 | 14 | Lifecycle | lifecycle | No new test; the suite must stay green. A frozen process resumes with a larger elapsed number, and the R30 relay restart's reload (`applyProxy` → `reload`) moves `.failed` → `.connecting` again, incrementing the counter legitimately. | — |
+| 15 | `testAGatewayAnswering502ShowsTheFailureNotABlankPage` | session (`front=502`) | Sign in with a CLI link (boot-unbound, as `testACLISessionSurvivesAGatewayRestart`). `POST /__mode?front=502`. Relaunch — the app's own startup load, as a phone returning to a restarting gateway. At **3 s**: `nav-error-overlay` exists; `nav-error-title` is "Couldn't reach Kiro Crew on gw"; `nav-error-cause` contains "502"; `nav-error-retry` exists; `page-connecting-shown-count` ≤ 1. `/__state` `front_502` ≥ 1. Log: `page-state: refused status=502 after N ms` with N < 3000, `RESP-LOG response: 502` (`-UITestLogResponses`), and **no** `Navigation interrupted by policy` line; the page contains no "redirected". Hold to **13 s**: the overlay is still up and `front_502` has **not grown** — no silent retry. `POST /__mode?front=0`, tap `nav-error-retry` → within 15 s `nav-error-overlay` is gone and `auth_me_ok` has grown (the session survived; server-side proof). | Against today's build: nothing at 3 s or 13 s — the 502 committed and the screen is blank (`assertSomethingIsSaid` fails). Then: drop the `refusedResponse` check in `handlePolicyInterruption` (the title reads "Couldn't open gw here" and the cause "redirected", `:863`); make `ResponsePolicy` commit 5xx (blank again); route a refusal through `retryStartupLoadIfAppropriate` (`front_502` grows by ≥ 5 in 10 s). |
+| 16 | `testAGatewayThatSays403CommitsAndSignInSaysWhy` | session (`document=403`) | Launch; `token-sheet` is up (the shell's own `mc-auth-required`, as today). `POST /__mode?document=403&reason=link+bound+to+another+device`. Paste a CLI link: the redemption navigates to `/?token=…` and the fake answers `403` + `X-Auth-Required` with its sign-in page. Within **5 s**: `token-sheet-message` reads "That sign-in link didn't work…" (`SessionManager.swift:324`) — **not** "Couldn't reach the gateway to sign in" (`:190`); `nav-error-overlay` never appears; `app.webViews.staticTexts` contains "Sign in required"; log `page-state: committed status=403 auth-required` and `RESP-LOG response: 403`; `/__state` `document_403` ≥ 1. `POST /__mode?document=0`, paste a fresh link → the dashboard paints (`auth_me_ok` grows). | Make `ResponsePolicy` refuse 403 (or every 4xx): the message becomes "Couldn't reach the gateway to sign in" and `nav-error-overlay` appears. Today's build commits everything, so this test passes on it: it is the guard that keeps the new rule from widening, shown able to fail by the rule's inversion. |
+| 17 | `testA502InL1IsRefusedAndTryAgainRecovers` | L1 (`status=502`) | `POST <dashboard control>/__mode?status=502`; launch against `dash`. By **3 s** `nav-error-overlay`, `nav-error-cause` containing "502" and an elapsed time under 3 s, `nav-error-retry`. The stub journal has a CONNECT for `dash…:443` and **no** `upstream_fail`; the dashboard's `requests[dash]` ≥ 1 — the request *reached* the gateway, which is what separates this from every existing "down" test (`assertZeroRequests` is deliberately not asserted). `POST …?status=0`, tap `nav-error-retry` → `waitForReport` shows "FAKE DASHBOARD" (server-side proof), `nav-error-overlay` gone. | Against today's build: `assertErrorPage`'s 40 s wait (`OfflineHarnessTests.swift:324-328`) expires with a blank screen. Then: commit 5xx (same). |
+| 18 | `testResponsePolicyDecidesByStatusAloneInTheMainFrame` | host (`test-navigation-policy.sh`) | Table-driven over §4.13: sub-frame 502 → commit; nil status → commit; 200, 204, 301, 302, 304, 401, 403 (header either way), 404 → commit; 500, 502, 503, 504 → refuse; 502 with `X-Auth-Required: true` → commit. | Change any row; in particular refusing 304 or 403 fails at once. |
 
 Gate states G2/G6 have no harness that can hold the node in `Starting` or
 `Stopped` today; the `StalledHint` threshold logic is pure and covered by a
@@ -656,6 +832,14 @@ Each with its instrument.
    discovery script's timing rules unchanged and passing.
 10. **D1:** `scripts/check-no-log-upload.sh` unchanged and green; nothing new
     writes off-device.
+11. **A main-frame 5xx never commits as the document**; within 3 s the
+    failure names the host, the status and the elapsed time and offers Try
+    again — tests 15, 17, 18; `page-state: refused status=<n>`; the fakes'
+    `front_502` counters — *accessibility tree + app log + `/__state`*.
+12. **A main-frame `403` + `X-Auth-Required` always commits, and a refused
+    sign-in says the link was refused, not that the gateway was
+    unreachable** — tests 16, 18; `page-state: committed status=403
+    auth-required`.
 
 ## 8. Open questions and owner actions
 
@@ -678,6 +862,12 @@ Only Olof can answer these; nothing in §4 waits on them.
    for "nothing answers at all" to happen; the P4 hint would then name it.
    Not in this feature unless you say so.
 6. **Device confirmation** of G2/G6 wording, which no harness can drive.
+7. **Was the blank ever quick?** The device log pins the 30 s path for the
+   run you reported (the dial deadline). D10 produces the same blank in
+   about a second — a Kiro Crew restart on byskebox at the moment of a load.
+   If you have seen the blank appear *fast*, that was D10. Once this lands
+   the tell in Settings → Logs is `page-state: refused status=502`; today the
+   tell is that the log shows a successful connect and then nothing at all.
 
 ## 9. Log
 
@@ -694,3 +884,20 @@ Only Olof can answer these; nothing in §4 waits on them.
   nothing else before the node's status; a re-scan shows nothing. Timing
   thresholds fixed (§4.1), failure wording fixed (§4.4), tests rewritten
   around checkpoints and counters rather than waits for transients (§6).
+- 2026-09-23, amendment (same day): **a second path to the same blank
+  screen**, missed by the design pass. `decidePolicyFor navigationResponse`
+  (`BrowserViewModel.swift:744-754`) commits every status, and `tailscale
+  serve`'s reverse proxy has no error handler (`serve.go:959-994`), so a
+  Kiro Crew restart answers 502 on a live port 443: TCP and TLS succeed, no
+  `NSURLError`, the relay renders no verdict, an empty body commits. Reached
+  in about a second, not 30, and unbounded. No suite could see it: the
+  fakes' "down" closes the connection after TLS (`fake_gateway.py:456-460`),
+  which *is* an `NSURLError`, and L1's `down` peer is a closed port —
+  measured both ways today. Added: D10 and D11 (§2), the response rule
+  (§4.13, `ResponsePolicy` in `NavigationPolicy.swift`), `.gatewayError` and
+  its wording (§4.2, §4.4), the `handlePolicyInterruption` ordering and the
+  no-silent-retry rule (§4.3), tests 15–18 and the harness change (§6),
+  criteria 11–12 (§7), question 7 (§8). The `categorize` label fix (-1000 is
+  `.retrieval` unless from the parse path) is landing as its own commit
+  ahead of this feature; §4.3 states the same rule, and the interim label
+  is "Connection error" (`BrowserView.swift:115-124`).
