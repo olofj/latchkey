@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **diagnosis reopened** — §1's mechanism was measured and is false. Do not build §4. See §9 |
+| **Status** | **fault located: the KiroCrew frontend's CSS, not Latchkey.** §1's mechanism is false and §4 must not be built. The page is told the correct 62pt inset and its own rule discards it outside an installed PWA. See §9, 2026-09-24 "the page is told 62 and throws it away" |
 | **Requested** | 2026-09-24, by Olof, from the first TestFlight install on his iPhone 14: "the page doesn't render well on my iPhone 14, it bleeds too high into the island" (screenshot attached to the request) |
 | **Revision** | none — this restores documented behaviour rather than changing it |
 | **Touches** | `app/App/Browser/BrowserView.swift`, `app/App/Browser/RawWebView.swift`, `testing/harness/dashboard.py`, `scripts/test-offline.sh` |
@@ -238,3 +238,51 @@ inset plumbing: it is above them, in the real page's CSS or in
 `interactive-widget=resizes-content`, which the cover probe does not declare.
 The bottom inset of 0 on the cover page is §9's separate finding again (the web
 view stops 34pt short of the home indicator), seen now from the page's side.
+
+### 2026-09-24 — the page is told 62 and throws it away
+
+**`interactive-widget` is innocent.** A third probe, `/__inset-product`, carries
+the product's complete viewport tag verbatim (`width=device-width,
+initial-scale=1, maximum-scale=1, user-scalable=no,
+interactive-widget=resizes-content, viewport-fit=cover`). L1,
+`app/build/offline-logs/20260924-153956/suite.log`:
+
+| probe | top | right | bottom | left | innerHeight | `kcTop` | display-mode |
+|---|---|---|---|---|---|---|---|
+| cover | 62px | 0px | 0px | 0px | 840 | **0px** | browser |
+| plain | 0px | 0px | 0px | 0px | 778 | 0px | browser |
+| product | **62px** | 0px | 0px | 0px | 840 | **0px** | browser |
+
+**The cause is in the frontend's CSS.** The installed frontend is KiroCrew
+**0.7.0**, not 0.6.0. It never feeds `env(safe-area-inset-top)` to its top edge
+directly. Every top-inset utility (`top-safe`, `top-safe-offset-*`, `p-safe`)
+reads `var(--safe-area-top, env(safe-area-inset-top))`, and
+`assets/src-BB9Pem3r.css` defines the variable, so the `env()` fallback is dead:
+
+```css
+:root{--safe-area-top:0px; …}
+@media (display-mode:standalone),(display-mode:fullscreen){:root{--safe-area-top:env(safe-area-inset-top,0px)}}
+```
+
+The top inset is honoured only when the page is an installed PWA. In a
+`WKWebView`, `display-mode` is `browser`. The probes measured that, and it is
+what Safari reports for an ordinary tab, where the browser's own chrome sits
+above the page. So the frontend treats the top inset as zero, and its header
+sits at y=0 under the Dynamic Island. `kcTop` is that exact rule, copied
+verbatim into the probes and measured in the app's own web view: it resolves
+to **0px** while `env()` gives **62px** on the same page.
+
+**Latchkey is not at fault. The bug belongs to the KiroCrew frontend's CSS.**
+Latchkey hands the page the correct inset, and the page's own rule discards it.
+The frontend assumes that "not standalone" means "a browser's chrome is above
+me". An edge-to-edge app host breaks that assumption, and so would Safari with
+its toolbar collapsed in landscape.
+
+**What was not measured.** The session suite (`scripts/test-session.sh`) serves
+the real bundle, but it is pinned to 0.6.0 and refuses 0.7.0: `fake_gateway.py
+--check-bundle` fails on the version, on `index.html` and on every pinned auth
+file. So the real page's header was **not** measured in a suite: which element
+it is, and its `getBoundingClientRect().top`. Re-pinning means re-reading 0.7.0's
+auth code (the pin's own instructions), and that is its own piece of work.
+0.6.0's CSS is no longer installed, so whether 0.6.0 had the same rule is
+unknown. The version the owner's gateway runs is unknown too.

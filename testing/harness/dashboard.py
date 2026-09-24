@@ -18,18 +18,18 @@ Page routes (HTTPS):
   POST /__report    the page's self-report; stored per Host, stamped with the
                     time it was received (M6: "after the resume" needs a clock
                     the frozen app cannot have run)
-  GET  /__inset-cover, /__inset-plain
+  GET  /__inset-cover, /__inset-plain, /__inset-product
                     F9 §6's probes: report their computed env(safe-area-inset-*)
                     and viewport size to POST /__inset-report, with and without
-                    viewport-fit=cover
+                    viewport-fit=cover, and with the product's full viewport tag
 
 Control routes (plain HTTP, 127.0.0.1:<control-port>):
   GET  /__state     {"reports": {host: latest report}, "requests": {host: n},
                      "paths": [recent "HOST METHOD PATH | USER-AGENT" lines],
                      "ws_open": n, "insets": {probe: latest inset report},
-                     "root": "page"|"cover"|"plain"}
+                     "root": "page"|"cover"|"plain"|"product"}
   POST /__reset     clear all of the above (not the modes)
-  POST /__mode?front=502|0, ?root=cover|plain|page
+  POST /__mode?front=502|0, ?root=cover|plain|product|page
                     answer the document 5xx on a live connection; or serve an
                     inset probe at / (the app loads only an origin)
   POST /__drop_ws   close every open WebSocket server-side, as a gateway
@@ -197,6 +197,10 @@ setInterval(report, 1000);
 INSET_VIEWPORTS = {
     "cover": "width=device-width, viewport-fit=cover",
     "plain": "width=device-width",
+    # The product's complete tag, verbatim from the installed index.html: the
+    # discriminator between cover alone and interactive-widget=resizes-content.
+    "product": "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, "
+               "interactive-widget=resizes-content, viewport-fit=cover",
 }
 INSET_PROBE = """<!doctype html><meta charset=utf-8>
 <meta name=viewport content="%(viewport)s">
@@ -206,9 +210,17 @@ body { margin: 0; }
 #probe { position: fixed; visibility: hidden; padding-top: env(safe-area-inset-top);
          padding-right: env(safe-area-inset-right); padding-bottom: env(safe-area-inset-bottom);
          padding-left: env(safe-area-inset-left); }
+/* KiroCrew 0.7.0's own top-inset rule, verbatim from assets/src-*.css: every
+   top-safe / p-safe utility reads var(--safe-area-top, env(...)), and the
+   variable is 0 unless the page is an installed PWA. #kc measures what that
+   rule resolves to in the app's web view (F9 §9). */
+:root { --safe-area-top: 0px; }
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  :root { --safe-area-top: env(safe-area-inset-top, 0px); } }
+#kc { position: fixed; visibility: hidden; padding-top: var(--safe-area-top, env(safe-area-inset-top)); }
 </style>
 <h1 id=title>INSET PROBE %(probe)s</h1>
-<div id=probe></div>
+<div id=probe></div><div id=kc></div>
 <script>
 var DOC = Math.random().toString(36).slice(2), SEQ = 0;
 function report() {
@@ -219,6 +231,9 @@ function report() {
     innerHeight: window.innerHeight, innerWidth: window.innerWidth,
     clientHeight: document.documentElement.clientHeight,
     visualViewportHeight: window.visualViewport ? window.visualViewport.height : null,
+    kcTop: getComputedStyle(document.getElementById('kc')).paddingTop,
+    displayMode: ['standalone', 'fullscreen', 'minimal-ui', 'browser'].filter(function (m) {
+      return matchMedia('(display-mode: ' + m + ')').matches; }).join(',') || 'none',
     ts: Date.now()
   };
   fetch('/__inset-report', {method: 'POST', body: JSON.stringify(s),
@@ -287,7 +302,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if path in ("/__inset-cover", "/__inset-plain"):
+        if path in ("/__inset-cover", "/__inset-plain", "/__inset-product"):
             return self.body(inset_probe(path[len("/__inset-"):]).encode(), "text/html; charset=utf-8")
         # The app loads only a gateway's origin (GatewayAddress.persistable
         # drops any path), so a test reaches a probe by switching what / serves
@@ -474,7 +489,7 @@ class Control(BaseHTTPRequestHandler):
             if "root" in q:
                 root = q["root"][0]
                 if root not in ("page",) + tuple(INSET_VIEWPORTS):
-                    return self.reply({"error": "root must be page, cover or plain"}, 400)
+                    return self.reply({"error": "root must be page, cover, plain or product"}, 400)
                 ROOT_PROBE = "" if root == "page" else root
                 if "front" not in q:
                     return self.reply({"ok": True, "front": FRONT_STATUS, "root": root})

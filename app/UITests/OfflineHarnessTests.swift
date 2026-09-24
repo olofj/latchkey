@@ -475,13 +475,14 @@ final class OfflineHarnessTests: XCTestCase {
 
     /// The instrument F9 is blocked on: a `viewport-fit=cover` page and an
     /// ordinary one each report the `env(safe-area-inset-*)` WebKit computed
-    /// for them, and their viewport height, to the fake dashboard. This test
+    /// for them, and their viewport height, to the fake dashboard. A third
+    /// carries the product's complete viewport tag, interactive-widget included. This test
     /// only establishes that the numbers arrive and records them; F9's tests A
     /// and B add the assertions once §9's measurement has chosen the fix.
     func testInsetProbesReportWhatThePageIsTold() async throws {
         addTeardownBlock { try? await Self.post("\(Self.dashboardControl)/__mode?root=page") }
         var seen: [String: [String: Any]] = [:]
-        for probe in ["cover", "plain"] {
+        for probe in ["cover", "plain", "product"] {
             try await Self.post("\(Self.dashboardControl)/__mode?root=\(probe)")
             let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
             // Several reports in, so layout has settled: the first can precede
@@ -499,10 +500,11 @@ final class OfflineHarnessTests: XCTestCase {
                 + " bottom=\(r["bottom"] ?? "-") left=\(r["left"] ?? "-")"
                 + " innerHeight=\(r["innerHeight"] ?? "-") innerWidth=\(r["innerWidth"] ?? "-")"
                 + " clientHeight=\(r["clientHeight"] ?? "-") visualViewportHeight=\(r["visualViewportHeight"] ?? "-")"
+                + " kcTop=\(r["kcTop"] ?? "-") displayMode=\(r["displayMode"] ?? "-")"
             print(line)
             add(XCTAttachment(string: line))
         }
-        XCTAssertEqual(seen.count, 2, "both probes reported")
+        XCTAssertEqual(seen.count, 3, "every probe reported")
     }
 
     private func waitForInsets(_ probe: String, timeout: TimeInterval,

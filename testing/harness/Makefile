@@ -263,6 +263,7 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	echo "==> F9 §6: the inset probes, their viewports, /__mode?root= and /__state's insets"; \
 	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/__inset-cover | grep -q 'content="width=device-width, viewport-fit=cover"'; \
 	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/__inset-plain | grep -q 'content="width=device-width"'; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/__inset-product | grep -q 'interactive-widget=resizes-content, viewport-fit=cover"'; \
 	curl -sS --fail -X POST "$$DCTL/__mode?root=cover" | grep -q '"root": *"cover"'; \
 	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "INSET PROBE cover"; \
 	curl -sS --fail -X POST "$$DCTL/__mode?root=page" >/dev/null; \
