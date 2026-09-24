@@ -3035,8 +3035,13 @@ distribution signing works there. `altool` with the API key does (`--list-apps`
 returned the record). The export therefore needs an Apple Distribution
 certificate in the keychain, created once in Xcode.
 
-**Encryption declaration left to the owner.** `ITSAppUsesNonExemptEncryption`
-is not set; App Store Connect asks per build until it is.
+**Encryption: exempt, no documentation (owner's declaration, 2026-09-24).**
+Standard cryptography only (WireGuard, TLS, Noise), mass-market; App Store
+Connect's questionnaire concluded no documentation is required.
+`ITSAppUsesNonExemptEncryption = NO` was already in the project from Xcode
+27's migration (6cd80d0), a template default. The first version of this entry
+said the key was unset, which was written without checking; it now carries the
+owner's decision rather than Xcode's. Reasoning in `docs/TESTFLIGHT.md`.
 
 **Evidence:** `docs/TESTFLIGHT.md`; archive `build/Latchkey-appstore.xcarchive`
 from `make tf UPLOAD=0` (ARCHIVE SUCCEEDED, both manifests present; export

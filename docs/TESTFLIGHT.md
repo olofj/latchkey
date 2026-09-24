@@ -87,12 +87,23 @@ that service, which is why the upload goes through it (measured 2026-09-24:
 
 ## Export compliance
 
-The app uses encryption (WireGuard in TailscaleKit, TLS), so
-`ITSAppUsesNonExemptEncryption` is deliberately **not** set in the project:
-whether it qualifies for an exemption is the owner's declaration to make, not
-the build's. Until it is set, App Store Connect asks the question on each build
-in the TestFlight tab ("Missing Compliance"), and the build cannot be tested
-until it is answered.
+The app uses encryption: WireGuard (Curve25519, ChaCha20-Poly1305, BLAKE2s),
+TLS and Noise inside TailscaleKit, and the system's HTTPS in the web view. All
+of it is standard, published cryptography, and securing the connection is the
+app's main purpose, so no "incidental use" exemption applies; it is
+mass-market software using standard encryption.
+
+The owner answered App Store Connect's questions on 2026-09-24 (App
+Information → App Encryption Documentation): uses encryption, qualifies for a
+Category 5 Part 2 exemption, no proprietary algorithms, standard algorithms in
+addition to the OS's, not distributed in France. App Store Connect concluded
+that **no documentation is required**.
+
+That matches `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO` in all three
+configurations, so builds do not ask again. (The key arrived earlier than the
+decision, as a template default in Xcode 27's project migration, 6cd80d0.)
+Revisit it if the answers change: non-standard cryptography, or a release in
+France.
 
 ## Testers
 
