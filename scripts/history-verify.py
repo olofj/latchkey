@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify a scrubbed history: what must be gone is gone, what must stay stayed.
 
-    scripts/history-verify.py [<real-tailnet-name>] [--rev <ref>]...
+    scripts/history-verify.py [<real-tailnet-name>] [--rev <ref>]... [--ip <addr>]... [--literal <text>]...
 
 Exits non-zero and prints what it found if anything is wrong.
 
@@ -129,6 +129,27 @@ IP_ALLOWED = {
 }
 
 
+# Personal details found in the pre-publish review, none of which the checks
+# above could see because none of them was looking: a personal email address, a
+# device UDID, a home directory. Checked as CLASSES, like the MagicDNS names, so
+# a new one fails without anyone having to name it. Our own files only: upstream
+# uses `user@gmail.com`-style examples, and those are R16's to keep.
+PERSONAL = {
+    "a personal-provider email address":
+        re.compile(rb"(?i)\b[a-z0-9._%+-]+@(?:gmail|googlemail|icloud|me|mac|"
+                   rb"hotmail|outlook|live|yahoo|proton|protonmail)\.(?:com|me)\b"),
+    # Modern iOS UDIDs: 8 hex, dash, 16 hex. The 0000 chip-id prefix keeps it from
+    # matching arbitrary hex. Placeholders must be all zeros after the prefix.
+    "an iOS device UDID":
+        re.compile(rb"\b0000[0-9A-Fa-f]{4}-(?!0{16}\b)[0-9A-Fa-f]{16}\b"),
+    "a home-directory path":
+        re.compile(rb"/(?:Users|home)/(?!runner\b|user\b|me\b|you\b)[a-z][a-z0-9._-]+/"),
+}
+# The identities allowed in commit headers: the owner's published one, and
+# upstream's authors, whose commits arrive with the vendored history.
+IDENTITIES_ALLOWED_DOMAINS = (b"@lixom.net", b"@tailscale.com")
+
+
 def ip_class_is_fine(text):
     """True for whole classes that need no review. None for "not an address"."""
     try:
@@ -191,14 +212,14 @@ def vendored(paths):
 
 def main():
     argv = sys.argv[1:]
-    revs, tailnets, ips = [], [], []
+    revs, tailnets, ips, lits = [], [], [], []
     while argv:
         arg = argv.pop(0)
-        if arg in ("--rev", "--ip"):
+        if arg in ("--rev", "--ip", "--literal"):
             if not argv:
                 print(f"error: {arg} needs a value", file=sys.stderr)
                 return 2
-            (revs if arg == "--rev" else ips).append(argv.pop(0))
+            {"--rev": revs, "--ip": ips, "--literal": lits}[arg].append(argv.pop(0))
         else:
             tailnets.append(arg.encode())
     revs = revs or local_branches()
@@ -211,6 +232,10 @@ def main():
             literals[f"{label.decode()} (its bare label)"] = label
     for ip in ips:
         literals[f"{ip} (a real address)"] = ip.encode()
+    for n, lit in enumerate(lits, start=1):
+        # Not echoed: the point of the literal is that it is not published, and
+        # this output gets pasted into commit messages and chats.
+        literals[f"literal #{n} ({len(lit)} chars)"] = lit.encode()
 
     paths_of = blobs(revs)
     ids = sorted(paths_of)
@@ -220,6 +245,7 @@ def main():
     counts = collections.Counter()
     tsnet = collections.defaultdict(set)      # magicdns name -> paths
     addrs = collections.defaultdict(set)      # public IPv4 needing review -> paths
+    personal = collections.defaultdict(set)   # kind of personal detail -> paths
     kept = 0
     i = 0
     while i < len(out):
@@ -254,6 +280,9 @@ def main():
                 text = found.decode()
                 if ip_class_is_fine(text) is False and text not in IP_ALLOWED:
                     addrs[text] |= paths or {"(unnamed blob)"}
+            for kind, rx in PERSONAL.items():
+                if rx.search(body):
+                    personal[kind] |= paths or {"(unnamed blob)"}
         if MUST_STAY[1] in body:
             kept += 1
         i = nl + 1 + int(size) + 1
@@ -272,6 +301,17 @@ def main():
     # only in prose.
     for found in {f.lower() for f in TSNET_RE.findall(msgs)}:
         tsnet[found] |= {"(a commit message)"}
+    bodies = subprocess.run(["git", "log", "--format=%B", *revs],
+                            capture_output=True).stdout
+    for kind, rx in PERSONAL.items():
+        if rx.search(bodies):
+            personal[kind] |= {"(a commit message)"}
+    # Commit headers are neither blobs nor messages, and the first pre-publish
+    # review found one commit authored under a personal address.
+    idents = subprocess.run(["git", "log", "--format=%ae%n%ce", *revs],
+                            capture_output=True).stdout.lower().split()
+    stray_idents = sorted({i for i in idents
+                           if not i.endswith(IDENTITIES_ALLOWED_DOMAINS)})
 
     def show(paths):
         listed = sorted(paths)[:3]
@@ -312,6 +352,20 @@ def main():
         bad = True
     else:
         print("  ok: every public IPv4 address in our own files is a reviewed fixture")
+
+    for kind in PERSONAL:
+        if personal[kind]:
+            print(f"  FAIL: {kind} in our own files: {show(personal[kind])}")
+            bad = True
+        else:
+            print(f"  ok: no {kind} in our own files or messages")
+    if stray_idents:
+        print(f"  FAIL: {len(stray_idents)} commit identit(y/ies) outside"
+              f" {', '.join(d.decode() for d in IDENTITIES_ALLOWED_DOMAINS)}"
+              f" (not echoed; `git log --format='%ae %ce'` shows them)")
+        bad = True
+    else:
+        print("  ok: every author and committer identity is an allowed one")
 
     if kept == 0:
         print(f"  FAIL: {MUST_STAY[0]} is absent -- the scrub ate a name it had to keep")

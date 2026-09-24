@@ -51,6 +51,15 @@ WHAT STAYS, DELIBERATELY
   Addresses in the vendored tree are upstream's own test data, and rewriting them
   would corrupt the R16 delta.
 
+3. **Other personal details**, via `SCRUB_LITERALS` (`--literal OLD=NEW` on the
+   driver). The pre-publish review found three the two passes above could not
+   see, because neither was looking for them: the owner's personal email (his
+   tailnet login, quoted in five docs), his iPhone's UDID (in a DECISIONS entry
+   about a pairing bug), and his home directory in absolute paths. Like the
+   tailnet names, the values are arguments and never constants here.
+   `scripts/history-verify.py` now checks those CLASSES by pattern, so the next
+   one is found without anyone having to remember to name it.
+
 A NOTE ON WHAT THIS COSTS
 -------------------------
 After this, the history reads as though the project was always called Latchkey.
@@ -136,13 +145,25 @@ def ip_patterns(ips):
     return out
 
 
+def literal_patterns(spec):
+    """`OLD=NEW` pairs, newline-separated. Case-insensitive, longest first.
+
+    Case-insensitive for the reason `tailnet_patterns` gives: the value that
+    survives is the one spelled differently from how the caller remembered it.
+    """
+    pairs = [line.split("=", 1) for line in spec.splitlines() if "=" in line]
+    return [(re.compile(re.escape(old), re.IGNORECASE), new)
+            for old, new in sorted(pairs, key=lambda p: -len(p[0])) if old]
+
+
 TAILNET_SUBS = tailnet_patterns(REAL_TAILNETS)
 IP_SUBS = ip_patterns(REAL_IPS)
+LITERAL_SUBS = literal_patterns(os.environ.get("SCRUB_LITERALS", ""))
 
 
 def scrub(text):
     text = rewrite(text)
-    for pattern, replacement in TAILNET_SUBS + IP_SUBS:
+    for pattern, replacement in TAILNET_SUBS + IP_SUBS + LITERAL_SUBS:
         text = pattern.sub(replacement, text)
     return text
 

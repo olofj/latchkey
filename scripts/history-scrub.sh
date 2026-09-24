@@ -28,13 +28,27 @@ cd "$ROOT"
 
 TAILNETS=()
 IPS=()
+LITERALS=""
+AUTHOR_FROM=""
+AUTHOR_NAME=""
+AUTHOR_EMAIL=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --ip) IPS+=("$2"); shift 2 ;;
-        *)    TAILNETS+=("$1"); shift ;;
+        --ip)      IPS+=("$2"); shift 2 ;;
+        # OLD=NEW, any personal detail that is neither a tailnet nor an address:
+        # an email, a device UDID, a home directory. Repeatable.
+        --literal) LITERALS+="$2"$'\n'; shift 2 ;;
+        # 'old@addr=New Name <new@addr>': re-attribute commits made under an
+        # identity that should not be published. The address is personal data
+        # in the commit header, which no tree or message filter can see.
+        --author)
+            AUTHOR_FROM="${2%%=*}"; rest="${2#*=}"
+            AUTHOR_NAME="${rest% <*}"; AUTHOR_EMAIL="${rest##*<}"; AUTHOR_EMAIL="${AUTHOR_EMAIL%>}"
+            shift 2 ;;
+        *)         TAILNETS+=("$1"); shift ;;
     esac
 done
-if [[ ${#TAILNETS[@]} -eq 0 && ${#IPS[@]} -eq 0 ]]; then
+if [[ ${#TAILNETS[@]} -eq 0 && ${#IPS[@]} -eq 0 && -z "$LITERALS" && -z "$AUTHOR_FROM" ]]; then
     echo "usage: scripts/history-scrub.sh <real-tailnet-name> [more...] [--ip <addr>]..." >&2
     echo "  e.g. scripts/history-scrub.sh something.ts.net older.ts.net --ip 203.0.113.9" >&2
     echo "  More than one tailnet, because more than one turned out to be in" >&2
@@ -75,9 +89,24 @@ echo "::: tagged the current history as $BACKUP ($BEFORE_COUNT commits)"
 # rename commits become: both sides of their diffs end up saying Latchkey.
 export SCRUB_TAILNET="$TAILNET"
 export SCRUB_IPS="${IPS[*]}"
+export SCRUB_LITERALS="$LITERALS"
+export SCRUB_AUTHOR_FROM="$AUTHOR_FROM" SCRUB_AUTHOR_NAME="$AUTHOR_NAME" SCRUB_AUTHOR_EMAIL="$AUTHOR_EMAIL"
 export FILTER_BRANCH_SQUELCH_WARNING=1
 
+# Case-insensitive comparison, for the same reason every other rule here is.
+ENV_FILTER='
+from=$(printf %s "$SCRUB_AUTHOR_FROM" | tr A-Z a-z)
+if [ -n "$from" ]; then
+    if [ "$(printf %s "$GIT_AUTHOR_EMAIL" | tr A-Z a-z)" = "$from" ]; then
+        GIT_AUTHOR_NAME="$SCRUB_AUTHOR_NAME"; GIT_AUTHOR_EMAIL="$SCRUB_AUTHOR_EMAIL"
+    fi
+    if [ "$(printf %s "$GIT_COMMITTER_EMAIL" | tr A-Z a-z)" = "$from" ]; then
+        GIT_COMMITTER_NAME="$SCRUB_AUTHOR_NAME"; GIT_COMMITTER_EMAIL="$SCRUB_AUTHOR_EMAIL"
+    fi
+fi'
+
 git filter-branch --force --prune-empty \
+    --env-filter "$ENV_FILTER" \
     --tree-filter "python3 '$ROOT/scripts/history-scrub.py'" \
     --msg-filter "python3 '$ROOT/scripts/history-scrub.py' --message" \
     --tag-name-filter cat -- --all
@@ -95,6 +124,9 @@ echo "::: rewritten: $BEFORE_COUNT commits -> $AFTER_COUNT"
 echo "::: verification"
 VERIFY_ARGS=("${TAILNETS[@]}")
 for ip in ${IPS[@]+"${IPS[@]}"}; do VERIFY_ARGS+=(--ip "$ip"); done
+while IFS= read -r lit; do
+    [[ -n "$lit" ]] && VERIFY_ARGS+=(--literal "${lit%%=*}")
+done <<< "$LITERALS"
 if ! python3 "$ROOT/scripts/history-verify.py" ${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}; then
     echo "::: FAILED -- the previous history is at $BACKUP and refs/original/" >&2
     exit 1
