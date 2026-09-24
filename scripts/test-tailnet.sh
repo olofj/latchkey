@@ -28,6 +28,8 @@ APP="$ROOT/app"
 HARNESS="$ROOT/testing/harness"
 TSNET="$ROOT/testing/tsnet-harness"
 SIM_NAME="${SIM_NAME:-iPhone 17}"
+# The tsnet harness's plain-HTTP test API (testing/tsnet-harness/main.go, -api).
+HARNESS_API="${HARNESS_API:-http://127.0.0.1:8491}"
 BUILD=0
 [[ "${1:-}" == "--build" ]] && BUILD=1
 
@@ -35,6 +37,23 @@ LOG_DIR="$APP/build/tailnet-logs/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOG_DIR"
 START=$(date +%s)
 say() { printf '::: %s\n' "$*"; }
+
+# The secret of every login link the harness minted this generation -- the
+# segment after /auth/ of each loginLinks[].path in GET /state -- one per
+# line. Non-zero if the harness cannot be read or answers something that is
+# not its state; nothing printed if it minted nothing.
+minted_login_secrets() {
+    local state
+    state=$(curl -fsS "$HARNESS_API/state") || return 1
+    printf '%s' "$state" | python3 -c '
+import json, sys
+for link in json.load(sys.stdin).get("loginLinks", []):
+    path = link.get("path", "")
+    secret = path.split("/auth/", 1)[1] if "/auth/" in path else ""
+    if secret:
+        print(secret)
+'
+}
 
 # ---------------------------------------------------------------- preflight --
 say "preflight"
@@ -134,22 +153,50 @@ fi
 # The login tests make tsnet log its login link ("AuthURL is ...", "go to:
 # ..."), and the node log keeps tsnet's lines on disk (M8.3). A link is a
 # login for whoever holds it: nothing on disk may hold one (R29 review).
-# Validated: tsnet.log must hold the REDACTED form, or the scan proved nothing.
-# That needs the LAST test to log in (testRequireAuthLogin… does): a reset
-# deletes the node logs, so testAResetExpiresTheNodeAtControl sorts early.
+#
+# The scan looks for the LITERAL links the harness minted this run -- GET
+# /state lists them as loginLinks -- never for a shape of its own. The first
+# version matched /auth/[0-9a-f]{16,}, the one shape upstream's testcontrol
+# ever issued, and the harness now mints hostile shapes by default
+# (testing/tsnet-harness/authpath.go: mixed case, hyphens, 3-5 groups)
+# precisely because a rule written for one shape passes by construction on
+# the next; against those links the old regex found nothing and said "ok"
+# (review, 2026-09-23). A literal cannot drift.
+#
+# Validated twice: the harness must list at least one link, or there is no
+# secret to look for and the scan proves nothing; and tsnet.log must hold the
+# REDACTED form (/auth/…), or the links never reached the log and the scan
+# proves nothing either. That needs the LAST test to log in
+# (testRequireAuthLogin… does): a reset deletes the node logs, so
+# testAResetExpiresTheNodeAtControl sorts early.
 say "no login link in the app container"
 CONTAINER=$(xcrun simctl get_app_container "$UDID" net.lixom.latchkey data 2>/dev/null || true)
+LINKS_FILE="$LOG_DIR/login-link-secrets.txt"
+if ! minted_login_secrets > "$LINKS_FILE"; then
+    echo "error: could not read the minted login links from the harness ($HARNESS_API/state)" >&2
+    TEST_RC=1
+fi
+LINK_COUNT=$(grep -c . "$LINKS_FILE" || true)
 if [[ -z "$CONTAINER" ]]; then
     echo "error: app container not found" >&2; TEST_RC=1
+elif [[ "$LINK_COUNT" -lt 1 ]]; then
+    echo "error: the harness lists no login link for this run (loginLinks is empty), so there is" >&2
+    echo "       no secret to scan for and 'no login link on disk' cannot be established." >&2
+    echo "       Did a login test run against this harness generation?" >&2
+    TEST_RC=1
 else
-    LINK_RE='/auth/[0-9a-f]{16,}|login\.tailscale\.com/a/[A-Za-z0-9]{8,}'
+    # One fixed-string pattern per secret -- the segment after /auth/, so a
+    # link written in any other form (path only, another host) is a hit too;
+    # case-insensitively, so a store that folds case cannot hide one.
+    PATTERNS=()
+    while IFS= read -r secret; do PATTERNS+=(-e "$secret"); done < "$LINKS_FILE"
     # grep exits 0 on a match, 1 on none and 2 on an error -- and `if grep
     # ...; then leak; else ok` read 1 and 2 alike as ok, so an unreadable
     # file or a missing directory printed "ok" over a real hit (review,
     # 2026-09-23: grep returns 2 even when it also matched). The matches and
     # the status are judged separately.
     SCAN_RC=0
-    grep -rlaE "$LINK_RE" "$CONTAINER/Library" "$CONTAINER/tmp" \
+    grep -rlaFi "${PATTERNS[@]}" "$CONTAINER/Library" "$CONTAINER/tmp" \
         > "$LOG_DIR/login-link-leaks.txt" 2> "$LOG_DIR/login-link-leaks.txt.err" || SCAN_RC=$?
     if [[ -s "$LOG_DIR/login-link-leaks.txt" ]]; then
         echo "error: a login link was written to disk:" >&2
@@ -166,7 +213,7 @@ else
             echo "error: no redacted login link in tsnet.log, so the scan proved nothing" >&2
             TEST_RC=1
         else
-            echo "    ok (all of Library + tmp; tsnet.log holds the links redacted)"
+            echo "    ok (all of Library + tmp, searched for $LINK_COUNT minted link(s) literally; tsnet.log holds them redacted)"
         fi
     fi
 fi
@@ -176,7 +223,7 @@ ELAPSED=$(( $(date +%s) - START ))
 if [[ $TEST_RC -ne 0 ]]; then
     xcrun simctl io "$UDID" screenshot "$LOG_DIR/failure.png" >/dev/null 2>&1 || true
     cp "$TSNET/.run/"*.log "$HARNESS/.run/"*.log "$LOG_DIR/" 2>/dev/null || true
-    curl -s http://127.0.0.1:8491/state > "$LOG_DIR/harness-state.json" 2>/dev/null || true
+    curl -s "$HARNESS_API/state" > "$LOG_DIR/harness-state.json" 2>/dev/null || true
     say "FAILED in ${ELAPSED}s — logs, screenshot and xcresult in $LOG_DIR"
     exit 1
 fi
