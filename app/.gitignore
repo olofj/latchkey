@@ -23,3 +23,6 @@ TODO.workspaces.md
 # The older home of the Team ID for `make device` alone; still read as a
 # fallback when Local.xcconfig has no DEVELOPMENT_TEAM.
 /.dev-team
+# App Store Connect API key IDs for TestFlight uploads (ASC_KEY_ID,
+# ASC_ISSUER_ID, optional ASC_KEY_PATH). The .p8 itself never lives here.
+/.asc-key
