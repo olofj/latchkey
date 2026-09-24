@@ -63,7 +63,9 @@ final class OfflineHarnessTests: XCTestCase {
         _ = try await Self.post("\(Self.dashboardControl)/__reset")
         _ = try await Self.post("\(Self.proxyControl)/reset")
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
+        _ = try await Self.post("\(Self.proxyControl)/mode?stall=0")
         _ = try await Self.post("\(Self.proxyControl)/open")
+        _ = try await Self.post("\(Self.dashboardControl)/__mode?front=0")
     }
 
     // MARK: - M2.5 / M2.7: the happy path
@@ -200,6 +202,149 @@ final class OfflineHarnessTests: XCTestCase {
         let connects = try await journalConnects()
         XCTAssertTrue(connects.contains { $0.host == "dash.tail-scale.ts.net" && $0.port == 443 },
                       "the load must have reached the server through the proxy; got \(connects)")
+    }
+
+    // MARK: - F4: the connecting state, and an error page you can act on
+
+    /// The headline of F4. A load that will never answer shows a connecting
+    /// state for its WHOLE duration, and then a failure that names the cause.
+    ///
+    /// `stall=22` is chosen, not arbitrary: it is longer than the app's 20 s
+    /// silent-retry window, so the failure arrives after that window closes and
+    /// exactly ONE dial happens — which is the path the device took in the
+    /// report that produced this feature (F4 §1.1). The stall also makes the
+    /// state last long enough to assert anything about it at all: every other
+    /// failure mode this harness has fails at once, and a state present for
+    /// 300 ms is caught by luck or missed.
+    func testStalledLoadShowsTheConnectingStateForItsWholeDuration() async throws {
+        // The checkpoints are a picture of one load over 20 s; stopping at the
+        // first bad one would hide the rest of it.
+        continueAfterFailure = true
+        addTeardownBlock { try? await Self.post("\(Self.proxyControl)/mode?stall=0") }
+        try await Self.post("\(Self.proxyControl)/mode?stall=22")
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        defer { app.terminate() }
+        let launchedAt = Date()
+
+        // Absolute checkpoints from the launch, not waitForExistence: a wait on
+        // a transient passes even when the state is stuck, which is the bug.
+        var lastElapsed = -1
+        for checkpoint in [1.0, 4.0, 7.0, 11.0, 20.0] {
+            try await sleep(until: launchedAt.addingTimeInterval(checkpoint))
+            // Every read is guarded: a missing element makes `.label`/`.value`
+            // THROW, which aborts the test before the later checkpoints and
+            // before the teardown that restores the stall. Asserting instead
+            // keeps the whole picture and the cleanup.
+            let block = element(app, "page-connecting")
+            XCTAssertTrue(block.exists,
+                          "at \(Int(checkpoint)) s the connecting state must be on screen")
+            let host = element(app, "page-connecting-host")
+            XCTAssertTrue(host.exists && host.label.contains("dash"),
+                          "at \(Int(checkpoint)) s it names the host: \(host.exists ? host.label : "<absent>")")
+            // The ticking number: its label is static so VoiceOver does not
+            // announce every second, which puts the seconds in the VALUE.
+            let elapsed = element(app, "page-connecting-elapsed")
+            if elapsed.exists {
+                let text = (elapsed.value as? String ?? "").replacingOccurrences(of: " s", with: "")
+                let shown = Int(text.trimmingCharacters(in: .whitespaces)) ?? -1
+                XCTAssertGreaterThanOrEqual(shown, lastElapsed,
+                                            "the elapsed number must never go backwards (was \(lastElapsed), now \(shown))")
+                lastElapsed = max(lastElapsed, shown)
+            } else {
+                XCTFail("at \(Int(checkpoint)) s the elapsed number must be on screen")
+            }
+            // The hint is the escalation, and it must not arrive early.
+            let hint = element(app, "page-connecting-hint")
+            if checkpoint <= 4.0 {
+                XCTAssertFalse(hint.exists, "at \(Int(checkpoint)) s it is too early to nag")
+            } else if checkpoint >= 11.0 {
+                XCTAssertTrue(hint.exists, "by \(Int(checkpoint)) s it says what is probably wrong")
+                XCTAssertTrue(element(app, "page-connecting-choose-gateway").exists,
+                              "and offers a way out")
+            }
+        }
+
+        // The failure, when it comes, names the host, the port and the duration.
+        let overlay = element(app, "nav-error-overlay")
+        XCTAssertTrue(overlay.waitForExistence(timeout: 20), "the stalled dial must end on the error page")
+        let cause = element(app, "nav-error-cause").label
+        XCTAssertTrue(cause.contains("didn't answer on port 443"),
+                      "the cause names what happened: \(cause)")
+        // How long it waited, read from the sentence rather than predicted.
+        // Measured: ~31 s for a 22 s stall, because WebKit dials more than once
+        // within one navigation (see the CONNECT count below). What matters to
+        // the owner, and here, is that the number is the real wait and not zero.
+        let waited = cause.components(separatedBy: " in ").last
+            .flatMap { $0.components(separatedBy: " s").first }
+            .flatMap { Int($0) } ?? -1
+        XCTAssertGreaterThanOrEqual(waited, 20,
+                                    "the cause names the real duration of the wait: \(cause)")
+        XCTAssertFalse(cause.lowercased().contains("url"),
+                       "and never calls a connection failure a URL problem: \(cause)")
+        XCTAssertTrue(element(app, "nav-error-retry").exists, "with something to do about it")
+
+        // No retry STORM: the failure arrived after the app's 20 s startup-retry
+        // window closed, so `retryStartupLoadIfAppropriate` never ran. That loop
+        // dials once a second, so had it run there would be upwards of twenty
+        // CONNECTs here.
+        //
+        // Not "exactly one", which F4 §6 asked for and which is wrong: WebKit
+        // issues more than one dial within a single navigation (measured: 2 for
+        // one stalled load, and the whole navigation then fails at ~31 s rather
+        // than at the 22 s stall). The app's own retry loop is what this pins.
+        let connects = try await journalConnects()
+        let toDash = connects.filter { $0.host == "dash.\(Self.tailnetSuffix)" && $0.port == 443 }
+        XCTAssertGreaterThanOrEqual(toDash.count, 1, "the load must have dialled: \(connects)")
+        XCTAssertLessThanOrEqual(toDash.count, 3,
+                                 "the silent retry loop must NOT have run past its window: \(connects)")
+    }
+
+    /// A healthy load must not leave the connecting block on screen — and must
+    /// not flash it either, which a poll cannot see but the counter can.
+    func testAFastLoadDoesNotLeaveTheConnectingStateOnScreen() async throws {
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        defer { app.terminate() }
+        // Server-side proof the page is up, rather than a sleep.
+        _ = try await waitForReport(host: "dash.\(Self.tailnetSuffix)", timeout: 40) { _ in true }
+        XCTAssertFalse(element(app, "page-connecting").exists,
+                       "the block must be gone the instant the page commits")
+        XCTAssertFalse(element(app, "nav-error-overlay").exists, "and no error page")
+        let shown = element(app, "page-connecting-shown-count").label
+        XCTAssertTrue(shown == "connecting-shown:0" || shown == "connecting-shown:1",
+                      "a loopback load is under the 300 ms show delay, so it appears at most once: \(shown)")
+    }
+
+    /// Both buttons on the error page work. They are the reason the block is
+    /// opaque: a control drawn at less than full opacity over a WKWebView
+    /// receives no taps (found in M8), so a test that only asserts they EXIST
+    /// would pass with them dead.
+    func testTheErrorPageOffersRetryAndAnotherGateway() async throws {
+        addTeardownBlock { try? await Self.post("\(Self.proxyControl)/mode?blackhole=0") }
+        try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        XCTAssertTrue(element(app, "nav-error-overlay").waitForExistence(timeout: 40),
+                      "a refused connection fails onto the error page")
+
+        // Try again, with the proxy working: the load must really be retried,
+        // proven by the gateway reporting itself.
+        try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
+        let retry = element(app, "nav-error-retry")
+        XCTAssertTrue(retry.isHittable, "Try again must be tappable, not merely present")
+        retry.tap()
+        _ = try await waitForReport(host: "dash.\(Self.tailnetSuffix)", timeout: 40) { _ in true }
+        XCTAssertFalse(element(app, "nav-error-overlay").exists, "and the page replaces the error")
+        app.terminate()
+
+        // Choose another gateway opens the picker.
+        try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
+        let again = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        defer { again.terminate() }
+        XCTAssertTrue(element(again, "nav-error-overlay").waitForExistence(timeout: 40))
+        let choose = element(again, "nav-error-choose-gateway")
+        XCTAssertTrue(choose.isHittable, "Choose another gateway must be tappable")
+        choose.tap()
+        XCTAssertTrue(element(again, "gateway-picker").waitForExistence(timeout: 10),
+                      "and open the one picker presentation")
     }
 
     // MARK: - The error page (coverage lost with the address bar in M1)
@@ -426,6 +571,18 @@ final class OfflineHarnessTests: XCTestCase {
     }
 
     // MARK: - Control-plane reads (R13)
+
+    private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: id).firstMatch
+    }
+
+    /// Sleeps until an absolute instant, so checkpoints are timed from the
+    /// triggering event rather than accumulating each assertion's own cost
+    /// (F4 §6). Returns at once if the instant has passed.
+    private func sleep(until when: Date) async throws {
+        let remaining = when.timeIntervalSinceNow
+        if remaining > 0 { try await Task.sleep(for: .milliseconds(Int(remaining * 1000))) }
+    }
 
     private func dashboardState() async throws -> [String: Any] {
         let data = try await Self.get("\(Self.dashboardControl)/__state")

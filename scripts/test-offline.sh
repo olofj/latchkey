@@ -19,7 +19,7 @@
 #   7. teardown    stop the harness, whatever happened
 #
 # --build runs build-for-testing first (Testing configuration, R15). Without
-# it, the last test build is reused, which is what the < 3 min budget assumes.
+# it, the last test build is reused, which is what the < 4 min budget assumes.
 #
 # On failure: a screenshot and the harness logs are left under
 # app/build/offline-logs/<timestamp>/.
@@ -237,7 +237,12 @@ if [[ $TEST_RC -ne 0 || $LEAK_RC -ne 0 ]]; then
     say "FAILED in ${ELAPSED}s — logs, screenshot and xcresult in $LOG_DIR"
     exit 1
 fi
-say "passed in ${ELAPSED}s (budget: 180s)"
-if [[ $ELAPSED -gt 180 ]]; then
-    say "WARNING: over the M2 budget of 3 minutes"
+# 240s, up from M2's 180s: F4 added three tests, one of which deliberately
+# stalls a dial for 22 s (and WebKit's own second dial takes it to ~39 s) --
+# there is no shorter way to hold a connecting state long enough to assert
+# anything about it. A budget that is always exceeded stops being read, so it
+# moved rather than being left to warn on every green run.
+say "passed in ${ELAPSED}s (budget: 240s)"
+if [[ $ELAPSED -gt 240 ]]; then
+    say "WARNING: over the budget of 4 minutes"
 fi

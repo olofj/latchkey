@@ -826,6 +826,38 @@ wait on a transient passes even when the state is stuck. So:
 | 17 | `testA502InL1IsRefusedAndTryAgainRecovers` | L1 (`status=502`) | `POST <dashboard control>/__mode?status=502`; launch against `dash`. By **3 s** `nav-error-overlay`, `nav-error-cause` containing "502" and an elapsed time under 3 s, `nav-error-retry`. The stub journal has a CONNECT for `dash…:443` and **no** `upstream_fail`; the dashboard's `requests[dash]` ≥ 1 — the request *reached* the gateway, which is what separates this from every existing "down" test (`assertZeroRequests` is deliberately not asserted). `POST …?status=0`, tap `nav-error-retry` → `waitForReport` shows "FAKE DASHBOARD" (server-side proof), `nav-error-overlay` gone. | Against today's build: `assertErrorPage`'s 40 s wait (`OfflineHarnessTests.swift:324-328`) expires with a blank screen. Then: commit 5xx (same). |
 | 18 | `testResponsePolicyDecidesByStatusAloneInTheMainFrame` | host (`test-navigation-policy.sh`) | Table-driven over §4.13: sub-frame 502 → commit; nil status → commit; 200, 204, 301, 302, 304, 401, 403 (header either way), 404 → commit; 500, 502, 503, 504 → refuse; 502 with `X-Auth-Required: true` → commit. | Change any row; in particular refusing 304 or 403 fails at once. |
 
+### 6.1 As built (2026-09-24) — corrections from running tests 1–4
+
+- **"Exactly one CONNECT" is wrong**, and so is predicting the elapsed number.
+  WebKit issues **more than one dial within a single navigation**: measured, a
+  22 s stall produced 2 CONNECTs and the navigation failed at ~31 s, not 22 s.
+  Test 1 therefore asserts what the rule is actually about — the app's own
+  silent-retry loop did not run past its 20 s window, which would have produced
+  upwards of twenty CONNECTs at one a second — and reads the duration out of the
+  sentence rather than predicting it.
+- **Reset harness modes in `setUp`, not only in a teardown block.** The stall
+  test hung on its first run; XCTest killed it and restarted the runner, its
+  `addTeardownBlock` never ran, and `stall=22` leaked into every later test in
+  the file — two of which then failed for a reason that had nothing to do with
+  them. `setUp` now clears `stall`, `blackhole` and the dashboard's `front`, so a
+  test that dies cannot poison its successors. (This is the same shape as the
+  earlier `__mode` finding: a control call whose effect outlives the test that
+  made it.)
+- **An accessibility modifier on a container can absorb its children.** With
+  `.accessibilityIdentifier` alone on the `Waiting` stack, `page-connecting` was
+  findable and `page-connecting-host` was **not**. It needs
+  `.accessibilityElement(children: .contain)` beside it. A §4.12 identifier that
+  exists in the source and not in the tree is not a contract.
+- **`makeWebView` runs inside SwiftUI's view update**, so publishing the page
+  state from the load it starts produced "Publishing changes from within view
+  updates is not allowed, this will cause undefined behavior" — once per launch,
+  in every test, and absent from every run before this feature. The load still
+  starts synchronously; only the announcement is deferred a tick, and only if
+  nothing else has moved the state meanwhile.
+- Checkpoint tests set `continueAfterFailure = true`: the point of five
+  checkpoints over 20 s is to see the whole picture, and stopping at the first
+  bad one hides the rest — including whether the failure recovers.
+
 Gate states G2/G6 have no harness that can hold the node in `Starting` or
 `Stopped` today; the `StalledHint` threshold logic is pure and covered by a
 host check, and the gate text is confirmed on the device (§8). Said plainly

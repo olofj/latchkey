@@ -168,6 +168,11 @@ struct PageStateView: View {
                         .accessibilityValue("\(seconds) s")
                 }
             }
+            // `.contain`, not the default: an accessibility modifier on a
+            // container can make SwiftUI collapse it into ONE element and absorb
+            // its children, at which point `page-connecting` is findable and
+            // `page-connecting-host` is not — which is exactly what happened.
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier(identifier)
         }
     }

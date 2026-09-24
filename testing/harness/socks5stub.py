@@ -14,6 +14,8 @@ serve every anti-leak variant (revision R10) without restarts:
   GET  /journal            events so far, as a JSON array
   POST /reset              clear the in-memory journal
   POST /mode?blackhole=1   refuse every CONNECT (0 to stop)
+  POST /mode?stall=N       hold each CONNECT silent N seconds, then answer
+                           general failure -- what tsnet does on dropped SYNs
   POST /close              stop listening: the proxy is GONE, connections are
                            refused at TCP level (the "stub killed" variant)
   POST /open               listen again
@@ -23,6 +25,7 @@ serve every anti-leak variant (revision R10) without restarts:
 """
 import argparse
 import json
+import re
 import selectors
 import socket
 import struct
@@ -33,7 +36,7 @@ from urllib.parse import parse_qs, urlparse
 
 J_LOCK = threading.Lock()
 EVENTS = []
-STATE = {"blackhole": False, "listening": True}
+STATE = {"blackhole": False, "listening": True, "stall": 0}
 ARGS = None
 LISTENER = {"sock": None}
 
@@ -89,10 +92,20 @@ def handle(c):
             host = socket.inet_ntop(socket.AF_INET6, recvn(c, 16))
         port = struct.unpack("!H", recvn(c, 2))[0]
         journal({"event": "connect", "host": host, "port": port,
-                 "blackhole": STATE["blackhole"]})
+                 "blackhole": STATE["blackhole"], "stall": STATE["stall"]})
         host, port = ARGS.hostmap.get("%s:%d" % (host, port), (host, port))
         if STATE["blackhole"]:
             c.sendall(b"\x05\x05\x00\x01" + b"\x00" * 6)   # 0x05 connection refused
+            return
+        # F4 §6: hold the socket silent, then answer 0x01 general failure --
+        # tsnet's exact behaviour when the peer's SYNs are dropped (socks5.go
+        # :219-232, replyCodeForDialError), at a duration the test picks. It is
+        # the ONLY way to make the connecting state last long enough to assert
+        # anything about: every other mode here fails at once, and a state
+        # present for 300 ms is caught by luck or missed.
+        if STATE["stall"]:
+            time.sleep(STATE["stall"])
+            c.sendall(b"\x05\x01\x00\x01" + b"\x00" * 6)   # 0x01 general failure
             return
         try:
             up = socket.create_connection((host, port), timeout=10)
@@ -189,7 +202,13 @@ class Control(BaseHTTPRequestHandler):
                 EVENTS.clear()
             return self.reply({"ok": True})
         if u.path == "/mode":
-            STATE["blackhole"] = q.get("blackhole", ["0"])[0] == "1"
+            if "blackhole" in q:
+                STATE["blackhole"] = q["blackhole"][0] == "1"
+            if "stall" in q:
+                want = q["stall"][0]
+                if not re.fullmatch(r"\d{1,2}", want):
+                    return self.reply({"error": "stall must be 0-99 seconds"}, 400)
+                STATE["stall"] = int(want)
             return self.reply(STATE)
         if u.path == "/close":
             close_listener()

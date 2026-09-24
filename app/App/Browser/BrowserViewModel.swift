@@ -63,8 +63,26 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// same state twice is not logged: `@Published` fires `objectWillChange`
     /// even for an equal value, and a status poll would otherwise print a line
     /// every five seconds.
+    /// True while `makeWebView` runs, which SwiftUI calls from inside a view
+    /// update (`RawWebView.makeUIView`). Mutating `@Published` state there earns
+    /// "Publishing changes from within view updates is not allowed, this will
+    /// cause undefined behavior" — one per launch, which is how it was noticed.
+    private var isBuildingWebView = false
+
     private func setPageState(_ next: PageState) {
         guard next != pageState else { return }
+        if isBuildingWebView {
+            // Announce it one main-actor tick later. The LOAD is unaffected —
+            // `webView.load` still runs synchronously — and only if nothing else
+            // has moved the state meanwhile, so an instant failure is not
+            // clobbered by a late `connecting`.
+            let before = pageState
+            Task { @MainActor [weak self] in
+                guard let self, self.pageState == before else { return }
+                self.setPageState(next)
+            }
+            return
+        }
         pageState = next
         switch next {
         case .idle:
@@ -264,6 +282,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// the existing first-tap/crashed-gesture workaround intact.
     func makeWebView() -> WKWebView {
         if let webView { return webView }
+        // SwiftUI calls this from inside a view update; see `isBuildingWebView`.
+        isBuildingWebView = true
+        defer { isBuildingWebView = false }
 
         let configuration = Self.makeWebViewConfiguration(dataStore: dataStore)
         // Before any navigation, so they run at every document start.
