@@ -2,7 +2,8 @@
 
 `make tf` (in `app/`) archives Latchkey for the App Store, exports an App Store
 `.ipa` and uploads it to App Store Connect, where it becomes a TestFlight build.
-`make tf UPLOAD=0` stops after the export.
+`make tf UPLOAD=0` stops after the export. Uploading needs a committed tree, and
+every build names its commit in Settings → Status (F12).
 
 TestFlight is the only way to install without a Mac tethered to the phone, and
 its builds last 90 days instead of a development profile's 7 (free team) or 1
@@ -46,11 +47,27 @@ loop; the two installs coexist only if they use different bundle ids.
 
 ## What `make tf` does
 
+- **Refuses a dirty working tree**, in under a second and before anything is
+  built, naming every uncommitted path (F12). Untracked files count: `App/` and
+  `UITests/` are synchronized folder groups, so an untracked `.swift` in either
+  is compiled into the build while being in no commit. Gitignored files
+  (`.asc-key`, `.dev-team`, `build/`) do not count. There is no override: commit,
+  or use `UPLOAD=0`, which exports a dirty tree but can never upload it. The
+  check first proves itself on a planted repository (a modified file and an
+  untracked `App/…/Planted.swift` must both be caught) and aborts if it cannot.
 - Rebuilds TailscaleKit if its sources or privacy manifest changed.
 - Archives Release with `CURRENT_PROJECT_VERSION` set to a UTC timestamp
   (`YYYYMMDDHHMM`), so every upload has a new build number with nothing to
   commit. `MARKETING_VERSION` stays in the project. Override with
   `BUILD_NUMBER=`.
+- Stamps the commit, `git rev-parse --short=12 HEAD`, into the app's
+  `Info.plist` as `LatchkeyGitSHA`, passed to `xcodebuild` as
+  `LATCHKEY_GIT_SHA=` (never into the build number, which App Store Connect
+  needs numeric and increasing). An `UPLOAD=0` export of a dirty tree is
+  stamped `<sha>-dirty`. Settings → Status shows it as **Commit**; a build
+  made any other way (Xcode's Run, `make device`) shows `—`. After the archive
+  it checks the stamp is in the archive's `Info.plist`, and, when uploading,
+  that the tree is still clean and `HEAD` has not moved.
 - Refuses to continue unless the archive carries **both** privacy manifests
   (below): App Store Connect reports a missing one only by email after upload.
 - Looks for the App Store profile for the archive's bundle id: this team,

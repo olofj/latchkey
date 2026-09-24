@@ -473,6 +473,22 @@ final class OfflineHarnessTests: XCTestCase {
 
     // MARK: - F9 §6: what the page is told about the safe area
 
+    // MARK: - F12: the build names its commit
+
+    /// Status names the commit the app was built from: the row read out when
+    /// a TestFlight build misbehaves. scripts/test-offline.sh stamps it as
+    /// make tf does; a build without LATCHKEY_GIT_SHA shows "—" here.
+    func testStatusNamesTheCommitTheAppWasBuiltFrom() async throws {
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        defer { app.terminate() }
+        _ = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 30) { $0["ws"] as? String == "ws:open" }
+
+        let list = app.openStatus()
+        let commit = app.statusRow("diag-commit", in: list)
+        XCTAssertNotNil(commit.firstMatch(of: /(^|[ ,])[0-9a-f]{12}(-dirty)?$/),
+                        "Status names a 12-digit commit: \(commit)")
+    }
+
     /// The instrument F9 is blocked on: a `viewport-fit=cover` page and an
     /// ordinary one each report the `env(safe-area-inset-*)` WebKit computed
     /// for them, and their viewport height, to the fake dashboard. A third

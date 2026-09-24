@@ -13,6 +13,14 @@
 // (AGENTS.md, DECISIONS.md 2026-09-23).
 LATCHKEY_BUNDLE_ID = net.lixom.latchkey
 
+// The commit a build was made from, shown in Settings -> Diagnostics through
+// Info.plist's LatchkeyGitSHA (F12). scripts/testflight.sh passes it on the
+// xcodebuild command line, which outranks this; everything else builds with
+// it empty and shows "—". Not computed by a build phase: that would break an
+// archive from a tree with no .git, and tie the build to the machine's state
+// rather than to its inputs.
+LATCHKEY_GIT_SHA =
+
 // Your own identity goes in Local.xcconfig next to this file (gitignored;
 // optional; docs/SETUP.md §3):
 //

@@ -169,8 +169,13 @@ ipa: framework  ## Archive + export a dev-signed .ipa for a real iOS device
 # ----- TestFlight -----
 # Needs the paid Developer Program and an App Store Connect API key in
 # app/.asc-key (docs/TESTFLIGHT.md). UPLOAD=0 stops at an App Store .ipa.
+# The dirty-tree guard (F12) runs before the framework, not as a recipe after
+# it: a stale framework rebuilds for minutes, and a dirty tree is refused in
+# under a second.
 .PHONY: tf
-tf: framework  ## Archive for the App Store and upload to TestFlight (UPLOAD=0: export only)
+tf:  ## Archive for the App Store and upload to TestFlight (UPLOAD=0: export only)
+	@UPLOAD=$(or $(UPLOAD),1) TF_CHECK_ONLY=1 ./scripts/testflight.sh
+	@$(MAKE) --no-print-directory framework
 	@UPLOAD=$(or $(UPLOAD),1) ./scripts/testflight.sh $(SWIFT_SANDBOX_FLAGS)
 
 # ----- test -----

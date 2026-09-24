@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | spec |
+| **Status** | done |
 | **Requested** | 2026-09-24, by Olof: "Don't allow `make tf` in a dirty checkout, only with full check-in. Build ID should also contain git SHA somewhere." |
 | **Revision** | none |
 | **Touches** | `app/scripts/testflight.sh`, `app/Latchkey.xcconfig`, the app's `Info.plist`, `app/App/Diagnostics/DiagnosticsView.swift`, `docs/TESTFLIGHT.md` |
@@ -119,8 +119,8 @@ demonstrate itself is only an opinion.
 |---|---|---|---|
 | The guard proves itself | `app/scripts/testflight.sh` self-test, run on every invocation | In a throwaway `git init` repo: clean passes; one modified tracked file is refused; one **untracked** `.swift` under `App/` is refused | Removing the untracked case from the guard: the self-test reports that it failed to catch a planted file, and the script aborts before archiving |
 | A real dirty tree is refused | manual, recorded in the spec log | `touch` a tracked file, run `make tf`, observe refusal *before* the archive starts | It is the observation |
-| The commit reaches the artefact | `make test-policy` host test | A built `Info.plist` carries `LatchkeyGitSHA` matching `git rev-parse --short=12 HEAD` | Dropping the `LATCHKEY_GIT_SHA=` argument: the key is absent and the test says which |
-| The row renders | L1 | Settings → Diagnostics shows a non-empty commit row | Building without the setting: the row reads `—` and the assertion names it |
+| The commit reaches the artefact | `app/scripts/testflight.sh`, after every archive (was: a `make test-policy` host test; see the log) | The archive's `Info.plist` carries `LatchkeyGitSHA` equal to the stamp taken from `git rev-parse --short=12 HEAD` | Dropping the `LATCHKEY_GIT_SHA=` argument: the key is empty and the script names both values |
+| The row renders | L1, `testStatusNamesTheCommitTheAppWasBuiltFrom` | Settings → Status shows a 12-hex commit row (`scripts/test-offline.sh` stamps its build as `make tf` does) | Building without the setting: the row reads `—` and the assertion names it |
 
 ## 7. Acceptance criteria
 
@@ -142,3 +142,24 @@ demonstrate itself is only an opinion.
 ## 9. Log
 
 Opened 2026-09-24, from two builds made that day out of a dirty tree.
+
+2026-09-24, implemented. Deviations from §4–§6, each deliberate:
+
+- **The artefact test is not a `make test-policy` host test.** A built
+  `Info.plist` exists only after an Xcode build of the app, which a ~2 s host
+  suite cannot do; checking the source plist would test an opinion. Instead
+  `testflight.sh` reads `LatchkeyGitSHA` back out of every archive it makes and
+  stops if it is not the stamp — the real artefact, on every run.
+- **The Makefile runs the guard before `framework`** (`TF_CHECK_ONLY=1`), since a
+  stale framework rebuilds with `xcodebuild` for minutes; §7.1 forbids that.
+- **`--untracked-files=all`**, so an untracked file in a new directory is named
+  itself rather than as its directory (§7.1, "every dirty path").
+- **Re-checked before upload:** the tree must still be clean and `HEAD`
+  unmoved after the archive, or the stamp would name something else.
+- The Diagnostics screen is reached as Settings → Status; the row is `Commit`.
+
+Manual observation (§6 row 2): with this change itself uncommitted, `make tf`
+refused in 0.24 s, listing all eleven modified paths, with `xcodebuild`
+replaced on `PATH` by a stub that was never called. An untracked
+`app/App/F12Experiment/Planted.swift` in the real tree was listed as
+`?? app/App/F12Experiment/Planted.swift`.

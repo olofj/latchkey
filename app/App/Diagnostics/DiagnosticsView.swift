@@ -140,6 +140,7 @@ struct DiagnosticsView: View {
             ]),
             Block(title: "App", rows: [
                 Row(label: "Version", value: Self.version),
+                Row(label: "Commit", value: Self.gitSHA),
                 Row(label: "Build", value: Self.configuration),
                 Row(label: "Profile expires", value: profile.map(Self.date)
                         ?? (Self.profileURL == nil ? "no profile (simulator or App Store build)" : "profile unreadable")),
@@ -223,6 +224,13 @@ struct DiagnosticsView: View {
     static var version: String {
         let info = Bundle.main.infoDictionary
         return "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
+    }
+
+    /// The commit the build was made from, `-dirty` if `make tf UPLOAD=0`
+    /// exported an uncommitted tree (F12). A build without the setting --
+    /// Xcode's Run, or anything from before F12 -- carries an empty value.
+    static var gitSHA: String {
+        (Bundle.main.object(forInfoDictionaryKey: "LatchkeyGitSHA") as? String)?.nonEmpty ?? "—"
     }
 
     static var configuration: String {

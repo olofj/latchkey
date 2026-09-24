@@ -110,10 +110,15 @@ if [[ $BUILD -eq 1 ]]; then
     say "TailscaleKit framework (rebuilds only if libtailscale changed; minutes if so)"
     make -C "$APP" --no-print-directory framework > "$LOG_DIR/framework.log" 2>&1 \
         || { echo "error: TailscaleKit framework build failed; see $LOG_DIR/framework.log" >&2; exit 1; }
-    say "build-for-testing (Testing configuration)"
+    # The commit, stamped as make tf stamps it (F12), so Status has a row to
+    # show; -dirty when the tree is, since a test build is taken from disk.
+    GIT_SHA=$(git -C "$ROOT" rev-parse --short=12 HEAD)
+    [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=all)" ]] || GIT_SHA+=-dirty
+    say "build-for-testing (Testing configuration, commit $GIT_SHA)"
     (cd "$APP" && xcodebuild build-for-testing -project Latchkey.xcodeproj -scheme Latchkey \
         -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \
-        -derivedDataPath build/DerivedData "${SANDBOX_FLAGS[@]}" > "$LOG_DIR/build.log" 2>&1) \
+        -derivedDataPath build/DerivedData LATCHKEY_GIT_SHA="$GIT_SHA" \
+        "${SANDBOX_FLAGS[@]}" > "$LOG_DIR/build.log" 2>&1) \
         || { echo "error: build failed; see $LOG_DIR/build.log" >&2; exit 1; }
 fi
 
