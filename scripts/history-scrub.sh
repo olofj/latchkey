@@ -26,12 +26,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-TAILNET="${1:-}"
-if [[ -z "$TAILNET" ]]; then
-    echo "usage: scripts/history-scrub.sh <real-tailnet-name>" >&2
-    echo "  e.g. scripts/history-scrub.sh something.ts.net" >&2
+if [[ $# -eq 0 ]]; then
+    echo "usage: scripts/history-scrub.sh <real-tailnet-name> [more...]" >&2
+    echo "  e.g. scripts/history-scrub.sh something.ts.net older.ts.net" >&2
+    echo "  More than one, because more than one turned out to be in here: a" >&2
+    echo "  tailnet the project had used earlier was still named in app code" >&2
+    echo "  and in a commit message." >&2
     exit 2
 fi
+TAILNET="$*"
 
 # --- refuse to run on anything but a clean, unpushed, idle repository --------
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -79,7 +82,7 @@ echo "::: rewritten: $BEFORE_COUNT commits -> $AFTER_COUNT"
 # first scrub's verification was killed partway and printed nothing, which is
 # worse than a slow check because it reads as success.
 echo "::: verification"
-if ! python3 "$ROOT/scripts/history-verify.py" "$TAILNET"; then
+if ! python3 "$ROOT/scripts/history-verify.py" "$@"; then
     echo "::: FAILED -- the previous history is at $BACKUP and refs/original/" >&2
     exit 1
 fi

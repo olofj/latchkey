@@ -5,10 +5,11 @@ Not run by hand. `scripts/history-scrub.sh` drives it.
 
 WHAT COMES OUT OF HISTORY, AND WHY
 ----------------------------------
-1. **The owner's real tailnet name.** It is the one genuine secret in this
-   repository: it names his private network, and the repository is about to be
+1. **The owner's real tailnet names.** They are the one genuine secret in this
+   repository: they name his private networks, and the repository is about to be
    published. Replaced with a placeholder rather than deleted, so the sentences
-   around it still parse.
+   around them still parse. Plural, and case-insensitive, both learned the hard
+   way -- see `tailnet_patterns` below.
 
 2. **Both former product names.** The name was trademark-encumbered, which is
    why the product was renamed at all; leaving 390 commits full of it in a
@@ -20,9 +21,16 @@ WHAT STAYS, DELIBERATELY
 * **Kiro Crew**, in 51 commits. A different product -- an official Kiro
   project, not ours -- and this app is its client, so the history is *correct*
   to name it. It is also load-bearing in the code: discovery recognises a
-  gateway by matching the manifest literal. Its lowercase spelling contains our
-  old name, so it is masked before substitution, exactly as
-  `scripts/rename-to-latchkey.py` does.
+  gateway by matching the manifest literal. The substitution rule lives in
+  `scripts/product_names.py`, shared with `scripts/rename-to-latchkey.py`: one
+  definition, because the first version of this script had its own copy, the two
+  drifted, and a spelling the rename missed was a spelling this missed too.
+
+  That shared rule is a PATTERN, not a table of spellings, for a reason this
+  script caused: a table of old spellings is a file full of old spellings, so an
+  earlier run of this scrub rewrote both scripts' own rules into
+  `("Latchkey", "Latchkey")` and left the rename tool's `--check` reporting every
+  correctly-named file in the repository as contaminated.
 
 * **Every IP address.** Surveyed before writing this: every address in the
   history outside the vendored tree is a test fixture, a documentation example,
@@ -42,53 +50,60 @@ both sides of their diffs say Latchkey -- and `--prune-empty` drops them.
 """
 
 import os
+import re
 import sys
 
-REAL_TAILNET = os.environ.get("SCRUB_TAILNET", "")
+from product_names import rewrite
+
+# Space-separated, because more than one real tailnet turned out to be in here.
+REAL_TAILNETS = [t for t in os.environ.get("SCRUB_TAILNET", "").split() if t]
 PLACEHOLDER = "example.ts.net"
-
-PRESERVE = [
-    "KiroCrew", "Kiro Crew", "kirocrew", "kiro_crew", "KIROCREW", "KIRO_CREW",
-    "kiro-crew",
-    "aperture-plus", "aperture-ios-authkey", "APERTURE_AUTHKEY",
-    "APERTURE_EPHEMERAL", "tailscale/aperture",
-]
-
-SUBS = [
-    ("Latchkey", "Latchkey"),
-    ("Latchkey", "Latchkey"),
-    ("Latchkey", "Latchkey"),
-    ("Latchkey", "Latchkey"),
-    ("Latchkey", "Latchkey"),
-    ("Latchkey", "Latchkey"),
-    ("LATCHKEY", "LATCHKEY"),
-    ("LATCHKEY", "LATCHKEY"),
-    ("LATCHKEY_TEST_HOOKS", "LATCHKEY_TEST_HOOKS"),
-    ("latchkey", "latchkey"),
-    ("latchkey", "latchkey"),
-    ("latchkey", "latchkey"),
-    ("latchkey", "latchkey"),
-]
 
 SKIP_DIRS = {".git", "build", "DerivedData", "node_modules", "__pycache__", ".run"}
 
 
+def tailnet_patterns(names):
+    """Case-INSENSITIVE patterns for each name and its bare first label.
+
+    The `re.IGNORECASE` is the whole lesson of the second scrub. The first two
+    runs used `str.replace`, which is case-sensitive, and one occurrence survived
+    all of it:
+
+        expectEqual(GatewayAddress.origin(of: "HTTPS://ByskeBox.example.ts.net/"), ...
+
+    -- a test of case-insensitive origin normalisation, which is exactly the kind
+    of test that spells a hostname in mixed case. It sat in the history through
+    two rewrites and a verification that reported "0 blobs", because the
+    verification looked for the same lowercase literal the scrub did. Both halves
+    of a rule agreeing on the same blind spot is not confirmation.
+
+    `scripts/check-fixture-tailnets.sh` already carried this scar: its comment
+    records matching case-insensitively but comparing the raw match, so
+    `dash.SomeReal.TS.NET` passed a check that looked like it was checking.
+
+    The longest name first, so a full domain is replaced before its own label can
+    eat the start of it.
+    """
+    out = []
+    for name in sorted(names, key=len, reverse=True):
+        out.append((re.compile(re.escape(name), re.IGNORECASE), PLACEHOLDER))
+        label = name.split(".")[0]
+        if label and label != name:
+            # The bare label appears in greps, comments and guard patterns. The
+            # first run replaced only the full domain and left 304 blobs carrying
+            # it, which is no less identifying.
+            out.append((re.compile(re.escape(label), re.IGNORECASE),
+                        PLACEHOLDER.split(".")[0]))
+    return out
+
+
+TAILNET_SUBS = tailnet_patterns(REAL_TAILNETS)
+
+
 def scrub(text):
-    for i, keep in enumerate(PRESERVE):
-        text = text.replace(keep, f"\x00P{i}\x00")
-    for old, new in SUBS:
-        text = text.replace(old, new)
-    for i, keep in enumerate(PRESERVE):
-        text = text.replace(f"\x00P{i}\x00", keep)
-    if REAL_TAILNET:
-        # The full MagicDNS domain FIRST, then the bare first label. The label
-        # alone appears in greps, comments and guard patterns -- the first run
-        # of this scrub replaced only the full domain and left 304 blobs
-        # carrying the bare name, which is no less identifying.
-        text = text.replace(REAL_TAILNET, PLACEHOLDER)
-        label = REAL_TAILNET.split(".")[0]
-        if label and label != REAL_TAILNET:
-            text = text.replace(label, PLACEHOLDER.split(".")[0])
+    text = rewrite(text)
+    for pattern, replacement in TAILNET_SUBS:
+        text = pattern.sub(replacement, text)
     return text
 
 
