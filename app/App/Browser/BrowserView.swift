@@ -30,22 +30,53 @@ struct BrowserView: View {
         // removed it, which tears down the very load being described and costs
         // a makeUIView on every retry.
         ZStack {
-            // The owned WKWebView extends beneath the notch/Dynamic Island.
-            // Pages using viewport-fit=cover can consume the real CSS safe-
-            // area values, matching Safari's edge-to-edge model.
+            // The web view is laid out INSIDE the top safe area, as it already
+            // is at the bottom (F9 §0). It used to ignore it and extend under
+            // the notch/Dynamic Island, which handed a viewport-fit=cover page
+            // a 62pt inset it was trusted to honour — and a page that is not
+            // an installed web app has every reason not to (KiroCrew 0.7.0
+            // honours it only under display-mode: standalone). Now nothing is
+            // above the page, it is told 0, and its y=0 is below the island
+            // whatever CSS the gateway ships. Do not add
+            // `.ignoresSafeArea(.container, edges: .top)` back; L1's
+            // testInsetProbesReportWhatThePageIsTold fails if you do.
             RawWebView(model: model)
                 // A WKWebView belongs to exactly one tab; prevent
                 // UIViewRepresentable from reusing the previous tab's view.
                 .id(ObjectIdentifier(model))
-                .ignoresSafeArea(.container, edges: .top)
+                // Out of the accessibility tree while a state page covers it.
+                // SwiftUI orders siblings by position, and the web view now
+                // starts 62pt below the full-screen state page, so it sorts
+                // AFTER it and wins the accessibility hit test: VoiceOver (and
+                // XCUITest's isHittable) reached the web view through the error
+                // page's buttons. Drawing order was never the problem.
+                .accessibilityHidden(!model.pageState.leavesWebViewUncovered)
             PageStateView(state: model.pageState,
                           gatewayMissing: gatewayMissing,
                           onRetry: { model.reload() },
                           onChooseGateway: onChooseGateway)
         }
-        // Cover the instant before UIViewRepresentable installs WKWebView with
-        // the same adaptive background used by RawWebView itself.
-        .background(Color.platformSystemBackground)
+#if LATCHKEY_TEST_HOOKS && canImport(UIKit)
+        .overlay(alignment: .topLeading) {
+            if TestHooks.flag("-UITestReportSafeArea") {
+                WindowSafeAreaProbe().frame(width: 1, height: 1)
+            }
+        }
+#endif
+        // A ShapeStyle background extends into the safe area, so this is also
+        // the strip the web view no longer covers, between the island and the
+        // page. It takes the page's own canvas colour, so strip and page read
+        // as one surface rather than a letterbox bar. Until the page reports
+        // one, and on our own state pages, it is the system background: the
+        // web view's own colour before its first paint (`RawWebView`).
+        .background(stripColor)
+    }
+
+    private var stripColor: Color {
+        guard model.pageState == .committed,
+              let rgb = PageScriptSources.opaqueRGB(fromCSS: model.pageBackgroundCSS)
+        else { return Color.platformSystemBackground }
+        return Color(.sRGB, red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 }
 

@@ -373,3 +373,47 @@ it is, and its `getBoundingClientRect().top`. Re-pinning means re-reading 0.7.0'
 auth code (the pin's own instructions), and that is its own piece of work.
 0.6.0's CSS is no longer installed, so whether 0.6.0 had the same rule is
 unknown. The version the owner's gateway runs is unknown too.
+
+### 2026-09-24 — §0 built: the page is told 0, and the test inverted
+
+`.ignoresSafeArea(.container, edges: .top)` is gone from `BrowserView`. L1 on the
+iPhone 17 simulator, `app/build/offline-logs/20260924-165605/suite.log`:
+
+| probe | top | innerHeight | web view `minY` | window safe-area top | strip pixel |
+|---|---|---|---|---|---|
+| cover | **0px** (was 62px) | 778 (was 840) | **62** (was 0) | 62 | rgb(32, 96, 160) |
+| plain | 0px | 778 | 62 | 62 | rgb(32, 96, 160) |
+| product | **0px** (was 62px) | 778 (was 840) | 62 | 62 | rgb(32, 96, 160) |
+
+`testInsetProbesReportWhatThePageIsTold` now asserts that every probe is told 0 and
+that the web view starts at the window's safe-area top. The expected value
+inverted from 62 to 0 because nothing is drawn above the page any more. The
+test was not weakened to make it pass. Shown able to fail twice:
+
+- **The top override restored** (`20260924-164216`): `cover: top=62px
+  innerHeight=840 webViewMinY=0.0 windowSafeTop=62.0`. The test fails on the
+  frame: `0.0 is not equal to 62.0`.
+- **The strip forced to the system background** (`20260924-164843`):
+  `strip=(255, 255, 255)`. The test fails on the colour.
+
+**The strip's colour.** It is the page's own canvas colour, as computed CSS.
+`PageScriptSources.pageBackground` reads it in the app's own content world and
+reports it to the app. Two alternatives were rejected. KiroCrew 0.7.0's
+`theme-color` is a fixed `#0d0f12`, but the page switches between twenty-odd
+dark and light `data-theme`s at runtime, so `theme-color` would paint a dark bar
+over a light page. `underPageBackgroundColor` is overridden by `RawWebView` to
+stop the pre-paint flash, so reading it returns that override, not the page's
+colour. The strip falls back to the system background on the app's own state
+pages and until the page reports a colour.
+
+**A regression the layout change caused, and fixed.** The first L1 run after
+the change failed both proxy-gone tests on every run: `Details` existed but was
+not hittable. SwiftUI orders accessibility siblings by position. The
+full-screen state page starts at y=0 and the web view now starts at y=62, so the
+web view sorted after the state page and won the accessibility hit test through
+it. VoiceOver would have done the same. The web view is now
+`accessibilityHidden` while a state page covers it
+(`PageState.leavesWebViewUncovered`). This was not an intermittent failure.
+
+L1 passed in 257 s against a 240 s budget, which is 9 s over the 248 s last
+measured. The budget is unchanged.

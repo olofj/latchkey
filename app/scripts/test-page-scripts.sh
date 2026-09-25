@@ -50,3 +50,29 @@ print(String(data: try! JSONSerialization.data(withJSONObject: payload), encodin
 EOF3
 xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-fetch"
 "$OUT/print-fetch" | node scripts/test-session-fetch.js
+
+# F9 §0.1: what the page-background reporter posts, parsed for the strip.
+cat > "$OUT/main.swift" <<'EOF4'
+var failed = 0
+func check(_ css: String, _ want: (Double, Double, Double)?) {
+    let got = PageScriptSources.opaqueRGB(fromCSS: css)
+    let ok = (got == nil && want == nil)
+        || (got != nil && want != nil && abs(got!.red - want!.0) < 1e-9
+            && abs(got!.green - want!.1) < 1e-9 && abs(got!.blue - want!.2) < 1e-9)
+    print("  \(ok ? "ok  " : "FAIL") \(css.isEmpty ? "(empty)" : css)")
+    if !ok { failed += 1 }
+}
+check("rgb(32, 96, 160)", (32.0 / 255, 96.0 / 255, 160.0 / 255))
+check("rgba(13, 15, 18, 1)", (13.0 / 255, 15.0 / 255, 18.0 / 255))
+check("rgb(0 0 0)", (0, 0, 0))
+check("rgba(0, 0, 0, 0)", nil)          // transparent: the app's background would show through
+check("rgba(255, 255, 255, 0.5)", nil)  // translucent: matches nothing
+check("", nil)                          // the page paints no canvas
+check("oklch(0.2 0.01 250)", nil)       // not sRGB triplets: fall back, never guess
+check("rgb(300, 0, 0)", nil)
+check("rgb(1, 2)", nil)
+print(failed == 0 ? "page background parse: all passed" : "page background parse: \(failed) FAILED")
+if failed != 0 { fatalError() }
+EOF4
+xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/check-bg"
+"$OUT/check-bg"

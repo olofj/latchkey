@@ -40,6 +40,32 @@ struct RawWebView: UIViewRepresentable {
         webView.underPageBackgroundColor = color
     }
 }
+
+#if LATCHKEY_TEST_HOOKS
+/// L1's instrument for F9 §0.2 (`-UITestReportSafeArea`): an accessibility
+/// element whose value is the WINDOW's safe-area top, read live when the test
+/// asks. XCUITest can see the web view's frame but not the window's safe area,
+/// and the assertion is that the one starts at the other.
+struct WindowSafeAreaProbe: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView { ProbeView() }
+    func updateUIView(_ view: UIView, context: Context) {}
+
+    private final class ProbeView: UIView {
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isAccessibilityElement = true
+            accessibilityIdentifier = "window-safe-area"
+            isUserInteractionEnabled = false
+        }
+        required init?(coder: NSCoder) { fatalError("not used") }
+
+        override var accessibilityValue: String? {
+            get { window.map { "top=\(Int($0.safeAreaInsets.top.rounded()))" } ?? "no-window" }
+            set {}
+        }
+    }
+}
+#endif
 #else
 struct RawWebView: NSViewRepresentable {
     @ObservedObject var model: BrowserViewModel

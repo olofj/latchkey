@@ -134,4 +134,87 @@ enum PageScriptSources {
       if (timer !== null) { clearTimeout(timer); }
     }
     """#
+
+    /// The name `pageBackground` posts to. Registered in the app's own
+    /// content world only, like the session bridge's.
+    static let pageBackgroundHandler = "latchkeyPageBackground"
+
+    /// Reports the page's canvas colour (F9 §0.1 step 2): the strip above the
+    /// web view is tinted with it, so page and strip read as one surface.
+    ///
+    /// Why not `WKWebView.themeColor`: KiroCrew 0.7.0 declares a fixed
+    /// `theme-color` of `#0d0f12` and switches between twenty-odd dark AND
+    /// light themes at runtime by `data-theme`, so the meta tag would paint a
+    /// near-black bar above a light page. Why not `underPageBackgroundColor`:
+    /// `RawWebView` overrides it to stop the pre-paint flash, and the getter
+    /// then returns the override, not the page.
+    ///
+    /// The canvas takes `<html>`'s background, else `<body>`'s (CSS
+    /// Backgrounds §2.11.2), which is what this reads. It posts the computed
+    /// value — `rgb(…)`/`rgba(…)`, or `''` when the page paints nothing — on
+    /// load, on attribute changes to `<html>`/`<body>` (a theme switch), on
+    /// stylesheet insertion, on a colour-scheme change and after a background
+    /// transition ends, coalesced to one read per frame and only on change.
+    static let pageBackground = #"""
+    (function () {
+      var handlers = window.webkit && window.webkit.messageHandlers;
+      var handler = handlers && handlers.latchkeyPageBackground;
+      if (!handler) { return; }
+      var last = null, pending = false;
+      function clear(c) { return !c || c === 'transparent' || /^rgba\(.*,\s*0\)$/.test(c); }
+      function read() {
+        pending = false;
+        var c = '';
+        try {
+          var d = document.documentElement, b = document.body;
+          c = d ? getComputedStyle(d).backgroundColor : '';
+          if (clear(c)) { c = b ? getComputedStyle(b).backgroundColor : ''; }
+          if (clear(c)) { c = ''; }
+        } catch (e) { c = ''; }
+        if (c === last) { return; }
+        last = c;
+        try { handler.postMessage(c); } catch (e) {}
+      }
+      function schedule() {
+        if (pending) { return; }
+        pending = true;
+        requestAnimationFrame(read);
+      }
+      var observer = new MutationObserver(function () {
+        if (document.head) { observer.observe(document.head, {childList: true}); }
+        if (document.body) { observer.observe(document.body, {attributes: true}); }
+        schedule();
+      });
+      observer.observe(document.documentElement, {attributes: true, childList: true});
+      document.addEventListener('DOMContentLoaded', schedule);
+      window.addEventListener('load', schedule);
+      document.addEventListener('transitionend', schedule, true);
+      try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', schedule); } catch (e) {}
+      schedule();
+    })();
+    """#
+
+    /// Parses what `pageBackground` posts into sRGB components in 0…1.
+    /// `nil` for anything else — an empty report, `color(…)`, `oklch(…)` —
+    /// and for a colour that is not fully opaque: the strip would then show
+    /// the app's background through it and match nothing. The caller falls
+    /// back to the system background, which is the web view's own before
+    /// the first paint.
+    nonisolated static func opaqueRGB(fromCSS css: String) -> (red: Double, green: Double, blue: Double)? {
+        let s = css.trimmingCharacters(in: .whitespaces).lowercased()
+        let body: Substring
+        if s.hasPrefix("rgba("), s.hasSuffix(")") {
+            body = s.dropFirst(5).dropLast()
+        } else if s.hasPrefix("rgb("), s.hasSuffix(")") {
+            body = s.dropFirst(4).dropLast()
+        } else {
+            return nil
+        }
+        let parts = body.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "/" })
+            .compactMap { Double($0) }
+        guard parts.count == 3 || parts.count == 4,
+              parts.prefix(3).allSatisfy({ (0...255).contains($0) }) else { return nil }
+        if parts.count == 4, parts[3] < 1 { return nil }
+        return (parts[0] / 255, parts[1] / 255, parts[2] / 255)
+    }
 }

@@ -164,6 +164,17 @@ nonisolated enum PageState: Equatable {
         case .failed: return "failed"
         }
     }
+
+    /// Whether `PageStateView` draws nothing over the web view. Holding,
+    /// connecting and failed each have a block, even if connecting's appears
+    /// only after a delay. `BrowserView` keeps the web view out of the
+    /// accessibility tree otherwise (F9).
+    nonisolated var leavesWebViewUncovered: Bool {
+        switch self {
+        case .idle, .committed: return true
+        case .holding, .connecting, .failed: return false
+        }
+    }
 }
 
 extension PageState.Failure.Cause {

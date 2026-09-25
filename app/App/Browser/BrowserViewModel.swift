@@ -173,6 +173,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
     @Published private(set) var estimatedProgress = 0.0
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
+    /// The page's canvas colour as computed CSS (`PageScriptSources.
+    /// pageBackground`), `""` until the page reports one. `BrowserView` tints
+    /// the strip above the web view with it (F9 §0.1).
+    @Published private(set) var pageBackgroundCSS = ""
 
     private var observers: [AnyCancellable] = []
     private var webViewObservations: [NSKeyValueObservation] = []
@@ -289,6 +293,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let configuration = Self.makeWebViewConfiguration(dataStore: dataStore)
         // Before any navigation, so they run at every document start.
         PageScripts.install(into: configuration.userContentController)
+        PageScripts.installPageBackground(into: configuration.userContentController) { [weak self] css in
+            guard let self, self.pageBackgroundCSS != css else { return }
+            self.pageBackgroundCSS = css
+        }
         session?.install(into: configuration.userContentController, host: self)
         configureWebView?(configuration)
 
@@ -299,10 +307,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // hand-built blur/gradient overlay.
         view.scrollView.topEdgeEffect.style = .soft
 #endif
-        // Keep UIKit's default automatic adjustment. With the WKWebView laid
-        // out beneath the notch, WebKit can then distinguish ordinary pages
-        // (safe rectangular viewport) from viewport-fit=cover pages (edge to
-        // edge with CSS env(safe-area-inset-*) values), as Safari does.
+        // Keep UIKit's default automatic adjustment: it is what insets
+        // ordinary pages, and L1's plain inset probe pins it (F9 §0.1 step 4).
+        // The web view is no longer laid out beneath the notch (F9 §0), so a
+        // viewport-fit=cover page is told a top inset of 0 and needs none.
         attach(view)
 
         if let pendingLoadURL {

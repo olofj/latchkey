@@ -206,6 +206,9 @@ INSET_PROBE = """<!doctype html><meta charset=utf-8>
 <meta name=viewport content="%(viewport)s">
 <title>INSET PROBE %(probe)s</title>
 <style>
+/* A canvas colour no system background matches: F9 §0.1 tints the strip above
+   the web view with the page's own, and L1 samples the strip for exactly this. */
+html { background: rgb(32, 96, 160); }
 body { margin: 0; }
 #probe { position: fixed; visibility: hidden; padding-top: env(safe-area-inset-top);
          padding-right: env(safe-area-inset-right); padding-bottom: env(safe-area-inset-bottom);

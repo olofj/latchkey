@@ -489,38 +489,93 @@ final class OfflineHarnessTests: XCTestCase {
                         "Status names a 12-digit commit: \(commit)")
     }
 
-    /// The instrument F9 is blocked on: a `viewport-fit=cover` page and an
-    /// ordinary one each report the `env(safe-area-inset-*)` WebKit computed
-    /// for them, and their viewport height, to the fake dashboard. A third
-    /// carries the product's complete viewport tag, interactive-widget included. This test
-    /// only establishes that the numbers arrive and records them; F9's tests A
-    /// and B add the assertions once §9's measurement has chosen the fix.
+    /// F9 §0.2: the web view is laid out inside the top safe area, so nothing
+    /// is above the page and every probe — `viewport-fit=cover`, an ordinary
+    /// page, and the product's complete viewport tag — is told a top inset of
+    /// **0px**, with the web view's frame starting at the window's safe-area
+    /// top. The strip between the island and the page carries the page's own
+    /// canvas colour, not a letterbox bar.
+    ///
+    /// This INVERTED on 2026-09-24. It used to record that the cover probe is
+    /// told 62px with the frame at y=0: the web view was drawn under the island
+    /// and the page trusted to inset itself, which KiroCrew 0.7.0's CSS does
+    /// only as an installed web app. "Told 0" is the stronger assertion, not a
+    /// weaker one: 0 is only right because the frame check proves the page is
+    /// really below the island. Restoring `.ignoresSafeArea(.container, edges:
+    /// .top)` in `BrowserView` fails it: cover and product report 62px again
+    /// and the frame starts at 0.
     func testInsetProbesReportWhatThePageIsTold() async throws {
         addTeardownBlock { try? await Self.post("\(Self.dashboardControl)/__mode?root=page") }
         var seen: [String: [String: Any]] = [:]
         for probe in ["cover", "plain", "product"] {
             try await Self.post("\(Self.dashboardControl)/__mode?root=\(probe)")
-            let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+            let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                             extra: ["-UITestReportSafeArea"])
             // Several reports in, so layout has settled: the first can precede
             // the web view reaching its final frame.
             let r = try await waitForInsets(probe, timeout: 40) { ($0["seq"] as? Int ?? 0) >= 3 }
+
+            let webView = app.webViews.firstMatch
+            XCTAssertTrue(webView.waitForExistence(timeout: 10), "\(probe): the web view is on screen")
+            let probeElement = app.descendants(matching: .any).matching(identifier: "window-safe-area").firstMatch
+            XCTAssertTrue(probeElement.waitForExistence(timeout: 10), "\(probe): the safe-area probe is installed")
+            let safeValue = probeElement.value as? String ?? ""
+            let safeTop = Double(safeValue.replacingOccurrences(of: "top=", with: "")) ?? -1
+            let minY = Double(webView.frame.minY)
+            let strip = stripPixel(app, y: safeTop - 4)
             app.terminate()
-            for edge in ["top", "right", "bottom", "left"] {
-                let v = r[edge] as? String ?? ""
-                XCTAssertTrue(v.hasSuffix("px") && Double(v.dropLast(2)) != nil,
-                              "\(probe): env(safe-area-inset-\(edge)) is a computed length, got \(v)")
-            }
-            XCTAssertGreaterThan(r["innerHeight"] as? Int ?? 0, 0, "\(probe): a laid-out viewport")
-            seen[probe] = r
+
+            // Recorded before asserting: a failing run must still say what it measured.
             let line = "INSET-PROBE \(probe): top=\(r["top"] ?? "-") right=\(r["right"] ?? "-")"
                 + " bottom=\(r["bottom"] ?? "-") left=\(r["left"] ?? "-")"
                 + " innerHeight=\(r["innerHeight"] ?? "-") innerWidth=\(r["innerWidth"] ?? "-")"
                 + " clientHeight=\(r["clientHeight"] ?? "-") visualViewportHeight=\(r["visualViewportHeight"] ?? "-")"
                 + " kcTop=\(r["kcTop"] ?? "-") displayMode=\(r["displayMode"] ?? "-")"
+                + " webViewMinY=\(minY) windowSafeTop=\(safeTop) strip=\(strip.map { "\($0)" } ?? "-")"
             print(line)
             add(XCTAttachment(string: line))
+            // The simulator must have something above the page, or "told 0"
+            // proves nothing: L1's iPhone 17 reports 62.
+            XCTAssertGreaterThan(safeTop, 0, "\(probe): a device with a top safe area, got \(safeValue)")
+            XCTAssertEqual(minY, safeTop, accuracy: 0.5,
+                           "\(probe): the web view starts at the window's safe-area top, not under the island")
+            XCTAssertEqual(r["top"] as? String, "0px",
+                           "\(probe): nothing is above the page any more, so it is told a top inset of 0")
+            for edge in ["right", "bottom", "left"] {
+                let v = r[edge] as? String ?? ""
+                XCTAssertTrue(v.hasSuffix("px") && Double(v.dropLast(2)) != nil,
+                              "\(probe): env(safe-area-inset-\(edge)) is a computed length, got \(v)")
+            }
+            XCTAssertGreaterThan(r["innerHeight"] as? Int ?? 0, 0, "\(probe): a laid-out viewport")
+            // The probe pages' canvas is rgb(32, 96, 160) (testing/harness/
+            // dashboard.py); the system background is white or black.
+            XCTAssertTrue(strip.map { abs($0.0 - 32) <= 6 && abs($0.1 - 96) <= 6 && abs($0.2 - 160) <= 6 } ?? false,
+                          "\(probe): the strip above the web view is the page's own colour, got \(String(describing: strip))")
+            seen[probe] = r
         }
         XCTAssertEqual(seen.count, 3, "every probe reported")
+    }
+
+    /// The screen's colour at the horizontal centre, `y` points down: below
+    /// the island and above the web view when `y` is just short of the
+    /// safe-area top. sRGB, 0–255.
+    private func stripPixel(_ app: XCUIApplication, y: Double) -> (Int, Int, Int)? {
+        guard y > 0, let cg = XCUIScreen.main.screenshot().image.cgImage else { return nil }
+        let scale = Double(cg.width) / Double(app.frame.width)
+        let px = Int(Double(cg.width) / 2), py = Int(y * scale)
+        var rgba = [UInt8](repeating: 0, count: 4)
+        let drawn: Bool = rgba.withUnsafeMutableBytes { buf in
+            guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let ctx = CGContext(data: buf.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                                      bytesPerRow: 4, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            // CoreGraphics is bottom-up: shift the image so (px, py) lands on
+            // the context's single pixel.
+            ctx.draw(cg, in: CGRect(x: -px, y: py - cg.height + 1, width: cg.width, height: cg.height))
+            return true
+        }
+        return drawn ? (Int(rgba[0]), Int(rgba[1]), Int(rgba[2])) : nil
     }
 
     private func waitForInsets(_ probe: String, timeout: TimeInterval,
