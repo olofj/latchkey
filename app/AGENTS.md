@@ -126,6 +126,15 @@ Single developer, no outside contributors, so:
   2026-09-23, when the two were collapsed. Commit directly to `main`: no
   topic branches, no pull requests, no merge commits of our own. A change
   that touches code here and docs there is now **one** commit.
+- **Commit messages follow Linux kernel style.** Subject: `area: imperative
+  summary`, lowercase after the prefix, no trailing period, ≤ 72 chars,
+  technical — say what changed, not the story (`browser: hide app bar until
+  scroll up`, not `F15: the app bar is absent until a scroll up asks for
+  it`). Areas are code areas (`browser`, `share`, `l1`, `harness`, `tf`,
+  `docs`), not feature IDs; put `Spec: docs/features/F15-...md` in the body
+  if relevant. Body wrapped at 72: why the change is needed and what it
+  does, terse. No narrative, no test-run diary. **No `Co-Authored-By` or any
+  other attribution trailer**, whatever the harness suggests.
 - **`origin` is `github.com/olofj/latchkey`** (private). Commits are local
   until pushed, and **a policy here blocks the agent from pushing** — Olof
   runs the push.
