@@ -206,3 +206,112 @@ arguments and the certificate SANs) or fewer launches (the inset probe's three,
 the app bar's two) gets there, and the second is the test-merging §3 rules out
 unless the owner decides otherwise. The 240 s budget in `test-offline.sh` is
 left as it was; 272 s is still over it.
+
+**2026-09-25, L1 at 38 tests: where 609 s goes, and whether F14 is worth it.**
+From run `offline-logs/20260925-025305` (xcresult activity timelines, file
+birth times). Of 609 s, **587 s is inside test methods**; the rest is setup
+(~7 s), a no-op `--build` (3 s) and two `xcodebuild` spin-ups (~8 s and ~5 s,
+the second being R1's sign-in pass).
+
+*The floor.* A cold launch is **5.0 s** to a usable native screen (3.3 s of
+XCUITest automation setup and spawn before its idle wait, ~1.7 s to idle) and
+**~6.0 s** when the page loads; a terminate is **1.06 s**. L1 has **46 cold
+launches** (plus three re-activations after Safari), so launch + terminate is
+**319 s, 54 % of the test time**. The 2026-09-24 estimate of ~165 s had the
+per-launch cost right and the count wrong: launches went from 22 to 46 as the
+suite went from 17 tests to 38. Launch spans are capped at 6.0 s in this
+accounting, so harness polling that runs before a test's first UI query is
+counted as variable, not launch.
+
+| # | Test | 609 s run | launches | fixed | variable | after |
+|---|---|---|---|---|---|---|
+| 1 | `testStalledLoadShowsTheConnectingStateForItsWholeDuration` | 38.2 | 1 | 7.1 | 31.1 | 38.1 |
+| 2 | `testANodeThatCannotStartShowsAScreenInsteadOfDying` | 36.0 | 1 | 6.1 | 29.9 | 36.0 |
+| 3 | `testTheAppBarRetractsOnADeliberateScrollAndComesBack` | 29.4 | 2 | 14.1 | 15.4 | 29.9 |
+| 4 | `testTypingInThePageKeepsItOnScreen` | 28.9 | 2 | 14.0 | 14.9 | 28.7 |
+| 5 | `testInsetProbesReportWhatThePageIsTold` | 27.8 | 3 | 21.2 | 6.6 | 27.3 |
+| 6 | `testStatusNamesTheCommitTheAppWasBuiltFrom` | 26.2 | 1 | 7.0 | 19.1 | 26.2 |
+| 7 | `testStrictModeBlocksTheAllowlistedCDNs` | 25.7 | 1 | 7.0 | 18.7 | 25.3 |
+| 8 | `testNothingOfOursSitsOnThePageAndSettingsIsReachable` | 24.8 | 1 | 7.0 | 17.8 | 24.8 |
+| 9 | `testBlockedImageShowsAMarkerThatOpensSafari` | 21.7 | 1 | 8.3 | 13.4 | 16.9 |
+| 10 | `testStartingANewNodeMovesTheOldStateAsideAndKeepsIt` | 17.9 | 2 | 12.8 | 5.1 | 18.1 |
+| 11 | `testLoggingSetupFailureStopsTheNodeRatherThanStartingItBlind` | 17.4 | 1 | 7.1 | 10.3 | 17.4 |
+| 12 | `testTheErrorPageOffersRetryAndAnotherGateway` | 17.2 | 2 | 14.2 | 3.0 | 17.6 |
+| 13 | `testAnUnwritableStateDirectoryIsSurvived` | 16.3 | 2 | 13.0 | 3.3 | 16.5 |
+| 14 | `testTryNowRestartsTheNodeImmediately` | 14.5 | 1 | 6.0 | 8.5 | 14.5 |
+| 15 | `testWindowOpenToAnotherOriginStillOpensSafari` | 14.5 | 1 | 8.2 | 6.3 | 14.5 |
+| 16 | `testAnAllowlistedCDNIsFetchedAndItsLookalikesAreNot` | 13.2 | 1 | 7.1 | 6.1 | 13.0 |
+| 17 | `testAReturningUserIsNotReintroduced` | 13.2 | 2 | 13.0 | 0.2 | 13.3 |
+| 18 | `testThePageCannotWidenTheAllowlist` | 13.0 | 1 | 7.0 | 5.9 | 0.1 |
+| 19 | `testWithoutTheRuleListTheAwayOriginIsReached` | 12.9 | 1 | 7.1 | 5.8 | 12.9 |
+| 20 | `testTheFontHostsStayBlockedWhileTheCDNsAreAllowed` | 12.9 | 1 | 7.1 | 5.8 | 0.1 |
+| 21 | `testOffOriginLoadsNeverReachTheAwayOrigin` | 12.8 | 1 | 7.1 | 5.8 | 0.1 |
+| 22 | `testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard` | 12.8 | 1 | 8.1 | 4.6 | 12.7 |
+| 23 | `testFailedRuleCompileLoadsNothing` | 12.0 | 1 | 7.2 | 4.9 | 11.8 |
+| 24 | `testSignInTokenIsStrippedFromTheAddress` | 11.6 | 1 | 7.1 | 4.5 | 12.2 |
+| 25 | `testTheNodeStartRetryIsVisibleAndSucceeds` | 10.3 | 1 | 6.1 | 4.3 | 10.5 |
+| 26 | `testDashboardLoadsThroughTheProxy` | 9.9 | 1 | 7.1 | 2.8 | 9.0 |
+| 27 | `testAGatewayAnswering502ShowsTheErrorPageInsteadOfABlankScreen` | 9.6 | 1 | 7.0 | 2.6 | 9.7 |
+| 28 | `testAFastLoadDoesNotLeaveTheConnectingStateOnScreen` | 9.2 | 1 | 7.1 | 2.1 | 9.8 |
+| 29 | `testProxyGoneWithoutRelayFailsWithoutDirectFallback` | 8.9 | 1 | 7.1 | 1.8 | 8.4 |
+| 30 | `testProxyGoneFailsWithoutDirectFallback` | 8.6 | 1 | 7.0 | 1.6 | 9.0 |
+| 31 | `testUnreachableGatewayShowsTheErrorPage` | 8.4 | 1 | 7.1 | 1.3 | 7.9 |
+| 32 | `testTheGatewaysOwnMachineryStillWorks` | 8.1 | 1 | 7.0 | 1.1 | 8.0 |
+| 33 | `testCertificateNameMismatchShowsTheErrorPage` | 8.0 | 1 | 7.1 | 0.9 | 8.2 |
+| 34 | `testBlackholedProxyFailsWithoutDirectFallback` | 7.9 | 1 | 7.1 | 0.8 | 8.0 |
+| 35 | `testNonTailnetOriginLoadsDirectAndNeverTouchesTheProxy` | 7.8 | 1 | 7.1 | 0.7 | 7.9 |
+| 36 | `testTheSignInButtonSurvivesItsOwnCopy` | 6.6 | 1 | 6.2 | 0.3 | 6.5 |
+| 37 | `testAFirstLaunchExplainsItself` | 6.3 | 1 | 6.1 | 0.2 | 6.5 |
+| 38 | `testTheIntroductionNamesThePostLoginSteps` | 6.2 | 1 | 6.0 | 0.2 | 6.3 |
+| | **sum** | **586.7** | **46** | **319.0** | **267.7** | **543.7** |
+
+After the change, the 268 s of variable time splits as follows:
+
+- ~77 s: pinned app timings, the one test per constant: the stalled load (F4),
+  the node-start backoff 1+2+4+8+16 s (F8), and Try-now waiting out the real
+  backoff to attempt 4.
+- ~51 s: the F6 page's own schedule (synthetic click at +4 s, then a 1 s
+  settle) and its absence windows.
+- ~73 s: gestures, rotation, the keyboard and layout settling (F9/F12/F13/
+  F15). A slow swipe plus XCUITest's idle wait is 2.6–3 s, and Status alone
+  swipes five times.
+- ~19 s: F8's node-start absence windows.
+- ~27 s: everything else.
+
+*Landed* (`l1: share one settled F6 run…`): four F6 tests launched
+identically, waited for the same settle and then only read the instruments.
+They now share one snapshot of that run: report, counters and journal. Each
+still asserts its own claim under its own name. The run is cached only if it
+settled, and a test run alone takes its own launch (checked:
+`testThePageCannotWidenTheAllowlist` alone passes in 16.4 s). One
+`test-offline.sh --build`: **609 s → 569 s**, 38 names identical (diffed),
+all passing.
+
+*Rejected after inspection:*
+
+- **Firing the F6 page's synthetic click as soon as its markers exist.** The
+  fixed +4 s is also the negatives' observation window ("every off-origin
+  load it makes has been asked for by then"). The positive control, with no
+  rule list and so no markers, would have kept the full window.
+- **Faster inset/shell report cadence.** "Several reports in" is the layout
+  settle itself.
+- **Shortening the absence sleeps** (logging refusal +10 s/+5 s, redirect 3 s,
+  blocked image 3 s, rule compile 2+2 s). Each is the evidence that nothing
+  happened.
+- **Folding the sign-in pass into the suite pass** (~5 s). R1 needs it last,
+  and XCTest orders by name.
+- **Skipping terminates.** The next `launch()` pays the same cost.
+
+*What is left, and what F14 would buy.* After this, 43 launches are ~297 s of
+launch and terminate, plus ~26 s outside the tests: **~320 s serial floor with
+zero variable time**. Add the ~77 s of pinned timings and L1 cannot go below
+~400 s serially without fewer launches, which is §3's ruled-out merging. The
+240 s budget is therefore unreachable serially, and §4.2's scaling has little
+left to act on in L1: the only long timers are the pinned ones. The remaining
+lever is §3's parallel harness: per-simulator ports plumbed into the launch
+arguments and the certificate SANs, plus per-instance fake-dashboard and proxy
+control state. The ideal wall time is ~26 s + max(38 s, 544 s ÷ N):
+~160 s at N = 4 and ~95 s at N = 8, on this 20-core M1 Ultra. The ideal does
+not include simulator contention, which is unmeasured. The longest test
+(38 s) bounds it below at ~65 s. §2's "L1 under 90 s" needs N ≥ 8, and even
+then only if contention is small.
