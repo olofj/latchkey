@@ -35,24 +35,29 @@ extension TailscaleHandle {
     static let kMaxErrorMessageLength: Int = 256
 
     /// Returns the last error message in the Tailscale server as a string.
-    /// Handles messages up to kMaxErrorMessageLength bytes only.
+    ///
+    /// Latchkey: the buffer grows until the message fits. A Go error names
+    /// its path first and its cause last ("open <path>: permission denied"),
+    /// so the fixed 256 bytes lost the cause to any long path -- and on
+    /// ERANGE this returned a placeholder instead of the message at all.
     internal func getErrorMessage() -> String {
-        let buf = UnsafeMutablePointer<Int8>.allocate(capacity: Self.kMaxErrorMessageLength)
-        defer {
-            buf.deallocate()
-
-        }
-        let res = tailscale_errmsg(self, buf, 256)
-        if res != 0 {
+        var capacity = Self.kMaxErrorMessageLength
+        while true {
+            let buf = UnsafeMutablePointer<Int8>.allocate(capacity: capacity)
+            defer { buf.deallocate() }
+            let res = tailscale_errmsg(self, buf, capacity)
             switch res {
+            case 0:
+                return String(cString: buf)
+            case ERANGE where capacity < 64 * 1024:
+                capacity *= 4
+            case ERANGE:
+                return String(cString: buf)  // truncated, NUL-terminated
             case EBADF:
                 return "Bad file descriptor"
-            case ERANGE:
-                return "Error message buffer too small"
             default:
                 return "Error fetch failure: \(res)"
             }
         }
-        return String(cString: buf)
     }
 }
