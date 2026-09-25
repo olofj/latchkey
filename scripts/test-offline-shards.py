@@ -359,7 +359,8 @@ def main():
         got = log_tests(s["dir"])
         for bundle in ("suite.xcresult", "signin.xcresult"):
             for t, (result, secs, msgs) in xcresult_tests(os.path.join(s["dir"], bundle)).items():
-                got[t] = (result, secs, msgs or got.get(t, (0, 0, []))[2])
+                # The log's messages carry file:line; the xcresult's do not.
+                got[t] = (result, secs, got.get(t, (0, 0, []))[2] or msgs)
         s["state_after"] = sim_state(s["udid"])
         for t in s["tests"]:
             result, secs, msgs = got.pop(t, ("Not run", 0.0, []))
@@ -413,10 +414,10 @@ def main():
     # Failures last, each under its own name, so they are what is left on screen.
     for t, r in failed + not_run:
         print(f"\nFAILED {t}  (shard {r['shard']}, {r['sim']}, {r['result']})", flush=True)
-        for m in r["failures"] or ["(no failure message recorded)"]:
-            print(f"    {m}")
         if r["result"] == "Not run":
             print(f"    it never reported a result; see the shard's failure below")
+        for m in r["failures"] or ([] if r["result"] == "Not run" else ["(no failure message recorded)"]):
+            print(f"    {m}")
     for t in missing:
         print(f"\nFAILED {t}  (planned on no shard: a bug in the plan)")
     for k, s, why, err in shard_errors:

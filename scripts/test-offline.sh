@@ -224,7 +224,7 @@ run_tests() {   # $1 = label, $2 = tests in the pass, rest = -only-testing/-skip
             echo "error: xcodebuild ($label) was still running 60 s after its tests finished" >&2
             echo "       ($reported of $want reported); stopped it (after a runner relaunch it" >&2
             echo "       can wait 600 s for nothing)" >&2
-            kill -TERM "$pid" 2>/dev/null; wait "$pid"
+            kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
             return 1
         fi
     done
