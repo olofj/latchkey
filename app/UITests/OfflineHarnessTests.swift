@@ -450,14 +450,55 @@ final class OfflineHarnessTests: XCTestCase {
     private func waitForSingleOriginSettled(notDoc: String? = nil,
                                             timeout: TimeInterval = 40) async throws -> [String: Any] {
         let report = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: timeout) {
-            $0["page"] as? String == "single" && $0["ws"] as? String == "ws:open"
-                && $0["widened"] as? String == "done"
-                && ($0["synthetic_click"] as? String)?.hasPrefix("done") == true
-                && (notDoc == nil || $0["doc"] as? String != notDoc)
+            Self.isSettled($0) && (notDoc == nil || $0["doc"] as? String != notDoc)
         }
         // The last of them (the widening fetches) had a second to fail or land.
         try await Task.sleep(for: .seconds(1))
         return report
+    }
+
+    private static func isSettled(_ report: [String: Any]) -> Bool {
+        report["page"] as? String == "single" && report["ws"] as? String == "ws:open"
+            && report["widened"] as? String == "done"
+            && (report["synthetic_click"] as? String)?.hasPrefix("done") == true
+    }
+
+    /// Everything the harness saw of one settled run of the F6 page: the
+    /// page's report, the fake's counters and the proxy's journal, read
+    /// together once the page has settled.
+    private struct SingleOriginRun {
+        let report: [String: Any]
+        let state: [String: Any]
+        let connects: [Connect]
+        var requests: [String: Int] { state["requests"] as? [String: Int] ?? [:] }
+        var handshakes: [String: Int] { state["handshakes"] as? [String: Int] ?? [:] }
+        var paths: [String] { state["paths"] as? [String] ?? [] }
+        /// `paths` lines for `host` that did not come from Mobile Safari.
+        func inAppPaths(host: String) -> [String] {
+            paths.filter { $0.hasPrefix(host + " ") && !$0.contains("Safari/") }
+        }
+    }
+
+    private func observe(_ report: [String: Any]) async throws -> SingleOriginRun {
+        SingleOriginRun(report: report, state: try await dashboardState(), connects: try await journalConnects())
+    }
+
+    private static var defaultRun: SingleOriginRun?
+
+    /// The default F6 run (rule list on, CDNs allowed), taken by the first
+    /// test that needs it and read by the four that only observe it (F14):
+    /// they each launched the same way, waited for the same settle and then
+    /// only read the instruments, so one launch serves them all, and each
+    /// still asserts its own claim under its own name. Not cached unless it
+    /// settled, so a failed launch fails only the test that took it, and a
+    /// test run on its own takes its own.
+    private func settledDefaultRun() async throws -> SingleOriginRun {
+        if let run = Self.defaultRun { return run }
+        let app = try await launchSingleOrigin()
+        defer { app.terminate() }
+        let run = try await observe(try await waitForSingleOriginSettled())
+        if Self.isSettled(run.report) { Self.defaultRun = run }
+        return run
     }
 
     private func handshakes() async throws -> [String: Int] {
@@ -478,20 +519,20 @@ final class OfflineHarnessTests: XCTestCase {
     /// Every single-origin assertion, shared by the strict-mode test: zero
     /// requests, zero CONNECTs and zero TLS handshakes for the away origin,
     /// and nothing for the gateway's host on another port.
-    private func assertNothingReachedTheAwayOrigin(_ context: String,
-                                                   file: StaticString = #filePath, line: UInt = #line) async throws {
-        let requests = try await requestCounts()
+    private func assertNothingReachedTheAwayOrigin(_ context: String, in run: SingleOriginRun,
+                                                   file: StaticString = #filePath, line: UInt = #line) {
+        let requests = run.requests
         XCTAssertEqual(requests[Self.awayHost] ?? 0, 0,
                        "\(context): the away origin must receive ZERO requests; saw \(requests)", file: file, line: line)
-        let leaked = try await inAppPaths(host: Self.awayHost)
+        let leaked = run.inAppPaths(host: Self.awayHost)
         XCTAssertTrue(leaked.isEmpty, "\(context): no /f6/ path from the app; saw \(leaked)", file: file, line: line)
-        let connects = try await journalConnects()
+        let connects = run.connects
         XCTAssertFalse(connects.contains { $0.host == Self.awayHost },
                        "\(context): no CONNECT to the away origin; got \(connects)", file: file, line: line)
         XCTAssertFalse(connects.contains { $0.host == "dash.tail-scale.ts.net" && $0.port == 8444 },
                        "\(context): the gateway's host on another port is another origin; got \(connects)",
                        file: file, line: line)
-        let tls = try await handshakes()
+        let tls = run.handshakes
         XCTAssertEqual(tls[Self.awayHost] ?? 0, 0,
                        "\(context): no TLS handshake with the away origin, so no preconnect either; saw \(tls)",
                        file: file, line: line)
@@ -506,10 +547,7 @@ final class OfflineHarnessTests: XCTestCase {
     /// proxy's CONNECT journal, and the fake's TLS handshakes by SNI, the only
     /// one that can see a preconnect.
     func testOffOriginLoadsNeverReachTheAwayOrigin() async throws {
-        let app = try await launchSingleOrigin()
-        defer { app.terminate() }
-        _ = try await waitForSingleOriginSettled()
-        try await assertNothingReachedTheAwayOrigin("with the rule list")
+        assertNothingReachedTheAwayOrigin("with the rule list", in: try await settledDefaultRun())
     }
 
     /// F6 §6, the positive control (R10's shape): the same page without the
@@ -552,18 +590,17 @@ final class OfflineHarnessTests: XCTestCase {
     /// once or the allowlist is not what it claims. (Counts are by Host
     /// without port, so the port is read from the paths and the journal.)
     func testAnAllowlistedCDNIsFetchedAndItsLookalikesAreNot() async throws {
-        let app = try await launchSingleOrigin()
-        defer { app.terminate() }
-        let report = try await waitForSingleOriginSettled()
+        let run = try await settledDefaultRun()
+        let report = run.report
         XCTAssertEqual(report["cdn"] as? String, "ok", "esm.sh's script ran: \(report)")
-        let requests = try await requestCounts()
+        let requests = run.requests
         XCTAssertGreaterThan(requests["esm.sh"] ?? 0, 0, "esm.sh was fetched; saw \(requests)")
         for host in Self.cdnLookalikes {
             XCTAssertEqual(requests[host] ?? 0, 0, "\(host) must not be fetched; saw \(requests)")
         }
-        let cdnPort = try await inAppPaths(host: "esm.sh").filter { $0.contains("/f6/cdn-port") }
+        let cdnPort = run.inAppPaths(host: "esm.sh").filter { $0.contains("/f6/cdn-port") }
         XCTAssertTrue(cdnPort.isEmpty, "esm.sh on port 8444 must not be fetched; saw \(cdnPort)")
-        let connects = try await journalConnects()
+        let connects = run.connects
         XCTAssertFalse(connects.contains { $0.host == "esm.sh" && $0.port == 8444 },
                        "no CONNECT to esm.sh:8444; got \(connects)")
         XCTAssertFalse(connects.contains { Self.cdnLookalikes.contains($0.host) },
@@ -574,11 +611,9 @@ final class OfflineHarnessTests: XCTestCase {
     /// request count and by TLS handshake (the bundle's two preconnects are
     /// to exactly these), while esm.sh in the same run is fetched.
     func testTheFontHostsStayBlockedWhileTheCDNsAreAllowed() async throws {
-        let app = try await launchSingleOrigin()
-        defer { app.terminate() }
-        _ = try await waitForSingleOriginSettled()
-        let requests = try await requestCounts()
-        let tls = try await handshakes()
+        let run = try await settledDefaultRun()
+        let requests = run.requests
+        let tls = run.handshakes
         XCTAssertGreaterThan(requests["esm.sh"] ?? 0, 0, "the allowlist is on in this run; saw \(requests)")
         for host in Self.fontHosts {
             XCTAssertEqual(requests[host] ?? 0, 0, "\(host) must not be fetched; saw \(requests)")
@@ -590,16 +625,13 @@ final class OfflineHarnessTests: XCTestCase {
     /// script and a fetch for the away origin and for a lookalike at runtime,
     /// 2 s after load; neither reaches anything.
     func testThePageCannotWidenTheAllowlist() async throws {
-        let app = try await launchSingleOrigin()
-        defer { app.terminate() }
-        let report = try await waitForSingleOriginSettled()
-        XCTAssertEqual(report["widened"] as? String, "done")
+        let run = try await settledDefaultRun()
+        XCTAssertEqual(run.report["widened"] as? String, "done")
         for host in [Self.awayHost, "esm.sh.away.example"] {
-            let widened = try await dashboardState()["paths"] as? [String] ?? []
-            let hits = widened.filter { $0.hasPrefix(host + " ") && $0.contains("/f6/widen") }
+            let hits = run.paths.filter { $0.hasPrefix(host + " ") && $0.contains("/f6/widen") }
             XCTAssertTrue(hits.isEmpty, "\(host): the page's runtime additions must not load; saw \(hits)")
         }
-        let requests = try await requestCounts()
+        let requests = run.requests
         XCTAssertEqual(requests[Self.awayHost] ?? 0, 0, "saw \(requests)")
         XCTAssertEqual(requests["esm.sh.away.example"] ?? 0, 0, "saw \(requests)")
     }
@@ -747,11 +779,11 @@ final class OfflineHarnessTests: XCTestCase {
         XCTAssertEqual(toggle.value as? String, "0", "switched off")
         app.navigationBars["Settings"].buttons["Done"].tap()
 
-        let after = try await waitForSingleOriginSettled(notDoc: before["doc"] as? String)
-        XCTAssertNotEqual(after["cdn"] as? String, "ok", "esm.sh's script must not run in strict mode")
-        let requests = try await requestCounts()
+        let after = try await observe(try await waitForSingleOriginSettled(notDoc: before["doc"] as? String))
+        XCTAssertNotEqual(after.report["cdn"] as? String, "ok", "esm.sh's script must not run in strict mode")
+        let requests = after.requests
         XCTAssertEqual(requests["esm.sh"] ?? 0, 0, "strict mode fetches nothing from esm.sh; saw \(requests)")
-        try await assertNothingReachedTheAwayOrigin("strict mode")
+        assertNothingReachedTheAwayOrigin("strict mode", in: after)
     }
 
     // MARK: - R2: the sign-in token leaves the address
