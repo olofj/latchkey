@@ -104,3 +104,5 @@ machinery.
 ## 9. Log
 
 Opened 2026-09-24 from a measurement taken while diagnosing F9.
+
+2026-09-24: the consumer is the `NavigationStack`, which re-applies the window's bottom safe area to its content regardless of the root's `.ignoresSafeArea`; at Olof's request the page now takes 10pt of the 34pt back (`DashboardContent.bottomReclaim`), ending 24pt above the edge, clear of the home indicator, asserted in `testInsetProbesReportWhatThePageIsTold`.

@@ -523,6 +523,7 @@ final class OfflineHarnessTests: XCTestCase {
             let safeValue = probeElement.value as? String ?? ""
             let safeTop = Double(safeValue.replacingOccurrences(of: "top=", with: "")) ?? -1
             let minY = Double(webView.frame.minY)
+            let bottomGap = Double(app.windows.firstMatch.frame.maxY - webView.frame.maxY)
             let strip = stripPixel(app, y: safeTop - 4)
             app.terminate()
 
@@ -532,7 +533,7 @@ final class OfflineHarnessTests: XCTestCase {
                 + " innerHeight=\(r["innerHeight"] ?? "-") innerWidth=\(r["innerWidth"] ?? "-")"
                 + " clientHeight=\(r["clientHeight"] ?? "-") visualViewportHeight=\(r["visualViewportHeight"] ?? "-")"
                 + " kcTop=\(r["kcTop"] ?? "-") displayMode=\(r["displayMode"] ?? "-")"
-                + " webViewMinY=\(minY) windowSafeTop=\(safeTop) strip=\(strip.map { "\($0)" } ?? "-")"
+                + " webViewMinY=\(minY) bottomGap=\(bottomGap) windowSafeTop=\(safeTop) strip=\(strip.map { "\($0)" } ?? "-")"
             print(line)
             add(XCTAttachment(string: line))
             // The simulator must have something above the page, or "told 0"
@@ -541,6 +542,9 @@ final class OfflineHarnessTests: XCTestCase {
             // F15: the app bar sits between the safe-area top and the page.
             XCTAssertEqual(minY, safeTop + Self.appBarHeight, accuracy: 0.5,
                            "\(probe): the web view starts below the app bar, not under the island")
+            // F13: the page takes 10pt of the 34pt home-indicator inset, no more.
+            XCTAssertEqual(bottomGap, 24, accuracy: 0.5,
+                           "\(probe): the web view ends 24pt above the screen edge")
             XCTAssertEqual(r["top"] as? String, "0px",
                            "\(probe): nothing is above the page any more, so it is told a top inset of 0")
             for edge in ["right", "bottom", "left"] {

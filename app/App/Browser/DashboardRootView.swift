@@ -193,14 +193,25 @@ private struct DashboardContent: View {
     /// the new gateway's page may ask for a token at once, and two sheets
     /// cannot overlap (M5 review; the same rule as Settings, M4).
     @State private var pendingGateway: String?
+    /// How much of the bottom safe area the page takes (Olof, F13): 34pt on
+    /// an iPhone 17 leaves 24, still clear of the home indicator.
+    static let bottomReclaim: CGFloat = 10
 
     var body: some View {
         Group {
             if homePage.hasGateway {
                 NavigationStack {
-                    gatewayContent
+                    // The stack hands its content the window's bottom safe area
+                    // again, whatever is ignored outside it (F13): that is what
+                    // ended the page 34pt above the screen edge. The page takes
+                    // 10pt of it back and stays clear of the home indicator.
+                    GeometryReader { geo in
+                        gatewayContent
+                            .padding(.bottom, max(0, geo.safeAreaInsets.bottom - Self.bottomReclaim))
+                            .ignoresSafeArea(.container, edges: .bottom)
+                    }
 #if canImport(UIKit)
-                        .toolbar(.hidden, for: .navigationBar)
+                    .toolbar(.hidden, for: .navigationBar)
 #endif
                 }
             } else {
@@ -211,9 +222,8 @@ private struct DashboardContent: View {
                                   onSelect: { workspace.selectGateway($0) })
             }
         }
-        // The page owns the full screen, including the bottom safe area.
-        // Without this the root layout leaves an app-background strip beneath
-        // dark web content.
+        // Lets the navigation stack reach the screen edge; the page's own
+        // bottom edge is decided inside it, above.
         .ignoresSafeArea(.container, edges: .bottom)
         // No overlays (F15). Eight used to be painted over the page, at six
         // alignments, as though its corners were ours; the dashboard draws its
