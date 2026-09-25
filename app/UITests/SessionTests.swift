@@ -39,6 +39,9 @@ final class SessionTests: XCTestCase {
     static let proxyControl = "http://127.0.0.1:1081"
     static let gateway = "https://gw.tail-scale.ts.net"
     static let gatewayHost = "gw.tail-scale.ts.net"
+    /// F5: a second fake gateway, answering as dash (test-session.sh).
+    static let secondControl = "http://127.0.0.1:8482"
+    static let secondHost = "dash.tail-scale.ts.net"
 
     /// The page's own banner input; present in the tree only when visible.
     /// 0.7.x's English `api.client.paste_token_url_or_raw_token` (0.6.0's
@@ -54,6 +57,7 @@ final class SessionTests: XCTestCase {
             return
         }
         _ = try await Self.post("\(Self.gatewayControl)/__reset")
+        _ = try await Self.post("\(Self.secondControl)/__reset")
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
         _ = try await Self.post("\(Self.proxyControl)/open")
     }
@@ -586,6 +590,55 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(violations(later), 0)
     }
 
+    // MARK: - F5 §7: switching gateways keeps each one's session
+
+    /// Signed in on gw, switched to a second gateway (which asks for its own
+    /// token), and back: gw's cookies are still in the workspace's one data
+    /// store, so the page comes back signed in -- no sheet, no redemption.
+    func testSwitchingBackToAGatewayNeedsNoNewSignIn() async throws {
+        let app = launch(extra: ["-UITestKnownGateways", "\(Self.gateway),https://\(Self.secondHost)"],
+                         peers: ["gw", "dash"])
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+
+        try switchInSettings(app, to: Self.secondHost)
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30),
+                      "the second gateway has no session here, so it asks")
+        XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.secondHost),
+                      "for itself: \(element(app, "token-sheet-target").label)")
+        element(app, "token-sheet-close").tap()
+
+        let before = try await gatewayState()
+        try switchInSettings(app, to: Self.gatewayHost)
+        let answered = try await waitForCounter("auth_me_ok", above: counter(before, "auth_me_ok"))
+        XCTAssertTrue(answered, "back on gw, the page's session answers again")
+        try await Task.sleep(for: .seconds(3))
+        XCTAssertFalse(element(app, "token-sheet").exists, "and no sheet asks for a token")
+        let after = try await gatewayState()
+        XCTAssertEqual(counter(after, "redemptions"), counter(before, "redemptions"), "nothing was redeemed again")
+        XCTAssertEqual(violations(after), 0)
+    }
+
+    /// Settings → the switcher's row for `host`.
+    private func switchInSettings(_ app: XCUIApplication, to host: String,
+                                  file: StaticString = #filePath, line: UInt = #line) throws {
+        let gear = app.buttons["settings-button"].firstMatch
+        XCTAssertTrue(gear.waitForExistence(timeout: 10), file: file, line: line)
+        if !gear.isHittable {
+            let web = app.webViews.firstMatch
+            web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+                .press(forDuration: 0.05, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)))
+        }
+        gear.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), file: file, line: line)
+        let row = element(app, "gateway-switch-\(host)")
+        XCTAssertTrue(row.waitForExistence(timeout: 10) && row.isEnabled, "Settings offers \(host)", file: file, line: line)
+        row.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 10), "the switch closes Settings",
+                      file: file, line: line)
+    }
+
     // MARK: - F5: the page's instance chips at phone width
 
     /// F5 §1a, the measured bug: in portrait the header's left cell is about
@@ -749,11 +802,11 @@ final class SessionTests: XCTestCase {
 
     /// `reset` false relaunches the SAME workspace -- its data store, cookies
     /// and all -- as a user reopening the app does (R32's tests).
-    private func launch(extra: [String] = [], reset: Bool = true) -> XCUIApplication {
+    private func launch(extra: [String] = [], reset: Bool = true, peers: [String] = ["gw"]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = (reset ? ["-UITestResetWorkspaces"] : []) + [
             "-UITestHomePage", Self.gateway,
-            "-TestStatusFixture", OfflineHarnessTests.fixture(suffix: "tail-scale.ts.net", peers: ["gw"]),
+            "-TestStatusFixture", OfflineHarnessTests.fixture(suffix: "tail-scale.ts.net", peers: peers),
             "-TestProxyEndpoint", OfflineHarnessTests.proxyEndpoint,
             "-TestProxyCredential", OfflineHarnessTests.proxyCredential,
             // Keep every test's web data: test-session.sh's R1 scan must see

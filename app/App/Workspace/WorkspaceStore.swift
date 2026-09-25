@@ -81,6 +81,12 @@ struct WorkspaceDefinition: Codable, Identifiable {
 
     /// *Allow widget CDNs*, with an absent value read as on.
     var widgetCDNsAllowed: Bool { allowWidgetCDNs ?? true }
+    /// F5 §7: every gateway this workspace has been switched to, most recent
+    /// first, at most `knownGatewaysCap`. Origins only (`https://host[:port]`,
+    /// as `GatewayAddress.origin(of:)` makes them): never a path or a query,
+    /// so a pasted sign-in link cannot leave a token here (R2). Absent in
+    /// every file written before F5; read it through `knownGatewayOrigins`.
+    var knownGateways: [String]?
 
     /// The on-disk keys, unchanged. Named so the tolerant `init(from:)` below
     /// and the synthesized `encode(to:)` agree. **A new field goes here, in
@@ -88,7 +94,7 @@ struct WorkspaceDefinition: Codable, Identifiable {
     /// see the decoding rules on `init(from:)`.
     enum CodingKeys: String, CodingKey {
         case id, displayName, hostname, homePageURL, controlURL, ephemeral,
-             dataStoreUUID, lastKnownIdentity, hasEverConnected, allowWidgetCDNs
+             dataStoreUUID, lastKnownIdentity, hasEverConnected, allowWidgetCDNs, knownGateways
     }
 
     static let defaultDisplayName = "Latchkey"
@@ -172,6 +178,40 @@ struct WorkspaceDefinition: Codable, Identifiable {
 #else
         "latchkey"
 #endif
+    }
+}
+
+/// F5 §7: the switcher's remembered gateways.
+extension WorkspaceDefinition {
+    static let knownGatewaysCap = 8
+
+    /// The known gateways, most recent first. A file from before F5 has no
+    /// list: it is seeded with the current gateway, so an upgrade shows
+    /// one known gateway. Only https origins are kept, whatever the file
+    /// holds (ATS allows nothing else, R28).
+    var knownGatewayOrigins: [String] {
+        let stored = knownGateways ?? [homePageURL]
+        var seen = Set<String>()
+        return stored.compactMap(Self.knownOrigin).filter { seen.insert($0).inserted }
+            .prefix(Self.knownGatewaysCap).map { $0 }
+    }
+
+    /// Puts `origin` at the front of the list, capped.
+    mutating func rememberGateway(_ origin: String) {
+        guard let origin = Self.knownOrigin(origin) else { return }
+        knownGateways = Array(([origin] + knownGatewayOrigins.filter { $0 != origin })
+            .prefix(Self.knownGatewaysCap))
+    }
+
+    /// Takes `origin` off the list.
+    mutating func forgetGateway(_ origin: String) {
+        knownGateways = knownGatewayOrigins.filter { $0 != Self.knownOrigin(origin) }
+    }
+
+    /// `raw` as an https origin, or nil.
+    static func knownOrigin(_ raw: String) -> String? {
+        guard let origin = GatewayAddress.origin(of: raw), origin.hasPrefix("https://") else { return nil }
+        return origin
     }
 }
 
@@ -296,6 +336,15 @@ extension WorkspaceDefinition {
         } catch {
             self.allowWidgetCDNs = nil
             notes?.repaired("\(id): allowWidgetCDNs is not a Bool; widget CDNs stay allowed")
+        }
+
+        // F5: absent before F5, and not a repair. A list of the wrong shape
+        // is dropped whole: it is a convenience, rebuilt by the next switch.
+        do {
+            self.knownGateways = try c.decodeIfPresent([String].self, forKey: .knownGateways)
+        } catch {
+            self.knownGateways = nil
+            notes?.repaired("\(id): knownGateways is not a list of strings; the list starts again")
         }
     }
 

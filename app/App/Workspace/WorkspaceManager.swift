@@ -156,6 +156,18 @@ final class WorkspaceManager: ObservableObject {
             }
         }
 
+        // UI-test hook (F5): the switcher's remembered gateways, most recent
+        // first, comma-separated. How a test puts a gateway on the list that
+        // the tailnet does not carry, or one that is dead.
+        if let raw = TestHooks.value("-UITestKnownGateways") {
+            let list = raw.split(separator: ",").compactMap { WorkspaceDefinition.knownOrigin(String($0)) }
+            defs = defs.map {
+                var d = $0
+                d.knownGateways = list
+                return d
+            }
+        }
+
         if activeId == nil { activeId = defs.first?.id }
 
         // The shared launch-arg auth key (tests). Applied to every workspace —

@@ -207,6 +207,27 @@ let rows: [Row] = [
             return out
         }),
 
+    // F5 §8: knownGateways is absent from every file written before it; the
+    // list then holds the current gateway. A wrong type starts it again.
+    Row("knownGateways absent (a file from before F5)", doc([entry()]), .keep(workspaces: 1, rejected: 0),
+        check: single { d, _, repairs in
+            var out: [String] = []
+            if d.knownGateways != nil { out.append("knownGateways: \(String(describing: d.knownGateways))") }
+            if d.knownGatewayOrigins != ["https://gw.example.ts.net"] {
+                out.append("absent must read as the current gateway alone: \(d.knownGatewayOrigins)")
+            }
+            if !repairs.isEmpty { out.append("absent is not a repair: \(repairs)") }
+            return out
+        }),
+    Row("knownGateways the wrong type (a string)", doc([entry(extra: [("knownGateways", "\"https://a.example.ts.net\"")])]),
+        .keep(workspaces: 1, rejected: 0),
+        check: single { d, _, repairs in
+            var out: [String] = []
+            if d.knownGateways != nil { out.append("must read as absent: \(String(describing: d.knownGateways))") }
+            if !repairs.contains(where: { $0.contains("knownGateways") }) { out.append("the repair must be reported") }
+            return out
+        }),
+
     // The list survives one bad entry.
     Row("one entry without an id among three", doc([entry(id: A), entry(id: nil), entry(id: C)]),
         .keep(workspaces: 2, rejected: 1),
@@ -387,6 +408,38 @@ do {
         } else {
             expect(false, "allowWidgetCDNs \(value) survives save → load")
         }
+    }
+}
+
+print("== known gateways (F5 §7, §8)")
+do {
+    let dir = root.appending(path: "known")
+    try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let file = dir.appending(path: "workspaces.json")
+    var d = WorkspaceDefinition.makeDefault()
+    d.homePageURL = "https://gw.example.ts.net"
+    d.rememberGateway("https://b.example.ts.net:8443/?token=SECRET")
+    d.rememberGateway("https://a.example.ts.net/chat")
+    d.rememberGateway("https://b.example.ts.net:8443")
+    expect(d.knownGatewayOrigins == ["https://b.example.ts.net:8443", "https://a.example.ts.net", "https://gw.example.ts.net"],
+           "most recent first, one entry per origin, the pre-F5 current gateway kept: \(d.knownGatewayOrigins)")
+    expect(!(d.knownGateways ?? []).contains { $0.contains("token") || $0.contains("/chat") },
+           "origins only: no path, no query, no token (R2)")
+    d.rememberGateway("http://plain.example.ts.net")
+    expect(!d.knownGatewayOrigins.contains { $0.hasPrefix("http:") }, "an http origin is never remembered (R28)")
+    for i in 0..<9 { d.rememberGateway("https://g\(i).example.ts.net") }
+    let saved = WorkspaceStore.save([d], activeId: d.id, to: file)
+    if case .loaded(let ws, _, let repairs, _) = WorkspaceStore.load(from: file), ws.count == 1 {
+        let back = ws[0]
+        expect(saved && back.knownGateways?.count == 8 && back.knownGatewayOrigins.first == "https://g8.example.ts.net"
+               && back.knownGatewayOrigins.last == "https://g1.example.ts.net" && repairs.isEmpty,
+               "a list of 9 is kept as the 8 most recent, and survives save → load: \(back.knownGatewayOrigins)")
+        var f = back
+        f.forgetGateway("https://g5.example.ts.net")
+        expect(f.knownGatewayOrigins.count == 7 && !f.knownGatewayOrigins.contains("https://g5.example.ts.net"),
+               "forgetting removes one and only one")
+    } else {
+        expect(false, "a list of 9 is kept as the 8 most recent, and survives save → load")
     }
 }
 

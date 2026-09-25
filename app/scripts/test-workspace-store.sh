@@ -15,7 +15,8 @@ trap 'rm -rf "$OUT"' EXIT
 sed 's/^import TailscaleKit$//' App/Workspace/WorkspaceStore.swift > "$OUT/store.swift"
 cp scripts/test-workspace-store.swift "$OUT/main.swift"
 # -O, as the other host tests: they catch optimizer-only bugs (AGENTS.md).
-if ! xcrun swiftc -O "$OUT/store.swift" scripts/test-workspace-store-stubs.swift "$OUT/main.swift" \
+# GatewayAddress too: the known-gateway list (F5) keeps origins only.
+if ! xcrun swiftc -O "$OUT/store.swift" App/Browser/GatewayAddress.swift scripts/test-workspace-store-stubs.swift "$OUT/main.swift" \
         -o "$OUT/workspace-store-tests" > "$OUT/build.log" 2>&1; then
     cat "$OUT/build.log" >&2
     echo "error: the workspace store host tests do not compile" >&2

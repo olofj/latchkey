@@ -59,7 +59,12 @@ if [[ -n "${ONLY_TESTS:-}" ]]; then
 fi
 
 # ------------------------------------------------------------------ gateway --
+# F5: a second fake gateway, answering as dash.tail-scale.ts.net (a name the
+# test certificate carries and this suite otherwise never loads), for the
+# switch between two gateways.
+GW2=(GW_NAME=gateway2 GW_HOST=dash.tail-scale.ts.net GW_PORT=8445 GW_CONTROL_PORT=8482)
 teardown() {
+    make -C "$HARNESS" --no-print-directory gateway-down "${GW2[@]}" >/dev/null 2>&1 || true
     make -C "$HARNESS" --no-print-directory gateway-down >/dev/null 2>&1 || true
     make -C "$HARNESS" --no-print-directory harness-down >/dev/null 2>&1 || true
 }
@@ -86,8 +91,9 @@ make -C "$HARNESS" --no-print-directory gateway-check > "$LOG_DIR/gateway-check.
 tail -1 "$LOG_DIR/gateway-check.log" | sed 's/^/    /'
 
 say "harness up"
-make -C "$HARNESS" --no-print-directory harness-up
+make -C "$HARNESS" --no-print-directory harness-up DASH_UPSTREAM=127.0.0.1:8445
 make -C "$HARNESS" --no-print-directory gateway-up
+make -C "$HARNESS" --no-print-directory gateway-up "${GW2[@]}"
 
 # ---------------------------------------------------------------- simulator --
 say "simulator: $SIM_NAME"

@@ -198,6 +198,18 @@ struct SettingsView: View {
                 }
 
                 Section(header: Text("Gateway")) {
+                    // F5 §7: the current gateway, the others this workspace
+                    // has used, and any a sweep finds; one tap switches.
+                    GatewaySwitcherRows(viewModel: viewModel,
+                                        discovery: viewModel.workspaceForSettings.discovery,
+                                        model: viewModel.workspaceForSettings.model,
+                                        homePage: viewModel.workspaceForSettings.homePage,
+                                        pickerShown: showingGatewayPicker,
+                                        onSwitch: { origin in
+                                            viewModel.choose(origin)
+                                            // A refusal is shown in the section; Settings stays.
+                                            if viewModel.gatewayError == nil { dismissAction() }
+                                        })
                     TextField("gateway, or gateway.example.ts.net", text: $viewModel.homePage)
 #if canImport(UIKit)
                         .textInputAutocapitalization(.never)

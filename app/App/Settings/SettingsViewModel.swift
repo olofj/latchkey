@@ -29,6 +29,9 @@ final class SettingsViewModel: ObservableObject {
     @Published var homePage: String = ""
     /// F6 §4.1a: *Allow widget CDNs*, from the workspace's definition.
     @Published private(set) var allowWidgetCDNs = true
+    /// F5 §7: the gateways this workspace has been switched to, most recent
+    /// first, the current one among them.
+    @Published private(set) var knownGateways: [String] = []
 
     /// The live split-tunnel rule set: which hosts go through the tsnet SOCKS
     /// proxy vs. load DIRECT. Surfaced in Settings because the device that
@@ -95,6 +98,7 @@ final class SettingsViewModel: ObservableObject {
         self.tailnetHostName = workspace.definition.hostname
         self.homePage = workspace.homePage.url
         self.allowWidgetCDNs = workspace.definition.widgetCDNsAllowed
+        self.knownGateways = workspace.definition.knownGatewayOrigins
         observeWorkspace()
     }
 
@@ -110,6 +114,9 @@ final class SettingsViewModel: ObservableObject {
                 }
                 if self.allowWidgetCDNs != def.widgetCDNsAllowed {
                     self.allowWidgetCDNs = def.widgetCDNsAllowed
+                }
+                if self.knownGateways != def.knownGatewayOrigins {
+                    self.knownGateways = def.knownGatewayOrigins
                 }
             }
             .store(in: &observers)
@@ -165,6 +172,11 @@ final class SettingsViewModel: ObservableObject {
     func choose(_ origin: String) {
         homePage = origin
         commitGateway()
+    }
+
+    /// F5 §7: takes a gateway off the switcher's list.
+    func forgetGateway(_ origin: String) {
+        workspace.forgetGateway(origin)
     }
 
     /// Reopens the page under the list compiled for the new setting.

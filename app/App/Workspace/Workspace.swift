@@ -177,10 +177,21 @@ final class Workspace: ObservableObject, Identifiable {
     /// Makes `origin` the gateway and loads it (M5).
     func selectGateway(_ origin: String) {
         logger.log("Gateway chosen: \(origin)")
+        // F5 §7: remembered for Settings' switcher, most recent first.
+        definition.rememberGateway(origin)
+        onChange?(definition)
         setHomePage(origin)
         // The old gateway's sign-in state means nothing for the new one.
         session.reset()
         tabManager.reopenHomeTab()
+    }
+
+    /// F5 §7: takes a gateway off the switcher's list. The current one stays
+    /// the gateway; it is simply not remembered until chosen again.
+    func forgetGateway(_ origin: String) {
+        logger.log("Gateway forgotten: \(origin)")
+        definition.forgetGateway(origin)
+        onChange?(definition)
     }
 
     /// F6 §4.1a: *Allow widget CDNs*. The page is reopened, so the next load

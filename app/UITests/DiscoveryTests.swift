@@ -597,6 +597,115 @@ final class DiscoveryTests: XCTestCase {
         print("F16 DISCOVERY: searching -> loopback recovered \(String(format: "%.1f", recovered)) s")
     }
 
+    // MARK: - F5 §7: the gateway switcher in Settings
+
+    /// Two known gateways, dash (the fake dashboard, current) and gw: Settings
+    /// names the current one, labels gw from a sweep within R39's first-result
+    /// budget, and one tap loads it -- proved by gw's own request log. A
+    /// relaunch keeps the list, now with dash as the other gateway.
+    func testTheSwitcherListsTheCurrentGatewayAndSwitchesToAnother() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestHomePage", "https://dash.tail-scale.ts.net",
+                                 "-UITestKnownGateways", "https://dash.tail-scale.ts.net,https://\(Self.gatewayHost)"])
+        try await waitForDashPage()
+        try openSettings(app)
+        XCTAssertEqual(element(app, "gateway-current").value as? String, "dash.tail-scale.ts.net",
+                       "Settings names the gateway in use")
+        let row = element(app, "gateway-switch-\(Self.gatewayHost)")
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "the other known gateway has a row")
+        let shown = ContinuousClock.now
+        XCTAssertTrue(waitForValue(row, "answering", timeout: 15), "gw is labelled answering: \(row.value ?? "nil")")
+        XCTAssertLessThanOrEqual(ContinuousClock.now - shown, .seconds(5), "within R39's first-result budget")
+
+        try await resetFakes()
+        row.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 10), "a switch closes Settings")
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45), "gw loads and asks for a token")
+        let requests = try await gatewayState()["requests"] as? [String] ?? []
+        XCTAssertTrue(requests.contains("GET /"), "gw's own log has the page load: \(requests.prefix(6))")
+        app.terminate()
+
+        let again = XCUIApplication()
+        again.launchArguments = ["-TestControlURL", Self.controlURL]   // the same workspace
+        again.launch()
+        defer { again.terminate() }
+        let sheet = element(again, "token-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 60), "the relaunch opens gw")
+        element(again, "token-sheet-close").tap()
+        try openSettings(again)
+        XCTAssertEqual(element(again, "gateway-current").value as? String, Self.gatewayHost, "gw is current after a relaunch")
+        XCTAssertTrue(element(again, "gateway-switch-dash.tail-scale.ts.net").waitForExistence(timeout: 5),
+                      "and dash is remembered")
+    }
+
+    /// A known gateway that does not answer (plain serves nothing) says so
+    /// once the sweep ends, and stays tappable: the label is a forecast, and
+    /// F4 reports the real load, with its way to another gateway.
+    func testAKnownGatewayThatDoesNotAnswerIsLabelledAndF4ShowsIt() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestHomePage", "https://dash.tail-scale.ts.net",
+                                 "-UITestKnownGateways", "https://dash.tail-scale.ts.net,https://plain.tail-scale.ts.net"])
+        defer { app.terminate() }
+        try await waitForDashPage()
+        try openSettings(app)
+        let row = element(app, "gateway-switch-plain.tail-scale.ts.net")
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForValue(row, "not answering", timeout: 20), "labelled once the sweep ends: \(row.value ?? "nil")")
+        XCTAssertTrue(row.isEnabled, "and still tappable")
+        row.tap()
+        XCTAssertTrue(element(app, "nav-error-overlay").waitForExistence(timeout: 45), "F4: the failed load is shown")
+        XCTAssertTrue(element(app, "nav-error-choose-gateway").exists, "with a way to another gateway")
+    }
+
+    /// A known gateway the tailnet does not carry cannot be chosen: it would
+    /// load direct, off the tailnet, and become the sign-in origin.
+    func testAKnownGatewayOffTheTailnetCannotBeChosen() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestHomePage", "https://dash.tail-scale.ts.net",
+                                 "-UITestKnownGateways", "https://dash.tail-scale.ts.net,https://gateway.example.com"])
+        defer { app.terminate() }
+        try await waitForDashPage()
+        try openSettings(app)
+        let row = element(app, "gateway-switch-gateway.example.com")
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertEqual(row.value as? String, "not on this tailnet")
+        XCTAssertFalse(row.isEnabled, "the row is disabled")
+        row.tap()
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertTrue(app.navigationBars["Settings"].exists, "a tap does nothing: Settings stays")
+        XCTAssertEqual(element(app, "gateway-current").value as? String, "dash.tail-scale.ts.net", "and dash is still current")
+    }
+
+    /// The fake dashboard has reported a page from dash over the tailnet.
+    private func waitForDashPage() async throws {
+        for _ in 0..<120 {
+            let reports = try await dashboardState()["reports"] as? [String: Any] ?? [:]
+            if reports["dash.tail-scale.ts.net"] != nil { return }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        XCTFail("dash never loaded")
+    }
+
+    /// The gear, then Settings; the app bar may need a pull to show it (F15).
+    private func openSettings(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) throws {
+        let gear = app.buttons["settings-button"].firstMatch
+        XCTAssertTrue(gear.waitForExistence(timeout: 10), "the gear exists", file: file, line: line)
+        if !gear.isHittable {
+            let web = app.webViews.firstMatch
+            web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+                .press(forDuration: 0.05, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)))
+        }
+        gear.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "Settings opens", file: file, line: line)
+    }
+
+    /// Polls an element's accessibility value.
+    private func waitForValue(_ element: XCUIElement, _ want: String, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "value == %@", want)
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
+                                timeout: timeout) == .completed
+    }
+
     // MARK: - Helpers
 
     private func launch(extra: [String] = []) -> XCUIApplication {
