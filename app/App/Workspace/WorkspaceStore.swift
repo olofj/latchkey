@@ -69,6 +69,11 @@ struct WorkspaceDefinition: Codable, Identifiable {
     var dataStoreUUID: UUID
     /// Last-known identity, persisted for immediate display on next launch.
     var lastKnownIdentity: WorkspaceIdentity?
+    /// Set the first time this workspace's node reaches `Running` (F11 §4.2),
+    /// and never cleared. The connection gate introduces the app only while
+    /// it is false, so a returning user whose key expired is not introduced
+    /// to an app they have been using for months.
+    var hasEverConnected: Bool
 
     /// The on-disk keys, unchanged. Named so the tolerant `init(from:)` below
     /// and the synthesized `encode(to:)` agree. **A new field goes here, in
@@ -76,7 +81,7 @@ struct WorkspaceDefinition: Codable, Identifiable {
     /// see the decoding rules on `init(from:)`.
     enum CodingKeys: String, CodingKey {
         case id, displayName, hostname, homePageURL, controlURL, ephemeral,
-             dataStoreUUID, lastKnownIdentity
+             dataStoreUUID, lastKnownIdentity, hasEverConnected
     }
 
     static let defaultDisplayName = "Latchkey"
@@ -93,7 +98,8 @@ struct WorkspaceDefinition: Codable, Identifiable {
             controlURL: kDefaultControlURL,
             ephemeral: TSNetManager.launchEphemeral(),
             dataStoreUUID: UUID(),
-            lastKnownIdentity: nil
+            lastKnownIdentity: nil,
+            hasEverConnected: false
         )
     }
 
@@ -122,7 +128,9 @@ struct WorkspaceDefinition: Codable, Identifiable {
             controlURL: kDefaultControlURL,
             ephemeral: TSNetManager.launchEphemeral(),
             dataStoreUUID: recoveryDataStoreUUID,
-            lastKnownIdentity: nil
+            lastKnownIdentity: nil,
+            // A workspaces.json exists, so this install has run before.
+            hasEverConnected: true
         )
     }
 
@@ -181,6 +189,9 @@ nonisolated final class WorkspaceDecodeNotes: @unchecked Sendable {
 
 extension CodingUserInfoKey {
     static let workspaceDecodeNotes = CodingUserInfoKey(rawValue: "net.lixom.latchkey.workspaceDecodeNotes")!
+    /// The `Workspaces/` directory beside the file being decoded (a `URL`),
+    /// where a missing `hasEverConnected` looks for its evidence.
+    static let workspacesRoot = CodingUserInfoKey(rawValue: "net.lixom.latchkey.workspacesRoot")!
 }
 
 extension WorkspaceDefinition {
@@ -222,6 +233,11 @@ extension WorkspaceDefinition {
     /// - `displayName` — cosmetic; defaults to `defaultDisplayName`.
     /// - `lastKnownIdentity` — a display cache; absent, null or malformed
     ///   reads as nil and is refreshed once the node connects.
+    /// - `hasEverConnected` — absent in every file written before F11, so
+    ///   its default is the **evidence**, not `false`: true when this entry's
+    ///   `Workspaces/<id>/state` already exists (the install has run before),
+    ///   false otherwise. `false` would re-introduce the app to an existing
+    ///   user on their next key expiry (F11 §5).
     ///
     /// Every default is recorded in `WorkspaceDecodeNotes` (when the decoder
     /// carries one) so the launch log says what was filled in. Unknown keys
@@ -255,6 +271,15 @@ extension WorkspaceDefinition {
             self.lastKnownIdentity = nil
             notes?.repaired("\(id): lastKnownIdentity unreadable; it will be refreshed from the node")
         }
+
+        // Checked without creating anything: `WorkspaceStore.stateDir`
+        // creates the directory it names, which would make this always true.
+        let root = decoder.userInfo[.workspacesRoot] as? URL
+        let hasNodeDir = root.map { root in
+            FileManager.default.fileExists(
+                atPath: root.appending(path: id.uuidString).appending(path: "state").path)
+        } ?? false
+        self.hasEverConnected = Self.field(.hasEverConnected, in: c, default: hasNodeDir, id: id, notes: notes)
     }
 
     /// A field with a default: absent and null both read as the default;
@@ -527,6 +552,8 @@ enum WorkspaceStore {
         let notes = WorkspaceDecodeNotes()
         let decoder = JSONDecoder()
         decoder.userInfo[.workspaceDecodeNotes] = notes
+        decoder.userInfo[.workspacesRoot] = file.deletingLastPathComponent()
+            .appending(path: "Workspaces", directoryHint: .isDirectory)
         let env: DecodedEnvelope
         do {
             env = try decoder.decode(DecodedEnvelope.self, from: data)

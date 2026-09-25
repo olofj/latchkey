@@ -923,15 +923,116 @@ final class OfflineHarnessTests: XCTestCase {
         return last
     }
 
+    // MARK: - F11 §6: the first screen says what this is
+
+    /// A fresh install, never logged in: the gate introduces the app, lists
+    /// what happens after sign-in, and the button says what it does.
+    /// Shown to fail by reverting ConnectionGateView to the pre-F11 gate: no
+    /// `gate-intro`, and the button reads "Login".
+    func testAFirstLaunchExplainsItself() throws {
+        let app = launchAtTheGate()
+        defer { app.terminate() }
+
+        let button = app.buttons["login-button"]
+        XCTAssertTrue(button.appears(within: 20), "the gate's sign-in button is shown")
+        XCTAssertTrue(element(app, "gate-intro").exists, "a first launch shows the introduction")
+        XCTAssertTrue(element(app, "gate-intro-steps").exists, "and its what-happens-next list")
+        XCTAssertEqual(button.label, "Sign in to Tailscale", "the button names what it does")
+        XCTAssertTrue(app.staticTexts["Tailscale Status"].exists, "the status section is still there")
+    }
+
+    /// The two things that stranded the owner on 2026-09-24, after a sign-in
+    /// that worked: the new device needs approving, and it needs access to
+    /// the dashboard's machine. Shown to fail by dropping either from
+    /// `GateIntroduction.steps`: the message names the one that went missing.
+    func testTheIntroductionNamesThePostLoginSteps() throws {
+        let app = launchAtTheGate()
+        defer { app.terminate() }
+
+        let steps = element(app, "gate-intro-steps")
+        XCTAssertTrue(steps.appears(within: 20), "the what-happens-next list is shown")
+        let text = steps.label
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("approve"),
+                      "the steps must say the new device may need approval; they read: \(text)")
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("access to the machine running the dashboard"),
+                      "the steps must say it needs access to the dashboard's machine; they read: \(text)")
+    }
+
+    /// The standing test that copy on this screen cannot cost the user its
+    /// only control (F11 §4.3): at the largest accessibility text size the
+    /// sign-in button is on screen, hittable, and inside the window's safe
+    /// area. Shown to fail by replacing the gate's ScrollView with a VStack:
+    /// the words push the button below the screen.
+    func testTheSignInButtonSurvivesItsOwnCopy() throws {
+        let app = launchAtTheGate(extra: [
+            "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL",
+            "-UITestReportSafeArea",
+        ])
+        defer { app.terminate() }
+
+        let button = app.buttons["login-button"]
+        XCTAssertTrue(button.appears(within: 20), "the sign-in button exists at AccessibilityXXXL")
+        XCTAssertTrue(element(app, "gate-intro").exists,
+                      "the introduction is shown, or this test measures nothing")
+        let window = app.windows.firstMatch.frame
+        let safeTop = windowSafeTop(app)
+        let safeBottom = windowSafeBottom(app)
+        let safe = CGRect(x: window.minX, y: window.minY + safeTop, width: window.width,
+                          height: window.height - safeTop - safeBottom)
+        let frame = button.frame
+        let line = "GATE-XXXL button=\(frame) window=\(window) safeTop=\(safeTop) safeBottom=\(safeBottom)"
+        print(line)
+        add(XCTAttachment(string: line))
+        XCTAssertTrue(button.isHittable, "the sign-in button is hittable at AccessibilityXXXL: \(line)")
+        XCTAssertTrue(safe.contains(frame), "the sign-in button lies inside the safe area: \(line)")
+    }
+
+    /// A user who has connected before, whose node is logged out again (key
+    /// expiry), gets the terse gate: no introduction. Two real launches — the
+    /// first reaches Running, which is what sets `hasEverConnected` — so the
+    /// flag's write, its persistence and its read are all exercised. Shown to
+    /// fail by passing `hasEverConnected: false` to the gate.
+    func testAReturningUserIsNotReintroduced() throws {
+        let first = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        XCTAssertTrue(first.webViews.firstMatch.appears(within: 30),
+                      "the first launch connects, which records that it has")
+        first.terminate()
+
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         state: "NeedsLogin", reset: false)
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["login-button"].appears(within: 20), "the gate offers sign-in")
+        XCTAssertTrue(app.staticTexts["Tailscale Status"].exists, "with its status section")
+        XCTAssertFalse(element(app, "gate-intro").exists,
+                       "a user who has connected before is not introduced to the app again")
+    }
+
+    private func launchAtTheGate(extra: [String] = []) -> XCUIApplication {
+        launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+               state: "NeedsLogin", extra: extra)
+    }
+
+    private func windowSafeBottom(_ app: XCUIApplication) -> Double {
+        let probe = element(app, "window-safe-area-bottom")
+        XCTAssertTrue(probe.appears(within: 10), "the bottom safe-area probe is installed")
+        let value = probe.value as? String ?? ""
+        let bottom = Double(value.replacingOccurrences(of: "bottom=", with: ""))
+        XCTAssertNotNil(bottom, "the bottom safe-area probe reads a number: \(value)")
+        return bottom ?? -1
+    }
+
     // MARK: - Launch
 
+    /// `state` is the fixture's `BackendState`: `NeedsLogin` holds the app at
+    /// the connection gate (F11). `reset: false` keeps the previous launch's
+    /// workspace, for a test about what a returning user sees.
     private func launch(gateway: String, suffix: String, peers: [String],
+                        state: String = "Running", reset: Bool = true,
                         extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-UITestResetWorkspaces",
+        app.launchArguments = (reset ? ["-UITestResetWorkspaces"] : []) + [
             "-UITestHomePage", gateway,
-            "-TestStatusFixture", Self.fixture(suffix: suffix, peers: peers),
+            "-TestStatusFixture", Self.fixture(suffix: suffix, peers: peers, state: state),
             "-TestProxyEndpoint", Self.proxyEndpoint,
             "-TestProxyCredential", Self.proxyCredential,
         ] + extra
@@ -943,7 +1044,7 @@ final class OfflineHarnessTests: XCTestCase {
     /// the given peers. The 100.127.255.x addresses are never dialled — WebKit
     /// reaches every peer by name through the proxy — and sit at the far end
     /// of the CGNAT range, away from any real assignment.
-    static func fixture(suffix: String, peers: [String]) -> String {
+    static func fixture(suffix: String, peers: [String], state: String = "Running") -> String {
         func node(_ name: String, _ octet: Int) -> [String: Any] {
             ["ID": "fixture-\(name)", "HostName": name, "DNSName": "\(name).\(suffix).",
              "TailscaleIPs": ["100.127.255.\(octet)"], "Online": true,
@@ -952,7 +1053,7 @@ final class OfflineHarnessTests: XCTestCase {
         var peerMap: [String: Any] = [:]
         for (i, p) in peers.enumerated() { peerMap["nodekey:fixture-\(p)"] = node(p, 10 + i) }
         let status: [String: Any] = [
-            "Version": "fixture", "BackendState": "Running", "AuthURL": "",
+            "Version": "fixture", "BackendState": state, "AuthURL": "",
             "TailscaleIPs": ["100.127.255.1"],
             "Self": node("latchkey-iphone", 1),
             "CurrentTailnet": ["Name": suffix, "MagicDNSSuffix": suffix, "MagicDNSEnabled": true],

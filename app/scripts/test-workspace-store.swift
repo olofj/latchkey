@@ -37,6 +37,7 @@ let fullEntry: [(String, String)] = [
     ("ephemeral", "false"),
     ("dataStoreUUID", "\"\(DS)\""),
     ("lastKnownIdentity", "{\"loginName\":\"someone@example.com\",\"hostname\":\"latchkey-iphone\"}"),
+    ("hasEverConnected", "true"),
 ]
 
 func entry(id: String? = A, without: Set<String> = [], set: [String: String] = [:],
@@ -99,6 +100,7 @@ let rows: [Row] = [
             if d.homePageURL != "https://gw.example.ts.net" { out.append("homePageURL: \(d.homePageURL)") }
             if d.dataStoreUUID.uuidString != DS { out.append("dataStoreUUID: \(d.dataStoreUUID)") }
             if d.lastKnownIdentity?.loginName != "someone@example.com" { out.append("lastKnownIdentity lost") }
+            if !d.hasEverConnected { out.append("hasEverConnected lost") }
             if active?.uuidString != A { out.append("activeId: \(String(describing: active))") }
             if !repairs.isEmpty { out.append("nothing should need repair: \(repairs)") }
             return out
@@ -150,6 +152,35 @@ let rows: [Row] = [
         .keep(workspaces: 1, rejected: 0),
         check: single { d, _, _ in d.id.uuidString == A ? [] : ["id: \(d.id)"] }),
 
+    // F11 §5: hasEverConnected is absent from every file written before it
+    // existed. Its default is the evidence — the entry's node state dir —
+    // not false, or a returning user is introduced to the app again.
+    Row("hasEverConnected absent, the node's state dir exists (an upgrade)",
+        doc([entry(without: ["hasEverConnected"])]), .keep(workspaces: 1, rejected: 0),
+        special: nodeStateDir(A),
+        check: single { d, _, repairs in
+            var out: [String] = []
+            if !d.hasEverConnected { out.append("an install that has run before must not be re-introduced") }
+            if !repairs.contains(where: { $0.contains("hasEverConnected") }) { out.append("the repair must be reported") }
+            return out
+        }),
+    Row("hasEverConnected absent, no state dir", doc([entry(without: ["hasEverConnected"])]),
+        .keep(workspaces: 1, rejected: 0),
+        check: single { d, _, _ in d.hasEverConnected ? ["no node dir: nothing says this install has run"] : [] }),
+    Row("hasEverConnected absent, another entry's state dir exists", doc([entry(without: ["hasEverConnected"])]),
+        .keep(workspaces: 1, rejected: 0),
+        special: nodeStateDir(B),
+        check: single { d, _, _ in d.hasEverConnected ? ["the evidence is this entry's own dir"] : [] }),
+    Row("hasEverConnected false, with a state dir", doc([entry(set: ["hasEverConnected": "false"])]),
+        .keep(workspaces: 1, rejected: 0),
+        special: nodeStateDir(A),
+        check: single { d, _, repairs in
+            var out: [String] = []
+            if d.hasEverConnected { out.append("a stored false is kept; the dir is evidence only when the key is absent") }
+            if !repairs.isEmpty { out.append("nothing to repair: \(repairs)") }
+            return out
+        }),
+
     // The list survives one bad entry.
     Row("one entry without an id among three", doc([entry(id: A), entry(id: nil), entry(id: C)]),
         .keep(workspaces: 2, rejected: 1),
@@ -191,6 +222,16 @@ let rows: [Row] = [
             return { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
         }),
 ]
+
+/// Creates `Workspaces/<id>/state` beside the file, as a previous build
+/// leaves it.
+func nodeStateDir(_ id: String) -> (URL) -> () -> Void {
+    return { file in
+        let dir = file.deletingLastPathComponent().appending(path: "Workspaces/\(id)/state")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return {}
+    }
+}
 
 func siblings(of file: URL) -> [URL] {
     let dir = file.deletingLastPathComponent()
@@ -298,6 +339,7 @@ do {
     var d = WorkspaceDefinition.makeDefault()
     d.homePageURL = "https://gw.example.ts.net"
     d.lastKnownIdentity = WorkspaceIdentity(loginName: "someone@example.com", hostname: d.hostname)
+    d.hasEverConnected = true
     let written = WorkspaceStore.save([d], activeId: d.id, to: file)
     guard case .loaded(let ws, let active, let repairs, let rejected) = WorkspaceStore.load(from: file), ws.count == 1 else {
         expect(false, "a file this build wrote reads back"); exit(1)
@@ -305,7 +347,7 @@ do {
     let back = ws[0]
     expect(written && back.id == d.id && back.dataStoreUUID == d.dataStoreUUID && back.hostname == d.hostname
            && back.homePageURL == d.homePageURL && back.controlURL == d.controlURL && back.ephemeral == d.ephemeral
-           && back.lastKnownIdentity == d.lastKnownIdentity && active == d.id,
+           && back.lastKnownIdentity == d.lastKnownIdentity && back.hasEverConnected && active == d.id,
            "every field survives save → load")
     expect(repairs.isEmpty && rejected.isEmpty, "with nothing to repair: the keys written are the keys read")
 }

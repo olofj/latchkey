@@ -177,6 +177,7 @@ private struct WorkspaceRoot: View {
             } else {
                 ConnectionGateView(
                     statusViewModel: statusViewModel,
+                    hasEverConnected: workspace.definition.hasEverConnected,
                     onSettings: { showingSettings = true }
                 )
             }

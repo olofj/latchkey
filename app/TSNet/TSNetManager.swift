@@ -137,15 +137,17 @@ final class TSNetManager {
 
 #if LATCHKEY_TEST_HOOKS
     /// Test builds only (R11, R15). No tsnet node: the fixture's status and
-    /// `.Running` go straight onto the model, and the proxy configuration is
-    /// published through the same `proxyConfig` path production uses — relay,
-    /// factory and policy included — just pointed at the stub proxy.
+    /// its `BackendState` (`.Running` unless it names another, as F11's
+    /// NeedsLogin gate tests do) go straight onto the model, and the proxy
+    /// configuration is published through the same `proxyConfig` path
+    /// production uses — relay, factory and policy included — just pointed
+    /// at the stub proxy.
     @MainActor
     private func startFromTestFixture(_ fixture: TestNetworkFixture) {
         logger.log("TEST FIXTURE: no tsnet node; proxy \(fixture.proxyHost):\(fixture.proxyPort), \(fixture.status.Peer?.count ?? 0) peer(s)")
         model.localStatus = fixture.status
         model.tailnetName = fixture.status.CurrentTailnet?.MagicDNSSuffix
-        model.state = .Running
+        model.state = Self.ipnState(fromBackendState: fixture.status.BackendState) ?? .Running
         model.proxyConfiguration = proxyConfig(upstreamHost: fixture.proxyHost,
                                                upstreamPort: fixture.proxyPort,
                                                credential: fixture.credential)

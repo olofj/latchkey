@@ -14,18 +14,6 @@ struct StatusView: View {
 
     @ObservedObject var viewModel: StatusViewModel
 
-    /// Spins the moment the Login button's action fires — a tap acknowledgement
-    /// so a human (and a real-device session) can tell whether the tap reached
-    /// the button at all. If this spinner NEVER appears, the tap didn't reach
-    /// the button (hit-testing / an invisible overlay). If it appears but no
-    /// ASWebAuthenticationSession sheet opens, the tap registered and
-    /// `showAuth` is hanging (no authURL / bus stuck / sheet failed to
-    /// present) — see the logs in `StatusViewModel.showAuth` and
-    /// `AuthManager.showAuth` to disambiguate further. Cleared when login
-    /// completes (`needsAuth` → false) or after 2 min as a safety so the
-    /// button returns to tappable; the spinner persisting that long is itself
-    /// the "tap registered but stuck" signal.
-    @State private var isStartingLogin = false
     /// When the gate appeared, or when the node's state last changed, whichever
     /// is later (F4 §4.10) — so a node that has been "Connecting…" for a minute
     /// says so, and one that just changed state starts its 15 s afresh.
@@ -85,30 +73,12 @@ struct StatusView: View {
                         .foregroundStyle(.secondary)
                 }
                 .accessibilityIdentifier("logged-in-connecting")
-            } else if viewModel.needsAuth {
-                StatusButton(text: "Login",
-                             action: {
-                    isStartingLogin = true
-                    viewModel.showAuth()
-                    // Safety: stop spinning after 2 min even if no state
-                    // change (sheet never opened), so the button is retryable.
-                    Task {
-                        try? await Task.sleep(nanoseconds: 120_000_000_000)
-                        isStartingLogin = false
-                    }
-                },
-                             isLoading: isStartingLogin)
-                    .accessibilityIdentifier("login-button")
             }
+            // The sign-in button is not here: ConnectionGateView pins it
+            // below its scrolling content (F11 §4.3).
         }
         .padding(.vertical, 8)
-        .onChange(of: viewModel.needsAuth) { _, needsAuth in
-            if !needsAuth { isStartingLogin = false }
-        }
         .onChange(of: viewModel.statusText) { _, _ in stateSince = .now }
-        .onChange(of: viewModel.authSessionEndedGeneration) { _, _ in
-            isStartingLogin = false
-        }
     }
 
     private var iconColor: Color {
@@ -124,6 +94,48 @@ struct StatusView: View {
         default:
             return .secondary
         }
+    }
+}
+
+/// The connection gate's sign-in button (`login-button`). Its own view so the
+/// gate can pin it outside the ScrollView that holds the status and the
+/// introduction (F11 §4.3); labelled with the words the introduction uses.
+struct GateLoginButton: View {
+    @ObservedObject var viewModel: StatusViewModel
+
+    /// Spins the moment the button's action fires — a tap acknowledgement
+    /// so a human (and a real-device session) can tell whether the tap reached
+    /// the button at all. If this spinner NEVER appears, the tap didn't reach
+    /// the button (hit-testing / an invisible overlay). If it appears but no
+    /// ASWebAuthenticationSession sheet opens, the tap registered and
+    /// `showAuth` is hanging (no authURL / bus stuck / sheet failed to
+    /// present) — see the logs in `StatusViewModel.showAuth` and
+    /// `AuthManager.showAuth` to disambiguate further. Cleared when login
+    /// completes (`needsAuth` → false) or after 2 min as a safety so the
+    /// button returns to tappable; the spinner persisting that long is itself
+    /// the "tap registered but stuck" signal.
+    @State private var isStartingLogin = false
+
+    var body: some View {
+        StatusButton(text: "Sign in to Tailscale",
+                     action: {
+            isStartingLogin = true
+            viewModel.showAuth()
+            // Safety: stop spinning after 2 min even if no state
+            // change (sheet never opened), so the button is retryable.
+            Task {
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
+                isStartingLogin = false
+            }
+        },
+                     isLoading: isStartingLogin)
+            .accessibilityIdentifier("login-button")
+            .onChange(of: viewModel.needsAuth) { _, needsAuth in
+                if !needsAuth { isStartingLogin = false }
+            }
+            .onChange(of: viewModel.authSessionEndedGeneration) { _, _ in
+                isStartingLogin = false
+            }
     }
 }
 

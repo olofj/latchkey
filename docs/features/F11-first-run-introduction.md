@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Status** | spec |
+| **Status** | built; adversarial review pending |
 | **Requested** | 2026-09-24, by Olof, from the first TestFlight install: "When first bringing up the app without being signed into tailscale, it's just a big 'sign into tailscale' button. Should have an introduction about what the app does and why you need to sign in." |
 | **Revision** | none |
-| **Touches** | `app/App/Browser/ConnectionGateView.swift`, `app/App/Tailnet Status/StatusView.swift`, `app/UITests/`, `scripts/test-offline.sh` |
+| **Touches** | `app/App/Browser/ConnectionGateView.swift`, `app/App/Tailnet Status/StatusView.swift`, `app/App/Workspace/`, `app/App/Browser/RawWebView.swift`, `app/TSNet/TSNetManager.swift` (test fixture only), `app/UITests/OfflineHarnessTests.swift`, `app/scripts/test-workspace-store.swift` |
 
 ## 1. Why
 
@@ -165,3 +165,30 @@ belongs to the same family as F10 §4.4 and should use that helper once it exist
 ## 9. Log
 
 Opened 2026-09-24, from the first TestFlight install.
+
+2026-09-25, implemented. Deviations from §4–§6, each deliberate:
+
+- **The button left `StatusView`.** §4.3 pins it outside the ScrollView,
+  and it lived inside the status section, so it is now `GateLoginButton`
+  (same `login-button` identifier, same tap spinner), placed by the gate.
+  `StatusView` keeps reporting state. The two anchor tests pass unmodified.
+- **L1 reaches the gate through the fixture.** `-TestStatusFixture` now
+  honours its `BackendState` (`Running` unless it names another), so the
+  gate tests run at `NeedsLogin` with no node and no control plane. No
+  change to `scripts/test-offline.sh` was needed: it counts tests itself.
+- **Test 4 uses two launches, not a seeded flag.** The first reaches
+  `Running`, which sets and persists `hasEverConnected`; the second comes
+  up at `NeedsLogin` without a reset. It covers the write, persistence and
+  read with no new test hook.
+- **Safe area from the F9 probe.** F10 §4.4's helper does not exist yet.
+  `WindowSafeAreaProbe` gained a bottom edge (`window-safe-area-bottom`), a
+  second element so the top probe's value keeps its shape.
+- **§5 in the host tests too.** `scripts/test-workspace-store.swift` pins
+  the migration: absent key + own state dir → true, absent + no dir →
+  false, another entry's dir → false, stored false kept. The recovery
+  workspace is `true`: an unreadable `workspaces.json` means the install
+  has run before.
+- Failure evidence (one mutation per build): pre-F11 gate → test 1 "a
+  first launch shows the introduction"; each post-login step removed →
+  test 2 names it; `ScrollView` → `VStack` → test 3, button at y=2064 in
+  an 874 pt window, not hittable; gate passed `false` → test 4.

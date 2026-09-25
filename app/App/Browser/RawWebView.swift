@@ -46,21 +46,35 @@ struct RawWebView: UIViewRepresentable {
 /// element whose value is the WINDOW's safe-area top, read live when the test
 /// asks. XCUITest can see the web view's frame but not the window's safe area,
 /// and the assertion is that the one starts at the other.
+///
+/// `.bottom` is F11 §6's: the gate's sign-in button must end above the home
+/// indicator. It is a second element (`window-safe-area-bottom`, value
+/// `bottom=N`) so the top probe's value keeps the shape its readers parse.
 struct WindowSafeAreaProbe: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView { ProbeView() }
+    var edge: VerticalEdge = .top
+
+    func makeUIView(context: Context) -> UIView { ProbeView(edge: edge) }
     func updateUIView(_ view: UIView, context: Context) {}
 
     private final class ProbeView: UIView {
-        override init(frame: CGRect) {
-            super.init(frame: frame)
+        let edge: VerticalEdge
+
+        init(edge: VerticalEdge) {
+            self.edge = edge
+            super.init(frame: .zero)
             isAccessibilityElement = true
-            accessibilityIdentifier = "window-safe-area"
+            accessibilityIdentifier = edge == .top ? "window-safe-area" : "window-safe-area-bottom"
             isUserInteractionEnabled = false
         }
         required init?(coder: NSCoder) { fatalError("not used") }
 
         override var accessibilityValue: String? {
-            get { window.map { "top=\(Int($0.safeAreaInsets.top.rounded()))" } ?? "no-window" }
+            get {
+                guard let window else { return "no-window" }
+                return edge == .top
+                    ? "top=\(Int(window.safeAreaInsets.top.rounded()))"
+                    : "bottom=\(Int(window.safeAreaInsets.bottom.rounded()))"
+            }
             set {}
         }
     }

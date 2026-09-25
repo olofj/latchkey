@@ -138,6 +138,17 @@ final class Workspace: ObservableObject, Identifiable {
             .prefix(while: { [weak self] _ in self?.identity.loginName?.isEmpty != false })
             .sink { [weak self] _ in self?.refreshLoginProfile() }
             .store(in: &cancellables)
+
+        // F11 §4.2: the first `Running` is what retires the connection gate's
+        // introduction for good. Written once; never cleared.
+        manager.model.$state
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                guard let self, state == .Running, !self.definition.hasEverConnected else { return }
+                self.definition.hasEverConnected = true
+                self.onChange?(self.definition)
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Lifecycle (forwarded to the per-workspace tsnet controller)
