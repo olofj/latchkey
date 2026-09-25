@@ -74,6 +74,13 @@ struct WorkspaceDefinition: Codable, Identifiable {
     /// it is false, so a returning user whose key expired is not introduced
     /// to an app they have been using for months.
     var hasEverConnected: Bool
+    /// F6 §4.1a: whether the page may load the four widget CDNs. Optional,
+    /// and absent in every file written before F6: absent reads as `true`,
+    /// Olof's default. Read it through `widgetCDNsAllowed`.
+    var allowWidgetCDNs: Bool?
+
+    /// *Allow widget CDNs*, with an absent value read as on.
+    var widgetCDNsAllowed: Bool { allowWidgetCDNs ?? true }
 
     /// The on-disk keys, unchanged. Named so the tolerant `init(from:)` below
     /// and the synthesized `encode(to:)` agree. **A new field goes here, in
@@ -81,7 +88,7 @@ struct WorkspaceDefinition: Codable, Identifiable {
     /// see the decoding rules on `init(from:)`.
     enum CodingKeys: String, CodingKey {
         case id, displayName, hostname, homePageURL, controlURL, ephemeral,
-             dataStoreUUID, lastKnownIdentity, hasEverConnected
+             dataStoreUUID, lastKnownIdentity, hasEverConnected, allowWidgetCDNs
     }
 
     static let defaultDisplayName = "Latchkey"
@@ -233,6 +240,7 @@ extension WorkspaceDefinition {
     /// - `displayName` — cosmetic; defaults to `defaultDisplayName`.
     /// - `lastKnownIdentity` — a display cache; absent, null or malformed
     ///   reads as nil and is refreshed once the node connects.
+    /// - `allowWidgetCDNs` — optional; absent reads as on (F6 §5).
     /// - `hasEverConnected` — absent in every file written before F11, so
     ///   its default is the **evidence**, not `false`: true when this entry's
     ///   `Workspaces/<id>/state` already exists (the install has run before),
@@ -280,6 +288,15 @@ extension WorkspaceDefinition {
                 atPath: root.appending(path: id.uuidString).appending(path: "state").path)
         } ?? false
         self.hasEverConnected = Self.field(.hasEverConnected, in: c, default: hasNodeDir, id: id, notes: notes)
+
+        // F6: absent is the normal case for a file from before F6 and is not
+        // a repair; only a value of the wrong type is noted.
+        do {
+            self.allowWidgetCDNs = try c.decodeIfPresent(Bool.self, forKey: .allowWidgetCDNs)
+        } catch {
+            self.allowWidgetCDNs = nil
+            notes?.repaired("\(id): allowWidgetCDNs is not a Bool; widget CDNs stay allowed")
+        }
     }
 
     /// A field with a default: absent and null both read as the default;

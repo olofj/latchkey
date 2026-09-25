@@ -137,6 +137,12 @@ struct DiagnosticsView: View {
                 Row(label: "Last error", value: lastPageErrorSummary),
                 Row(label: "Last proxy reply", value: lastProxyReplySummary),
                 Row(label: "Web page restarts", value: "\(counters.webContentTerminations) (\(counters.webContentAutoReloads) reloaded)"),
+                // F6. Counts the page's marker script reports: images,
+                // scripts and styles only — a failed fetch is invisible to it.
+                Row(label: "Off-origin loads blocked", value: "\(counters.offOriginLoadsBlocked) (images, scripts, styles)"),
+                Row(label: "Gateway assets failed", value: "\(counters.gatewayAssetFailures)"),
+                Row(label: "Off-origin hosts contacted", value: offOriginHostsSummary),
+                Row(label: "Filter build failures", value: "\(counters.contentRulesFailures)"),
             ]),
             Block(title: "App", rows: [
                 Row(label: "Version", value: Self.version),
@@ -182,6 +188,16 @@ struct DiagnosticsView: View {
             return PageFailureText.lines(for: f).cause
         }
         return vm.navErrorMessage ?? "none"
+    }
+
+    /// F6 §4.1a: "esm.sh (14)", most-contacted first. What the page itself
+    /// saw; an allowed CDN load goes direct, so the relay never does.
+    private var offOriginHostsSummary: String {
+        let hosts = counters.offOriginHostsContacted
+        guard !hosts.isEmpty else { return "none" }
+        return hosts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .map { "\(URL(string: $0.key)?.host() ?? $0.key) (\($0.value))" }
+            .joined(separator: "\n")
     }
 
     /// The last CONNECT the tailnet proxy refused. The only place the SOCKS

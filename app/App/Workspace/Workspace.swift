@@ -57,7 +57,8 @@ final class Workspace: ObservableObject, Identifiable {
                                      session: session,
                                      // A load that failed on transport goes to the
                                      // manager, which may restart its relay (R30).
-                                     reportLoadFailure: { [manager] in manager.pageLoadFailed($0) })
+                                     reportLoadFailure: { [manager] in manager.pageLoadFailed($0) },
+                                     allowWidgetCDNs: { [weak self] in self?.definition.widgetCDNsAllowed ?? true })
     lazy var statusViewModel: StatusViewModel = {
         let vm = StatusViewModel(manager: manager)
         // F8 §4.4: the move is the workspace's, since it names the directory.
@@ -179,6 +180,17 @@ final class Workspace: ObservableObject, Identifiable {
         setHomePage(origin)
         // The old gateway's sign-in state means nothing for the new one.
         session.reset()
+        tabManager.reopenHomeTab()
+    }
+
+    /// F6 §4.1a: *Allow widget CDNs*. The page is reopened, so the next load
+    /// installs the list compiled for the new setting; the list for the old
+    /// one stays cached under its own identifier and is not reused.
+    func setAllowWidgetCDNs(_ allowed: Bool) {
+        guard definition.widgetCDNsAllowed != allowed else { return }
+        logger.log("Settings: widget CDNs \(allowed ? "allowed" : "blocked")")
+        definition.allowWidgetCDNs = allowed
+        onChange?(definition)
         tabManager.reopenHomeTab()
     }
 

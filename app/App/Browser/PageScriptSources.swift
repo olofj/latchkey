@@ -207,6 +207,142 @@ enum PageScriptSources {
     }
     """#
 
+    /// The name `blockedMarker` posts to, in the app's own content world.
+    static let blockedMarkerHandler = "kiroBlocked"
+    /// The id of the `<style>` element `blockedMarker` adds.
+    static let blockedMarkerStyleID = "latchkey-blocked-marker"
+    /// What VoiceOver reads for a blocked image, and what the L1 test finds.
+    static let blockedMarkerLabel = "Image not loaded. Tap to open in Safari."
+
+    /// Marks images the content rule list blocked, and counts (F6 §4a).
+    ///
+    /// A rule list blocks silently: the page never learns why, and the app
+    /// never sees the request. Injecting a marker element beside the image
+    /// fights React, which reconciles it away on the next render, so this
+    /// sets two attributes on the image React already owns: if React
+    /// re-renders it, the load fails again and they are set again.
+    ///
+    ///  - A capture-phase `error` listener on `document` (`error` does not
+    ///    bubble). An `img` whose http(s) source is off this document's
+    ///    origin gets `data-latchkey-blocked="<absolute url>"` and an
+    ///    `aria-label`. Off-origin `script`/`link` failures are counted as
+    ///    blocked; same-origin `img`/`script`/`link` failures are counted as
+    ///    the gateway's own — a wrong allow rule shows up as those, not as a
+    ///    mystery blank page. Counts go to native 1 s after the last one, as
+    ///    `{event: "counts", blocked, gatewayFailed}` increments: numbers,
+    ///    never URLs.
+    ///  - A `<style>` on `<html>` at document start (before `<head>` exists)
+    ///    draws the marker: a 44 pt dashed box. `min-*` is what makes an
+    ///    `alt=""` image visible at all; WebKit renders a failed one at 0×0.
+    ///    No URL in it, so it depends on neither `img-src` nor the list.
+    ///  - A capture-phase `click` listener. Trusted clicks only, so the
+    ///    page's own `el.click()` cannot send anything out; a tap on a marked
+    ///    image posts `{event: "open", url}` and does not reach the page's own
+    ///    handler (a lightbox).
+    ///  - After `load` and on a 2 s debounce after each new resource entry,
+    ///    the origins of off-origin resources the page has loaded, as
+    ///    increments `{event: "hosts", hosts: {origin: n}}`. A diagnostic of
+    ///    which allowlisted CDNs were contacted (§4.1a), never evidence that a
+    ///    block happened.
+    ///
+    /// Every frame (the one exception PageScripts' header asks to be
+    /// justified): agent images render inside same-origin widget frames too.
+    /// Runs in the app's own content world, so the page cannot post to it.
+    /// If a future bundle swallows `error` events, the marker stops appearing
+    /// and the blocking itself carries on.
+    static let blockedMarker = #"""
+    (function () {
+      var handlers = window.webkit && window.webkit.messageHandlers;
+      var handler = handlers && handlers.kiroBlocked;
+      var ATTR = 'data-latchkey-blocked';
+      var LABEL = 'Image not loaded. Tap to open in Safari.';
+      function post(m) { try { if (handler) { handler.postMessage(m); } } catch (e) {} }
+
+      function absolute(u) {
+        try {
+          var x = new URL(u, document.baseURI);
+          return (x.protocol === 'http:' || x.protocol === 'https:') ? x : null;
+        } catch (e) { return null; }
+      }
+
+      try {
+        var style = document.createElement('style');
+        style.id = 'latchkey-blocked-marker';
+        style.textContent = 'img[' + ATTR + '] { display: inline-block; min-width: 44px; min-height: 44px; ' +
+          'box-sizing: border-box; border: 1px dashed currentColor; border-radius: 6px; ' +
+          'background-color: rgba(127,127,127,.15); cursor: pointer; }';
+        document.documentElement.appendChild(style);
+      } catch (e) {}
+
+      var blocked = 0, gatewayFailed = 0, countsTimer = null;
+      function flushCounts() {
+        countsTimer = null;
+        if (!blocked && !gatewayFailed) { return; }
+        post({event: 'counts', blocked: blocked, gatewayFailed: gatewayFailed});
+        blocked = 0; gatewayFailed = 0;
+      }
+      function scheduleCounts() {
+        if (countsTimer !== null) { clearTimeout(countsTimer); }
+        countsTimer = setTimeout(flushCounts, 1000);
+      }
+
+      document.addEventListener('error', function (e) {
+        var el = e.target;
+        if (!el || !el.tagName) { return; }
+        var tag = String(el.tagName).toLowerCase(), raw = null;
+        if (tag === 'img') { raw = el.currentSrc || el.src; }
+        else if (tag === 'script') { raw = el.src; }
+        else if (tag === 'link') { raw = el.href; }
+        if (!raw) { return; }
+        var url = absolute(raw);
+        if (!url) { return; }
+        if (url.origin === location.origin) { gatewayFailed += 1; scheduleCounts(); return; }
+        blocked += 1;
+        if (tag === 'img') {
+          el.setAttribute(ATTR, url.href);
+          el.setAttribute('aria-label', LABEL);
+        }
+        scheduleCounts();
+      }, true);
+
+      document.addEventListener('click', function (e) {
+        if (!e.isTrusted) { return; }
+        var t = e.target;
+        var el = t && t.closest ? t.closest('[' + ATTR + ']') : null;
+        if (!el) { return; }
+        e.preventDefault();
+        e.stopPropagation();
+        post({event: 'open', url: el.getAttribute(ATTR)});
+      }, true);
+
+      var hosts = {}, hostsTimer = null;
+      function flushHosts() {
+        hostsTimer = null;
+        var any = false;
+        for (var k in hosts) { if (Object.prototype.hasOwnProperty.call(hosts, k)) { any = true; break; } }
+        if (!any) { return; }
+        post({event: 'hosts', hosts: hosts});
+        hosts = {};
+      }
+      function note(entries) {
+        for (var i = 0; i < entries.length; i++) {
+          var url = absolute(entries[i].name);
+          if (!url || url.origin === location.origin) { continue; }
+          hosts[url.origin] = (hosts[url.origin] || 0) + 1;
+        }
+        if (hostsTimer !== null) { clearTimeout(hostsTimer); }
+        hostsTimer = setTimeout(flushHosts, 2000);
+      }
+      try {
+        new PerformanceObserver(function (list) { note(list.getEntries()); })
+          .observe({type: 'resource', buffered: true});
+      } catch (e) {}
+      window.addEventListener('load', function () {
+        if (hostsTimer !== null) { clearTimeout(hostsTimer); flushHosts(); }
+      });
+    })();
+    """#
+
     /// The name `pageBackground` posts to. Registered in the app's own
     /// content world only, like the session bridge's.
     static let pageBackgroundHandler = "latchkeyPageBackground"

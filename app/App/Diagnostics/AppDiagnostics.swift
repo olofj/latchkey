@@ -52,6 +52,20 @@ final class AppDiagnostics: ObservableObject {
     @Published var sharesQueued = 0
     @Published var sharesFailed = 0
     @Published var sharesSwept = 0
+    /// F6: times the content rule list could not be compiled, so the page
+    /// was not loaded.
+    @Published var contentRulesFailures = 0
+    /// F6 §4a, as the page's marker script reports them: off-origin images,
+    /// scripts and styles that failed (the rule list blocked them), and the
+    /// gateway's own that failed — nonzero there means an allow rule is
+    /// wrong. Page-reported; `fetch` failures are invisible to it.
+    @Published var offOriginLoadsBlocked = 0
+    @Published var gatewayAssetFailures = 0
+    /// F6 §4.1a: off-origin hosts the page loaded resources from, by origin.
+    /// A diagnostic of which allowlisted CDNs saw this phone, never evidence
+    /// that a block happened: an allowed CDN load goes direct, so nothing
+    /// on the network side of the app can see it.
+    @Published var offOriginHostsContacted: [String: Int] = [:]
 
     private init() {}
 }

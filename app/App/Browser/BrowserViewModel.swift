@@ -213,6 +213,20 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// expanded to its FQDN before loading.
     private var allowedOrigin: String?
 
+    /// The identifier of the content rule list installed in this web view's
+    /// controller (F6 §4.3): `ContentRules.identifier(forOrigin:allowCDNs:)`
+    /// of `allowedOrigin`. **Whenever `webView.load` is called with an
+    /// http(s) URL, this names `allowedOrigin`'s list, and both are written
+    /// only in `loadResolved`.** Nil until the first install, and again
+    /// after `unloadWebView` (the next view brings a new controller).
+    private var installedRulesIdentifier: String?
+    /// Bumped by every `loadResolved`, so a compile that finishes after a
+    /// later load was asked for starts nothing (F6 §4.3, coalescing).
+    private var loadGeneration = 0
+    /// Whether the rule list admits the four widget CDNs (F6 §4.1a): the
+    /// workspace's *Allow widget CDNs*, read at each load.
+    private let allowWidgetCDNs: () -> Bool
+
     /// True while the page on screen was opened by a same-origin new-window
     /// request (KiroCrew's "pop out chat", "open in new tab"). With one window
     /// and no back button that page would otherwise strand the user, so the
@@ -241,8 +255,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
          configureWebView: ((WKWebViewConfiguration) -> Void)? = nil,
          session: SessionManager? = nil,
          openExternally: @escaping (URL) -> Void = { _ in },
-         reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)? = nil) {
+         reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)? = nil,
+         allowWidgetCDNs: @escaping () -> Bool = { true }) {
         self.tsnetModel = model
+        self.allowWidgetCDNs = allowWidgetCDNs
         self.initialURL = initialURL
         self.isHomePage = isHomePage
         self.dataStore = dataStore
@@ -298,6 +314,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let configuration = Self.makeWebViewConfiguration(dataStore: dataStore)
         // Before any navigation, so they run at every document start.
         PageScripts.install(into: configuration.userContentController)
+        PageScripts.installBlockedMarker(into: configuration.userContentController) { [weak self] message, frame in
+            self?.handleBlockedMarker(message, from: frame)
+        }
         PageScripts.installPageBackground(into: configuration.userContentController) { [weak self] css in
             guard let self, self.pageBackgroundCSS != css else { return }
             self.pageBackgroundCSS = css
@@ -375,6 +394,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         webView.uiDelegate = nil
         webViewObservations.removeAll()
         self.webView = nil
+        // The next makeWebView brings a new configuration and controller; the
+        // compiled list stays cached in the installer.
+        installedRulesIdentifier = nil
         isLoading = false
         estimatedProgress = 0
         canGoBack = false
@@ -536,13 +558,136 @@ final class BrowserViewModel: NSObject, ObservableObject {
         loadResolved(target)
     }
 
+    /// The one place app-initiated loads pass through (R3), and the choke
+    /// point for the content rule list (F6 §4.3): no http(s) load starts
+    /// before the list for its origin is installed. The first load per origin
+    /// per process waits for a compile, in F4's connecting state; every later
+    /// one finds the list cached and installs it synchronously.
     private func loadResolved(_ url: URL) {
         // App-initiated loads define what the main frame may show (R3). An
         // about:blank fallback leaves the previous origin in place, so the
-        // gateway stays loadable after it.
-        if let origin = GatewayAddress.origin(of: url.absoluteString) {
-            allowedOrigin = origin
+        // gateway stays loadable after it; an empty document fetches nothing,
+        // so it needs no list.
+        guard let origin = GatewayAddress.origin(of: url.absoluteString) else {
+            enterConnecting(url)
+            webView?.load(URLRequest(url: url, timeoutInterval: 120))
+            return
         }
+        allowedOrigin = origin
+        loadGeneration += 1
+        let generation = loadGeneration
+        let allowCDNs = allowWidgetCDNs()
+        let identifier = ContentRules.identifier(forOrigin: origin, allowCDNs: allowCDNs)
+        if installedRulesIdentifier == identifier {
+            enterConnecting(url)
+            dispatchLoad(url)
+            return
+        }
+        if ContentRulesInstaller.disabledForTesting {
+            // -UITestNoContentRules: the leak tests' positive control.
+            logger.log("CONTENT-RULES: not installed (-UITestNoContentRules)")
+            installedRulesIdentifier = identifier
+            enterConnecting(url)
+            dispatchLoad(url)
+            return
+        }
+        if let list = ContentRulesInstaller.shared.cachedList(forIdentifier: identifier) {
+            installRules(list, identifier: identifier)   // synchronous: no gap, no await
+            enterConnecting(url)
+            dispatchLoad(url)
+            return
+        }
+        // F4's connecting state, entered a step early: the compile comes
+        // before the provisional navigation F4 would otherwise derive it from.
+        enterConnecting(url)
+        Task { [weak self] in
+            await self?.installThenLoad(url, origin: origin, allowCDNs: allowCDNs,
+                                        identifier: identifier, generation: generation)
+        }
+    }
+
+    private func installThenLoad(_ url: URL, origin: String, allowCDNs: Bool,
+                                 identifier: String, generation: Int) async {
+        do {
+            let list = try await ContentRulesInstaller.shared.list(forOrigin: origin, allowCDNs: allowCDNs)
+            // Superseded by a later load, or the view went away: that one owns
+            // the page now, and exactly one load starts, the latest.
+            guard generation == loadGeneration, webView != nil else { return }
+            installRules(list, identifier: identifier)
+            dispatchLoad(url)
+        } catch {
+            guard generation == loadGeneration else { return }
+            contentRulesFailed(error, for: url)
+        }
+    }
+
+    /// Remove, add, and (by the caller) load, in one synchronous run on the
+    /// main actor, so no load can start between the old list going and the
+    /// new one arriving (F6 §4.4). `removeAllContentRuleLists` touches no
+    /// user script.
+    private func installRules(_ list: WKContentRuleList, identifier: String) {
+        guard let controller = webView?.configuration.userContentController else { return }
+        controller.removeAllContentRuleLists()
+        controller.add(list)
+        installedRulesIdentifier = identifier
+        logger.log("CONTENT-RULES: installed for the gateway (schema v\(ContentRules.schemaVersion), widget CDNs \(identifier.contains(".cdn1.") ? "allowed" : "blocked"))")
+    }
+
+    /// F6 §2: the filter could not be built, so the page is not loaded. A
+    /// single-origin promise that silently degrades to "everything allowed"
+    /// is worse than no promise. F4's failed state, with its Try again and
+    /// Choose another gateway; not `navigationError`, which would report a
+    /// transport failure to the relay (R30) for a load that never started.
+    private func contentRulesFailed(_ error: Error, for url: URL) {
+        AppDiagnostics.shared.contentRulesFailures += 1
+        logger.log("CONTENT-RULES: compile failed for the gateway: \(LogRedaction.describe(error))")
+        startupRetryTask?.cancel()
+        startupRetryTask = nil
+        startupLoad = nil
+        let ns = error as NSError
+        let shown = Self.withoutSignInToken(url)
+        navError = (error, shown)
+        navErrorKind = .other
+        navErrorURLString = shown.absoluteString
+        failedInitialURL = shown == initialURL ? shown : nil
+        let failure = pageFailure(error: ns, failedURL: shown,
+                                  cause: .filterUnavailable(domain: ns.domain, code: ns.code))
+        navErrorMessage = PageFailureText.lines(for: failure).cause
+        setPageState(.failed(failure))
+    }
+
+    /// The page's marker script (F6 §4a). Only from a frame on the gateway's
+    /// origin: the main frame and same-origin widget frames pass; a
+    /// sandboxed `srcdoc` frame is opaque, so inside an MCP-app frame the
+    /// marker draws and a tap does nothing — accepted (§4.5).
+    private func handleBlockedMarker(_ message: PageScripts.BlockedMarkerMessage, from frame: WKFrameInfo) {
+        guard SessionManager.matches(frame.securityOrigin, sessionOrigin) else {
+            logger.log("CONTENT-RULES: dropped a marker message from a frame off the gateway's origin")
+            return
+        }
+        switch message {
+        case .open(let url):
+            logger.log("Blocked image opened externally: \(url.redactedForLog)")
+            openExternally(url)
+        case .counts(let blocked, let gatewayFailed):
+            let diagnostics = AppDiagnostics.shared
+            if blocked > 0 {
+                diagnostics.offOriginLoadsBlocked += blocked
+                logger.log("CONTENT-RULES: the page reports \(blocked) off-origin load(s) blocked")
+            }
+            if gatewayFailed > 0 {
+                diagnostics.gatewayAssetFailures += gatewayFailed
+                logger.log("CONTENT-RULES: \(gatewayFailed) of the gateway's own assets failed to load")
+            }
+        case .hosts(let hosts):
+            var merged = AppDiagnostics.shared.offOriginHostsContacted
+            for (origin, n) in hosts { merged[origin, default: 0] += n }
+            AppDiagnostics.shared.offOriginHostsContacted = merged
+        }
+    }
+
+    /// F4's connecting state for a load about to start.
+    private func enterConnecting(_ url: URL) {
         // Be deliberately patient with slow private services. This does not
         // delay explicit connection failures; it only extends how long an
         // otherwise-silent request may remain pending.
@@ -556,6 +701,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
         } else {
             setPageState(.connecting(host: host, port: port, since: .now, attempt: 1))
         }
+    }
+
+    private func dispatchLoad(_ url: URL) {
+        assert(allowedOrigin.map { installedRulesIdentifier?.hasSuffix(".\($0)") == true } ?? false,
+               "F6: an http(s) load must not start before its origin's rule list is installed")
         webView?.load(URLRequest(url: url, timeoutInterval: 120))
     }
 
@@ -865,7 +1015,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
 
     private func maybeDumpLoadedPage(_ view: WKWebView) {
         guard TestHooks.flag("-UITestLogResponses") else { return }
-        let js = "JSON.stringify({href:location.origin+location.pathname,title:document.title,contentType:document.contentType,body:(document.body?document.body.innerText:'(no body)').substring(0,300)})"
+        // F6 §6: `fontsLinkRel` is the Google Fonts preload's rel — still
+        // "preload" when the list stopped it, since its onload never ran —
+        // and `webFonts` the faces actually loaded. `rules` says whether this
+        // run installed a list, so a post-run check can tell the control apart.
+        let rules = ContentRulesInstaller.disabledForTesting ? "off" : "installed"
+        let js = "JSON.stringify({href:location.origin+location.pathname,title:document.title,contentType:document.contentType,rules:'\(rules)',fontsLinkRel:(function(){var l=document.querySelector('link[href*=\"fonts.googleapis.com/css\"]');return l?l.rel:null;})(),webFonts:(document.fonts?Array.from(document.fonts).filter(function(f){return f.status==='loaded';}).map(function(f){return f.family;}):[]),body:(document.body?document.body.innerText:'(no body)').substring(0,300)})"
         view.evaluateJavaScript(js) { result, error in
             if let error { logger.log("LOADED-PAGE error: \(error)") }
             else { logger.log("LOADED-PAGE: \(result ?? "(null)")") }

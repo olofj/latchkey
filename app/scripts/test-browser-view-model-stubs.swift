@@ -36,5 +36,9 @@ final class AppDiagnostics: ObservableObject {
     @Published var webContentTerminations = 0
     @Published var webContentAutoReloads = 0
     @Published var webContentGaveUp = 0
+    @Published var contentRulesFailures = 0
+    @Published var offOriginLoadsBlocked = 0
+    @Published var gatewayAssetFailures = 0
+    @Published var offOriginHostsContacted: [String: Int] = [:]
     private init() {}
 }

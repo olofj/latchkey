@@ -71,6 +71,17 @@ EOF5
 xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-app-bar"
 "$OUT/print-app-bar" | node scripts/test-app-bar-observer.js
 
+# F6 §4a: the blocked-image marker, with the names native registers and
+# looks for, run against a fake document.
+cat > "$OUT/main.swift" <<'EOF7'
+import Foundation
+let payload = ["marker": PageScriptSources.blockedMarker, "handler": PageScriptSources.blockedMarkerHandler,
+               "styleID": PageScriptSources.blockedMarkerStyleID, "label": PageScriptSources.blockedMarkerLabel]
+print(String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!)
+EOF7
+xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-marker"
+"$OUT/print-marker" | node scripts/test-blocked-marker.js
+
 # F9 §0.1: what the page-background reporter posts, parsed for the strip.
 cat > "$OUT/main.swift" <<'EOF4'
 var failed = 0

@@ -43,7 +43,8 @@ final class BrowserTab: Identifiable, ObservableObject {
          isHomePage: Bool = false,
          session: SessionManager? = nil,
          openExternally: @escaping (URL) -> Void = { _ in },
-         reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)? = nil) {
+         reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)? = nil,
+         allowWidgetCDNs: @escaping () -> Bool = { true }) {
         self.id = id
         self.initialURL = initialURL
         self.model = model
@@ -60,7 +61,8 @@ final class BrowserTab: Identifiable, ObservableObject {
                                           isHomePage: isHomePage,
                                           session: session,
                                           openExternally: openExternally,
-                                          reportLoadFailure: reportLoadFailure)
+                                          reportLoadFailure: reportLoadFailure,
+                                          allowWidgetCDNs: allowWidgetCDNs)
 
         viewModel.$title
             .combineLatest(viewModel.$url)

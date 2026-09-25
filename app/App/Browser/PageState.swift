@@ -82,6 +82,9 @@ nonisolated enum PageState: Equatable {
             /// `URL(string:)` failed (`reportURLParseFailure`): the one real
             /// format error.
             case badAddress
+            /// F6: the content rule list that keeps the page to its gateway
+            /// could not be built, so nothing was loaded. WebKit's error.
+            case filterUnavailable(domain: String, code: Int)
             case other(domain: String, code: Int)
         }
 
@@ -195,6 +198,7 @@ extension PageState.Failure.Cause {
         case .pageCrashed: return "pageCrashed"
         case .stopped: return "stopped"
         case .badAddress: return "badAddress"
+        case .filterUnavailable: return "filterUnavailable"
         case .other: return "other"
         }
     }

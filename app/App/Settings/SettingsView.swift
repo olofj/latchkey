@@ -247,6 +247,19 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                // F6 §4.1a. The strict promise stays one switch away. No list
+                // and no "allow this origin": the four hosts are a constant
+                // in the binary, changed only in a reviewed commit.
+                Section(header: Text("Privacy")) {
+                    Toggle("Allow widget CDNs", isOn: Binding(
+                        get: { viewModel.allowWidgetCDNs },
+                        set: { viewModel.setAllowWidgetCDNs($0) }))
+                        .accessibilityIdentifier("allow-widget-cdns-toggle")
+                    Text("The dashboard loads only from its gateway. With this on, widgets may also load their code from \(ContentRules.allowedCDNHosts.joined(separator: ", ")), and each of those sees this phone's address. Fonts from Google are always blocked.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 // F3: what was shared and is not yet confirmed by a gateway.
                 ShareSettingsSection(delivery: ShareDelivery.shared, dismissSettings: dismissAction)
 

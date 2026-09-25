@@ -106,7 +106,7 @@ let rows: [Row] = [
             return out
         }),
     Row("unknown extra keys, top level and entry (a newer build's file)",
-        doc([entry(extra: [("knownGateways", "[\"https://gw.example.ts.net\"]"), ("allowWidgetCDNs", "true")])],
+        doc([entry(extra: [("knownGateways", "[\"https://gw.example.ts.net\"]"), ("futureSetting", "true")])],
             extraTop: "\"schema\": 2"),
         .keep(workspaces: 1, rejected: 0)),
     Row("activeId absent", doc([entry()], activeId: nil), .keep(workspaces: 1, rejected: 0),
@@ -178,6 +178,32 @@ let rows: [Row] = [
             var out: [String] = []
             if d.hasEverConnected { out.append("a stored false is kept; the dir is evidence only when the key is absent") }
             if !repairs.isEmpty { out.append("nothing to repair: \(repairs)") }
+            return out
+        }),
+
+    // F6 §5: allowWidgetCDNs is absent from every file written before it
+    // existed, and absent reads as on. Only a wrong type is a repair.
+    Row("allowWidgetCDNs absent (a file from before F6)", doc([entry()]), .keep(workspaces: 1, rejected: 0),
+        check: single { d, _, repairs in
+            var out: [String] = []
+            if d.allowWidgetCDNs != nil { out.append("allowWidgetCDNs: \(String(describing: d.allowWidgetCDNs))") }
+            if !d.widgetCDNsAllowed { out.append("absent must read as allowed") }
+            if !repairs.isEmpty { out.append("absent is not a repair: \(repairs)") }
+            return out
+        }),
+    Row("allowWidgetCDNs false", doc([entry(extra: [("allowWidgetCDNs", "false")])]), .keep(workspaces: 1, rejected: 0),
+        check: single { d, _, repairs in
+            var out: [String] = []
+            if d.allowWidgetCDNs != false || d.widgetCDNsAllowed { out.append("a stored false must be read: \(String(describing: d.allowWidgetCDNs))") }
+            if !repairs.isEmpty { out.append("nothing to repair: \(repairs)") }
+            return out
+        }),
+    Row("allowWidgetCDNs the wrong type (\"yes\")", doc([entry(extra: [("allowWidgetCDNs", "\"yes\"")])]),
+        .keep(workspaces: 1, rejected: 0),
+        check: single { d, _, repairs in
+            var out: [String] = []
+            if d.allowWidgetCDNs != nil || !d.widgetCDNsAllowed { out.append("must read as absent, i.e. allowed: \(String(describing: d.allowWidgetCDNs))") }
+            if !repairs.contains(where: { $0.contains("allowWidgetCDNs") }) { out.append("the repair must be reported") }
             return out
         }),
 
@@ -350,6 +376,18 @@ do {
            && back.lastKnownIdentity == d.lastKnownIdentity && back.hasEverConnected && active == d.id,
            "every field survives save → load")
     expect(repairs.isEmpty && rejected.isEmpty, "with nothing to repair: the keys written are the keys read")
+
+    for value in [true, false] {
+        var c = d
+        c.allowWidgetCDNs = value
+        let ok = WorkspaceStore.save([c], activeId: c.id, to: file)
+        if case .loaded(let ws, _, let repairs, _) = WorkspaceStore.load(from: file), ws.count == 1 {
+            expect(ok && ws[0].allowWidgetCDNs == value && ws[0].widgetCDNsAllowed == value && repairs.isEmpty,
+                   "allowWidgetCDNs \(value) survives save → load")
+        } else {
+            expect(false, "allowWidgetCDNs \(value) survives save → load")
+        }
+    }
 }
 
 print("== host safety")

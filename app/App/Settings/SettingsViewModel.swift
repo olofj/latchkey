@@ -27,6 +27,8 @@ import TailscaleKit
 final class SettingsViewModel: ObservableObject {
     @Published var tailnetHostName: String = ""
     @Published var homePage: String = ""
+    /// F6 §4.1a: *Allow widget CDNs*, from the workspace's definition.
+    @Published private(set) var allowWidgetCDNs = true
 
     /// The live split-tunnel rule set: which hosts go through the tsnet SOCKS
     /// proxy vs. load DIRECT. Surfaced in Settings because the device that
@@ -92,6 +94,7 @@ final class SettingsViewModel: ObservableObject {
         // Seed from the workspace's persisted definition + home page.
         self.tailnetHostName = workspace.definition.hostname
         self.homePage = workspace.homePage.url
+        self.allowWidgetCDNs = workspace.definition.widgetCDNsAllowed
         observeWorkspace()
     }
 
@@ -104,6 +107,9 @@ final class SettingsViewModel: ObservableObject {
                 guard let self else { return }
                 if self.tailnetHostName != def.hostname {
                     self.tailnetHostName = def.hostname
+                }
+                if self.allowWidgetCDNs != def.widgetCDNsAllowed {
+                    self.allowWidgetCDNs = def.widgetCDNsAllowed
                 }
             }
             .store(in: &observers)
@@ -159,6 +165,12 @@ final class SettingsViewModel: ObservableObject {
     func choose(_ origin: String) {
         homePage = origin
         commitGateway()
+    }
+
+    /// Reopens the page under the list compiled for the new setting.
+    func setAllowWidgetCDNs(_ allowed: Bool) {
+        allowWidgetCDNs = allowed
+        workspace.setAllowWidgetCDNs(allowed)
     }
 
     func setTailnetHostName(_ hostName: String) {

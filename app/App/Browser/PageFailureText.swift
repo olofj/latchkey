@@ -153,6 +153,12 @@ nonisolated enum PageFailureText {
             return ("Latchkey can't open this address",
                     "The address has a character it can't use; the details show it escaped.",
                     "Correct the gateway in Settings.")
+        case .filterUnavailable(let domain, let code):
+            // F6 §2: a single-origin promise that silently degrades to
+            // "everything allowed" is worse than no promise.
+            return ("Couldn't open \(shown) safely",
+                    "Latchkey could not build the filter that keeps this page to its gateway, so the page was not loaded. [\(domain) \(code)]",
+                    "Try again, or choose another gateway.")
         case .other(let domain, let code):
             return ("Couldn't load \(shown)",
                     "\(h) could not be loaded (\(domain) \(code)).",

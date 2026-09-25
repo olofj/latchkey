@@ -112,6 +112,7 @@ let everyCause: [PageState.Failure.Cause] = [
     .certificate, .unknownHost("nope"), .ambiguousHost("box", ["box1", "box2"]),
     .redirectedAway("https://elsewhere.example"), .gatewayError(status: 502),
     .gatewayError(status: 500), .pageCrashed(times: 3, window: 60), .stopped, .badAddress,
+    .filterUnavailable(domain: "WKErrorDomain", code: 6),
     .other(domain: "WebKitErrorDomain", code: 102),
 ]
 for c in everyCause {

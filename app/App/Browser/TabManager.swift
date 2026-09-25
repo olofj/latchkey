@@ -35,6 +35,8 @@ final class TabManager: ObservableObject {
     private let session: SessionManager?
     /// Where the page reports a load that failed on transport (R30).
     private let reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)?
+    /// F6 §4.1a: the workspace's *Allow widget CDNs*, read at each load.
+    private let allowWidgetCDNs: () -> Bool
 
     /// Set by native macOS windows so closing the last tab closes the window
     /// (and, on reopen, a fresh home-page tab is created) instead of silently
@@ -52,13 +54,15 @@ final class TabManager: ObservableObject {
 
     init(workspaceID: UUID, model: TSNetModel, homePage: HomePage,
          dataStore: WKWebsiteDataStore, session: SessionManager? = nil,
-         reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)? = nil) {
+         reportLoadFailure: ((SocksRelayRecovery.PageFailure) -> Void)? = nil,
+         allowWidgetCDNs: @escaping () -> Bool = { true }) {
         self.workspaceID = workspaceID
         self.model = model
         self.homePage = homePage
         self.dataStore = dataStore
         self.session = session
         self.reportLoadFailure = reportLoadFailure
+        self.allowWidgetCDNs = allowWidgetCDNs
 
         // A build before R2 may have left a tabs.json holding a sign-in URL.
         // Delete it rather than read it.
@@ -159,7 +163,8 @@ final class TabManager: ObservableObject {
                    isHomePage: isHomePage,
                    session: session,
                    openExternally: { url in Self.openExternally(url) },
-                   reportLoadFailure: reportLoadFailure)
+                   reportLoadFailure: reportLoadFailure,
+                   allowWidgetCDNs: allowWidgetCDNs)
     }
 
     /// Hands a URL to the system: Safari for web links, the owning app for
