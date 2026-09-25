@@ -43,6 +43,15 @@ DASH_LOG     := $(RUN_DIR)/dashboard.log
 GW_PID       := $(RUN_DIR)/gateway.pid
 GW_LOG       := $(RUN_DIR)/gateway.log
 
+# F6 §6: the hosts /single-origin reaches for besides the away origin. Under
+# -ProxyEverything each would be SERVED -- and counted by Host -- by the fake
+# dashboard if the app's rule list allowed it, and none can reach the real
+# host. dash.tail-scale.ts.net:8444 is the port probe (a gateway rule that
+# forgot the port); it is a map key, unrelated to GW_PORT's listener.
+F6_MAPS := $(foreach hp,dash.tail-scale.ts.net:8444 esm.sh:443 esm.sh.away.example:443 \
+             esm.shady.example:443 esm.sh:8444 fonts.googleapis.com:443 fonts.gstatic.com:443, \
+             --map $(hp)=127.0.0.1:$(DASH_PORT))
+
 ifeq ($(BLACKHOLE),1)
   BLACKHOLE_FLAG := --blackhole
 else
@@ -90,6 +99,7 @@ harness-up: certs harness-down  ## Start the fake dashboard + stub proxy
 		--map wrong.tail-scale.ts.net:443=127.0.0.1:$(DASH_PORT) \
 		--map down.tail-scale.ts.net:443=127.0.0.1:9 \
 		--map gw.tail-scale.ts.net:443=127.0.0.1:$(GW_PORT) \
+		$(F6_MAPS) \
 		> $(PROXY_LOG) 2>&1 & echo $$! > $(PROXY_PID)
 	@# Wait for OUR processes to listen. Checking the port alone is what let
 	@# the stray above masquerade as a healthy harness, so verify the pid we
@@ -276,6 +286,30 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	curl -s $$DCTL/__state | $(PY) -c "import json, sys; r = json.load(sys.stdin)['insets']['cover']; assert r['top'] == '62px' and r['received_seq'] >= 1, r"; \
 	code=$$(curl -s -o /dev/null -w '%{http_code}' --cacert ca.pem -d '{"probe":"nope"}' https://dash.localtest.me:$(DASH_PORT)/__inset-report); \
 	if [ "$$code" != "400" ]; then echo "FAIL: an unknown probe answered $$code, not 400" >&2; exit 1; fi; echo "    ok"; \
+	echo "==> F6: the TLS handshake counter sees a connection by its SNI, and /__reset clears it"; \
+	hs() { curl -s $$DCTL/__state | $(PY) -c "import json,sys; print(json.load(sys.stdin)['handshakes'].get('$$1', 0))"; }; \
+	curl -s -X POST $$DCTL/__reset >/dev/null; \
+	curl -sS --fail --cacert ca.pem https://dash.localtest.me:$(DASH_PORT)/healthz >/dev/null; \
+	if [ "$$(hs dash.localtest.me)" -lt 1 ]; then echo "FAIL: a handshake with SNI dash.localtest.me was not counted" >&2; exit 1; fi; \
+	curl -s -X POST $$DCTL/__reset >/dev/null; \
+	if [ "$$(hs dash.localtest.me)" -ne 0 ]; then echo "FAIL: /__reset left the handshake count" >&2; exit 1; fi; echo "    ok"; \
+	echo "==> F6: /single-origin, /__mode?root=single, and its /f6/ resources"; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/single-origin | grep -q "SINGLE ORIGIN"; \
+	curl -sS --fail -X POST "$$DCTL/__mode?root=single" | grep -q '"root": *"single"'; \
+	curl -s $$DCTL/__state | grep -q '"root": *"single"'; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "SINGLE ORIGIN"; \
+	curl -sS --fail -X POST "$$DCTL/__mode?root=page" >/dev/null; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; \
+	loc=$$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/f6/redirect-img); \
+	if [ "$$loc" != "302 https://dash.localtest.me:$(DASH_PORT)/f6/redirected.png" ]; then \
+	    echo "FAIL: /f6/redirect-img answered '$$loc', not a 302 to the away origin" >&2; exit 1; fi; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/f6/inner | grep -q "https://dash.localtest.me:$(DASH_PORT)/f6/inner-img.png"; \
+	curl -s -X POST $$DCTL/__reset >/dev/null; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://esm.sh/f6/cdn.js | grep -q "__F6_CDN"; \
+	if [ "$$(count esm.sh)" -lt 1 ]; then echo "FAIL: esm.sh's request was not counted under its Host" >&2; exit 1; fi; echo "    ok"; \
+	echo "==> F6: a lookalike CDN host WOULD be served and counted (the anchoring test's positive control)"; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://esm.sh.away.example/f6/pwn.js >/dev/null; \
+	if [ "$$(count esm.sh.away.example)" -lt 1 ]; then echo "FAIL: esm.sh.away.example was not counted" >&2; exit 1; fi; echo "    ok"; \
 	echo "==> M6: /__ws_push reaches an open WebSocket and /__drop_ws cuts it, as a gateway restart does"; \
 	$(PY) -c "from dashboard import ws_drop_probe; ws_drop_probe($(DASH_PORT), $(DASH_CONTROL_PORT), 'ca.pem')"; echo "    ok"; \
 	echo "==> M6.4: the page reconnects as KiroCrew's does (1 s doubling to 10 s, reset on open, refetch)"; \

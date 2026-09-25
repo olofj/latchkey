@@ -18,6 +18,13 @@ distinguished_name=dn
 #                         mismatch fixture, and that test then fails for the
 #                         right reason. Add each new gateway name explicitly.
 # localhost, 127.0.0.1, ::1  the control plane of the tests themselves
-subjectAltName=DNS:dash.tail-scale.ts.net,DNS:gw.tail-scale.ts.net,DNS:dash.localtest.me,DNS:localhost,IP:127.0.0.1,IP:::1
+# esm.sh, esm.sh.away.example, esm.shady.example, fonts.googleapis.com,
+#                         fonts.gstatic.com  F6 §6: the stub proxy maps each to
+#                         the fake dashboard, so each would be SERVED -- and
+#                         counted by Host -- if the app's rule list allowed it.
+#                         A load that fails on the certificate instead would make
+#                         a zero count prove nothing. This leaf is trusted only in
+#                         the test simulator.
+subjectAltName=DNS:dash.tail-scale.ts.net,DNS:gw.tail-scale.ts.net,DNS:dash.localtest.me,DNS:localhost,IP:127.0.0.1,IP:::1,DNS:esm.sh,DNS:esm.sh.away.example,DNS:esm.shady.example,DNS:fonts.googleapis.com,DNS:fonts.gstatic.com
 extendedKeyUsage=serverAuth
 basicConstraints=CA:FALSE

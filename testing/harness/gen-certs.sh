@@ -49,6 +49,7 @@ openssl req -x509 -newkey rsa:2048 -nodes \
 openssl x509 -in ca.pem -outform der -out ca.der
 
 echo "==> leaf for dash.tail-scale.ts.net / gw.tail-scale.ts.net / dash.localtest.me / localhost / 127.0.0.1 / ::1"
+echo "    and F6's mapped hosts: esm.sh / esm.sh.away.example / esm.shady.example / fonts.googleapis.com / fonts.gstatic.com"
 openssl req -newkey rsa:2048 -nodes \
     -keyout server.key -out server.csr \
     -subj "/CN=dash.tail-scale.ts.net" >/dev/null 2>&1
@@ -72,6 +73,10 @@ openssl x509 -in server.pem -noout -text | grep -q "DNS:dash.tail-scale.ts.net" 
     || { echo "error: leaf is missing subjectAltName — iOS ignores CN" >&2; exit 1; }
 openssl x509 -in server.pem -noout -text | grep -q "DNS:dash.localtest.me" \
     || { echo "error: leaf is missing dash.localtest.me — the anti-leak test (R10) needs it" >&2; exit 1; }
+for name in esm.sh esm.sh.away.example esm.shady.example fonts.googleapis.com fonts.gstatic.com; do
+    openssl x509 -in server.pem -noout -text | grep -qE "DNS:${name//./\\.}(,|\$)" \
+        || { echo "error: leaf is missing $name — F6's leak tests need it served, not refused" >&2; exit 1; }
+done
 # The M2 mismatch test needs a tailnet name this leaf does NOT cover. A
 # wildcard would cover it, and did once (M3). Read the SAN text rather than
 # use -checkhost, which macOS's LibreSSL does not have: there it printed

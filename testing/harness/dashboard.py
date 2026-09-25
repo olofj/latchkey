@@ -22,17 +22,25 @@ Page routes (HTTPS):
                     F9 §6's probes: report their computed env(safe-area-inset-*)
                     and viewport size to POST /__inset-report, with and without
                     viewport-fit=cover, and with the product's full viewport tag
+  GET  /single-origin  F6 §6's page: off-origin loads of every kind, each under
+                    its own /f6/ path, and same-origin machinery that must keep
+                    working; reports to POST /__report with page: "single"
+  GET|POST /f6/...  SINGLE's resources, answered for ANY Host (esm.sh, the
+                    lookalikes and the font hosts are mapped here by the stub
+                    proxy), so a leak is served and counted, never lost
 
 Control routes (plain HTTP, 127.0.0.1:<control-port>):
   GET  /__state     {"reports": {host: latest report}, "requests": {host: n},
                      "paths": [recent "HOST METHOD PATH | USER-AGENT" lines],
                      "ws_open": n, "insets": {probe: latest inset report},
-                     "root": "page"|"cover"|"plain"|"product"|"shell"}
+                     "root": "page"|"cover"|"plain"|"product"|"shell"|"single",
+                     "handshakes": {TLS SNI name or "-": n}} -- the only
+                     count that sees a <link rel=preconnect> (F6)
   POST /__reset     clear all of the above (not the modes)
-  POST /__mode?front=502|0, ?root=cover|plain|product|shell|page
+  POST /__mode?front=502|0, ?root=cover|plain|product|shell|single|page
                     answer the document 5xx on a live connection; or serve an
-                    inset probe, or F15's dashboard-shaped scroll probe
-                    ("shell"), at / (the app loads only an origin)
+                    inset probe, F15's dashboard-shaped scroll probe ("shell")
+                    or F6's page ("single") at / (the app loads only an origin)
   POST /__drop_ws   close every open WebSocket server-side, as a gateway
                     restart does; the page must reconnect by itself (M6.4)
   POST /__ws_push?text=T  send T as a text frame down every open WebSocket;
@@ -85,7 +93,17 @@ PATHS = deque(maxlen=200)
 REPORT_SEQ = 0        # every stored report gets the next number
 WS_OPEN = set()       # the handlers of WebSocket connections currently open
 INSETS = {}           # probe name ("cover"/"plain") -> latest inset report
-ROOT_PROBE = ""       # "" = / serves the page; "cover"/"plain"/"shell"/... = that probe
+ROOT_PROBE = ""       # "" = / serves the page; "cover"/"plain"/"shell"/"single"/... = that page
+HANDSHAKES = {}       # SNI server name ("-" if none) -> count of ClientHellos
+
+
+def count_handshake(sslsock, server_name, ctx):
+    """The TLS context's sni_callback. A <link rel=preconnect> is a TCP+TLS
+    handshake and no HTTP request, so REQUESTS never sees it; this does (F6)."""
+    name = server_name or "-"
+    with STATE_LOCK:
+        HANDSHAKES[name] = HANDSHAKES.get(name, 0) + 1
+    return None
 
 
 def host_of(handler):
@@ -308,6 +326,188 @@ setInterval(report, 1000);
 PROBES = tuple(INSET_VIEWPORTS) + ("shell",)
 
 
+# F6 §6's page: every kind of load a rule list must stop, each aimed at the
+# away origin under its own /f6/ path so /__state's "paths" names the culprit,
+# beside the same-origin machinery the list must leave working, each of which
+# reports. Reports go to /__report like PAGE's, with page: "single".
+# __AWAY__ is the away origin (dash.localtest.me:8443: public DNS -> loopback,
+# so a leak to it WOULD be served, R10); __VIEWPORT__ is PAGE's own tag.
+# Every other host named here is --map'ped to loopback by the Makefile: F6's
+# tests run -ProxyEverything, and nothing on this page may reach the internet.
+SINGLE = """<!doctype html><meta charset=utf-8>
+__VIEWPORT__
+<title>SINGLE ORIGIN</title>
+<link rel=preconnect href="__AWAY__">
+<link rel=preconnect href="https://fonts.googleapis.com">
+<link rel=preconnect href="https://fonts.gstatic.com" crossorigin>
+<link rel=stylesheet href="__AWAY__/f6/style.css">
+<link rel=preload as=style href="__AWAY__/f6/preload.css" onload="this.rel='stylesheet'">
+<link rel=preload as=style href="https://fonts.googleapis.com/css2?family=F6Probe" onload="this.rel='stylesheet'">
+<script src="__AWAY__/f6/script.js"></script>
+<script src="https://esm.sh/f6/cdn.js"></script>
+<script src="https://esm.sh.away.example/f6/pwn.js"></script>
+<style>
+body { margin: 0; font-size: 17px; padding: calc(8px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right))
+       calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left)); }
+/* Only a face that is USED is fetched: #font below uses it. */
+@font-face { font-family: F6Font; src: url(https://fonts.gstatic.com/f6/font.woff2); }
+#font { font-family: F6Font, sans-serif; }
+img, iframe, video { width: 60px; height: 60px; margin: 4px; border: 1px solid #888; vertical-align: top; }
+</style>
+<h1 id=title>SINGLE ORIGIN</h1>
+<p id=wsstate>ws:idle</p><p id=sse>sse:idle</p>
+<p id=font>font probe</p>
+<p><a id=open-away href="#" onclick="window.open(AWAY + '/away-target'); return false;" style="font-size:22px">Open away window</a></p>
+<p><a id=ping href="#" ping="__AWAY__/f6/ping" style="font-size:22px">ping</a></p>
+<p>
+<img id=img-noalt src="__AWAY__/f6/img.png" width=60 height=60>
+<img id=img-emptyalt alt="" src="__AWAY__/f6/img-empty-alt.png" width=60 height=60>
+<img id=redirect-img alt="redirect" src="/f6/redirect-img" width=60 height=60>
+<img id=port-img alt="port" src="https://dash.tail-scale.ts.net:8444/f6/port-probe.png" width=60 height=60>
+<img id=shady-img alt="shady" src="https://esm.shady.example/f6/shady.png" width=60 height=60>
+</p>
+<p>
+<img id=data-img alt="data" width=60 height=60
+     onload="DATA_IMG='ok'" onerror="DATA_IMG='fail'"
+     src="data:image/png;base64,__PNG__">
+<img id=blob-img alt="blob" width=60 height=60>
+</p>
+<p>
+<iframe id=inner src="/f6/inner" width=60 height=60></iframe>
+<iframe id=away-frame src="__AWAY__/f6/frame" width=60 height=60></iframe>
+<iframe id=srcdoc sandbox="allow-scripts" width=60 height=60
+        srcdoc="<script>parent.postMessage('srcdoc-ok','*')</script>"></iframe>
+<video id=video preload=auto src="__AWAY__/f6/video.mp4" muted width=60 height=60></video>
+</p>
+<script>
+var AWAY = '__AWAY__';
+var DOC = Math.random().toString(36).slice(2);
+var DATA_IMG = DATA_IMG || 'pending', BLOB_IMG = 'pending', BLOB_WORKER = 'pending',
+    SRCDOC = 'pending', SW_REG = 'pending', SYNTHETIC = 'pending', WIDENED = 'pending';
+function set(id, text) { document.getElementById(id).textContent = text; }
+function quiet(p) { if (p && p.catch) { p.catch(function () {}); } }
+// The inner frame's marks are also reported alone: a marker script injected
+// into the main frame only would still mark the four images out here.
+function innerMarks() {
+  try {
+    return document.getElementById('inner').contentDocument.querySelectorAll('img[data-latchkey-blocked]').length;
+  } catch (e) { return 0; }
+}
+function marks() {
+  return document.querySelectorAll('img[data-latchkey-blocked]').length + innerMarks();
+}
+function handler() {
+  return !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kiroBlocked);
+}
+function report() {
+  var s = {
+    doc: DOC, title: document.getElementById('title').textContent, page: 'single',
+    ws: document.getElementById('wsstate').textContent,
+    sse: document.getElementById('sse').textContent,
+    data_img: DATA_IMG, blob_img: BLOB_IMG, blob_worker: BLOB_WORKER, srcdoc: SRCDOC,
+    cdn: window.__F6_CDN === 'ok' ? 'ok' : 'pending',
+    sw: typeof navigator.serviceWorker, sw_reg: SW_REG,
+    rtc: typeof RTCPeerConnection, wt: typeof WebTransport,
+    blocked_marks: marks(), blocked_marks_inner: innerMarks(), synthetic_click: SYNTHETIC,
+    page_handler: handler() ? 'present' : 'absent',
+    widened: WIDENED, ts: Date.now()
+  };
+  quiet(fetch('/__report', {method: 'POST', body: JSON.stringify(s),
+                            headers: {'Content-Type': 'application/json'}}));
+}
+// Same-origin machinery the list must leave working.
+function connect() {
+  var ws = new WebSocket('wss://' + location.host + '/ws');
+  ws.onopen = function () { set('wsstate', 'ws:open'); report(); };
+  ws.onclose = function () { set('wsstate', 'ws:closed'); report(); setTimeout(connect, 2000); };
+}
+connect();
+new EventSource('/events').onmessage = function (e) { set('sse', 'sse:' + e.data); };
+fetch('/f6/blob-src.png').then(function (r) { return r.blob(); }).then(function (b) {
+  var img = document.getElementById('blob-img');
+  img.onload = function () { BLOB_IMG = 'ok'; report(); };
+  img.onerror = function () { BLOB_IMG = 'fail'; report(); };
+  img.src = URL.createObjectURL(b);
+}).catch(function () { BLOB_IMG = 'fail'; report(); });
+try {
+  var bw = new Worker(URL.createObjectURL(new Blob(["postMessage('ok')"], {type: 'text/javascript'})));
+  bw.onmessage = function (e) { if (e.data === 'ok') { BLOB_WORKER = 'ok'; report(); } };
+} catch (e) { BLOB_WORKER = 'fail:' + e.name; }
+window.addEventListener('message', function (e) {
+  if (e.data === 'srcdoc-ok') { SRCDOC = 'ok'; report(); }
+});
+if (!('serviceWorker' in navigator)) {
+  SW_REG = 'unavailable';
+} else {
+  navigator.serviceWorker.register('/f6/sw.js').then(function () { SW_REG = 'registered'; report(); },
+    function (e) { SW_REG = 'failed:' + (e && e.name); report(); });
+}
+// Off-origin loads from script, each of which the list must stop.
+quiet(fetch(AWAY + '/f6/fetch'));
+try { new EventSource(AWAY + '/f6/events'); } catch (e) {}
+try { new WebSocket(AWAY.replace(/^https:/, 'wss:') + '/f6/ws'); } catch (e) {}
+try { navigator.sendBeacon(AWAY + '/f6/beacon', 'x'); } catch (e) {}
+try { new Worker('/f6/worker.js'); } catch (e) {}
+if (typeof SharedWorker !== 'undefined') { try { new SharedWorker('/f6/shared-worker.js'); } catch (e) {} }
+quiet(fetch('https://dash.tail-scale.ts.net:8444/f6/port-probe'));
+quiet(fetch('https://esm.sh:8444/f6/cdn-port'));
+// A page cannot add to a compiled list: try to, at runtime.
+setTimeout(function () {
+  [AWAY + '/f6/widen.js', 'https://esm.sh.away.example/f6/widen.js'].forEach(function (src) {
+    var s = document.createElement('script'); s.src = src; document.head.appendChild(s);
+  });
+  quiet(fetch(AWAY + '/f6/widen-fetch'));
+  quiet(fetch('https://esm.sh.away.example/f6/widen-fetch'));
+  WIDENED = 'done';
+  report();
+}, 2000);
+// Neither a script's click on a marker nor a page-world post to the app's
+// handler may open Safari: only a real tap may.
+setTimeout(function () {
+  var m = document.querySelector('img[data-latchkey-blocked]');
+  if (m) { m.click(); }
+  try {
+    if (handler()) {
+      window.webkit.messageHandlers.kiroBlocked.postMessage({event: 'open', url: AWAY + '/f6/img.png'});
+    }
+  } catch (e) {}
+  SYNTHETIC = m ? 'done' : 'done:none';
+  report();
+}, 4000);
+report();
+setInterval(report, 1000);
+</script>"""
+
+# The same-origin frame's content: a marker must reach into it too.
+F6_INNER = """<!doctype html><meta charset=utf-8><title>f6 inner</title>
+<img id=inner-img src="__AWAY__/f6/inner-img.png" width=60 height=60>"""
+
+# Same-origin workers that each reach for the away origin (F6 §4.2's rows).
+F6_WORKERS = {
+    "/f6/worker.js": "fetch('__AWAY__/f6/worker-fetch').catch(function () {});\n",
+    "/f6/shared-worker.js": "fetch('__AWAY__/f6/shared-fetch').catch(function () {});\n"
+                            "onconnect = function (e) { e.ports[0].start(); };\n",
+}
+
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
+# What /__mode?root= accepts: the page, the probes, and F6's page. "single" is
+# not a PROBE: it reports to /__report, not /__inset-report.
+ROOTS = ("page",) + PROBES + ("single",)
+
+
+def away_origin():
+    u = urllib.parse.urlsplit(Page.away_url)
+    return "%s://%s" % (u.scheme, u.netloc)
+
+
+def f6(text):
+    """Fill SINGLE's (or an /f6/ resource's) placeholders."""
+    viewport = re.search(r'<meta name="viewport"[^>]*>', PAGE).group(0)
+    return (text.replace("__VIEWPORT__", viewport).replace("__AWAY__", away_origin())
+            .replace("__PNG__", base64.b64encode(PNG_1X1).decode()))
+
+
 class Page(HandshakeInThread, BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     away_url = "https://dash.localtest.me:8443/away-target"
@@ -363,15 +563,63 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             return
         if path in ("/__inset-cover", "/__inset-plain", "/__inset-product"):
             return self.body(inset_probe(path[len("/__inset-"):]).encode(), "text/html; charset=utf-8")
+        if path == "/single-origin":
+            return self.body(f6(SINGLE).encode(), "text/html; charset=utf-8")
+        if path.startswith("/f6/"):
+            return self.f6_get(path)
+        if path == "/css2":
+            # fonts.googleapis.com's stylesheet shape, for SINGLE's preload.
+            return self.body(b"", "text/css")
         # The app loads only a gateway's origin (GatewayAddress.persistable
         # drops any path), so a test reaches a probe by switching what / serves
         # from the control port: POST /__mode?root=cover.
+        if ROOT_PROBE == "single" and path in ("/", "/index.html"):
+            return self.body(f6(SINGLE).encode(), "text/html; charset=utf-8")
         if ROOT_PROBE and path in ("/", "/index.html"):
             return self.body(inset_probe(ROOT_PROBE).encode(), "text/html; charset=utf-8")
         return self.body(PAGE.encode(), "text/html; charset=utf-8")
 
+    def f6_get(self, path):
+        """SINGLE's resources, from ANY Host: count() has already recorded the
+        request, which is all a leak test reads; the answer only has to be
+        plausible enough that nothing retries."""
+        if path == "/f6/ws":
+            # Refused, not accepted: an accepted one would sit in ws_open and
+            # blur the page's own /ws in /__state.
+            return self.body(b"refused", "text/plain", 403)
+        if path == "/f6/cdn.js":
+            # Only the allowlisted CDN runs: cdn: ok then proves esm.sh's load
+            # was let through, not that some other host answered.
+            js = b"window.__F6_CDN = 'ok';\n" if host_of(self) == "esm.sh" else b""
+            return self.body(js, "text/javascript")
+        if path in F6_WORKERS:
+            return self.body(f6(F6_WORKERS[path]).encode(), "text/javascript")
+        if path == "/f6/inner":
+            return self.body(f6(F6_INNER).encode(), "text/html; charset=utf-8")
+        if path == "/f6/redirect-img":
+            # Starts same-origin, ends on the away origin: the list must stop
+            # the second hop (F6 §4.2).
+            self.send_response(302)
+            self.send_header("Location", away_origin() + "/f6/redirected.png")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/f6/events":
+            # Short, with a long retry: a leak shows once, not as a reconnect storm.
+            return self.body(b"retry: 60000\ndata: f6\n\n", "text/event-stream")
+        if path.endswith(".png"):
+            return self.body(PNG_1X1, "image/png")
+        if path.endswith(".css"):
+            return self.body(b"", "text/css")
+        if path.endswith(".js"):
+            return self.body(b"", "text/javascript")
+        return self.body(b"ok", "text/plain")
+
     def do_POST(self):
         self.count()
+        if self.path.startswith("/f6/"):
+            # sendBeacon and <a ping>: counted above, which is the point.
+            return self.body(b"ok", "text/plain")
         if self.path not in ("/__report", "/__inset-report"):
             return self.body(b"not found", "text/plain", 404)
         n = int(self.headers.get("Content-Length") or 0)
@@ -516,7 +764,8 @@ class Control(BaseHTTPRequestHandler):
         with STATE_LOCK:
             return self.reply({"reports": REPORTS, "requests": REQUESTS, "paths": list(PATHS),
                                "ws_open": len(WS_OPEN), "front": FRONT_STATUS,
-                               "insets": INSETS, "root": ROOT_PROBE or "page"})
+                               "insets": INSETS, "root": ROOT_PROBE or "page",
+                               "handshakes": HANDSHAKES})
 
     def do_POST(self):
         global FRONT_STATUS, ROOT_PROBE
@@ -526,6 +775,7 @@ class Control(BaseHTTPRequestHandler):
                 REQUESTS.clear()
                 PATHS.clear()
                 INSETS.clear()
+                HANDSHAKES.clear()
             return self.reply({"ok": True})
         # POST /__mode?front=502 makes the document answer 5xx on a live
         # connection; front=0 restores it. Deliberately only the document, so
@@ -545,11 +795,12 @@ class Control(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(query)
             # root=cover|plain|product makes / serve that inset probe (F9 §6),
             # root=shell the dashboard-shaped scroll probe (F15 §6); root=page
-            # restores the dashboard page. Independent of front=.
+            # restores the dashboard page, root=single F6's page. Independent
+            # of front=.
             if "root" in q:
                 root = q["root"][0]
-                if root not in ("page",) + PROBES:
-                    return self.reply({"error": "root must be page, cover, plain, product or shell"}, 400)
+                if root not in ROOTS:
+                    return self.reply({"error": "root must be one of " + ", ".join(ROOTS)}, 400)
                 ROOT_PROBE = "" if root == "page" else root
                 if "front" not in q:
                     return self.reply({"ok": True, "front": FRONT_STATUS, "root": root})
@@ -653,6 +904,7 @@ def main():
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(a.cert, a.key)
+    ctx.sni_callback = count_handshake
 
     v4 = ThreadingHTTPServer(("127.0.0.1", a.port), Page)
     v4.socket = wrap_listener(ctx, v4.socket)   # handshake per connection (tls_accept)
