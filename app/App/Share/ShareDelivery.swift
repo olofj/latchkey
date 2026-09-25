@@ -183,8 +183,14 @@ final class ShareDelivery: ObservableObject {
         workspace.session.$state
             .removeDuplicates()
             .sink { [weak self] _ in
-                // After the change is published, not while it is.
-                Task { @MainActor in self?.preconditionsChanged() }
+                // After the change is published, not while it is. A cold
+                // launch attaches before the app is active and before the
+                // page is signed in; this is the moment a waiting item can
+                // come up.
+                Task { @MainActor in
+                    guard let self else { return }
+                    if self.current == nil { self.advance() } else { self.preconditionsChanged() }
+                }
             }
             .store(in: &observers)
         workspace.homePage.$url

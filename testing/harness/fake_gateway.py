@@ -569,6 +569,11 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         return hs
 
     def send(self, status, body, ctype, extra=(), cookies=(), cache=None):
+        # A request refused before its body was read (CSRF, auth) must still
+        # have it read: left on a keep-alive connection, it is parsed as the
+        # NEXT request's first line, which then fails as a 501 (found by F3's
+        # prefill test: a 403'd POST /api/chat broke the navigation after it).
+        self.body()
         if isinstance(body, str):
             body = body.encode()
         self.send_response(status)
@@ -598,8 +603,10 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             self.gw.count("share_denials")
 
     def body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        return self.rfile.read(n) if n > 0 else b""
+        if getattr(self, "_body", None) is None:
+            n = int(self.headers.get("Content-Length") or 0)
+            self._body = self.rfile.read(n) if n > 0 else b""
+        return self._body
 
     def deny(self, path, reason):
         """No valid credential. GET/HEAD navigations get the SPA shell (so it
@@ -640,6 +647,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
 
     # -- the middleware chain --
     def handle_any(self):
+        self._body = None
         u = urlsplit(self.path)
         path, query = u.path, parse_qs(u.query)
         self.gw.record("%s %s%s" % (self.command, path, "?…" if u.query else ""))

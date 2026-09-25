@@ -36,9 +36,19 @@ say() { printf '::: %s\n' "$*"; }
 say "preflight"
 # R10: only the fixture tailnets may be named (allow-list, not deny-list).
 "$ROOT/scripts/check-fixture-tailnets.sh" \
-    "$APP/UITests/SessionTests.swift" "$HARNESS/fake_gateway.py" \
+    "$APP/UITests/SessionTests.swift" "$APP/UITests/ShareTests.swift" "$HARNESS/fake_gateway.py" \
     "$HARNESS/gateway_check.py" "$HARNESS/Makefile" "$HARNESS/leaf.cnf"
-EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/SessionTests.swift")
+# Both classes (F3 adds ShareTests); every test in both must pass.
+# ONLY=ShareTests (or SessionTests) runs one class while iterating; the
+# count is then that class's, and a pass says so.
+CLASSES=(SessionTests ShareTests)
+[[ -n "${ONLY:-}" ]] && CLASSES=("$ONLY")
+EXPECTED=0
+for c in "${CLASSES[@]}"; do
+    EXPECTED=$(( EXPECTED + $(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/$c.swift") ))
+done
+ONLY_ARGS=()
+for c in "${CLASSES[@]}"; do ONLY_ARGS+=("-only-testing:LatchkeyUITests/$c"); done
 
 # ------------------------------------------------------------------ gateway --
 teardown() {
@@ -102,20 +112,20 @@ if [[ $BUILD -eq 1 ]]; then
 fi
 
 # -------------------------------------------------------------------- tests --
-say "SessionTests"
+say "${CLASSES[*]}"
 set +e
 (cd "$APP" && xcodebuild test-without-building -project Latchkey.xcodeproj -scheme Latchkey \
     -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \
     -derivedDataPath build/DerivedData -resultBundlePath "$LOG_DIR/tests.xcresult" \
     -parallel-testing-enabled NO -test-timeouts-enabled YES \
     -default-test-execution-time-allowance 240 \
-    -only-testing:LatchkeyUITests/SessionTests) > "$LOG_DIR/test.log" 2>&1
+    "${ONLY_ARGS[@]}") > "$LOG_DIR/test.log" 2>&1
 TEST_RC=$?
 set -e
 grep -E "Test Case .*(passed|failed)" "$LOG_DIR/test.log" | sed 's/^/    /' || true
-PASSED=$(grep -cE "Test Case .*SessionTests.* passed" "$LOG_DIR/test.log" || true)
+PASSED=$(grep -cE "Test Case .*(SessionTests|ShareTests).* passed" "$LOG_DIR/test.log" || true)
 if [[ $TEST_RC -eq 0 && "$PASSED" -ne "$EXPECTED" ]]; then
-    echo "error: $PASSED of $EXPECTED SessionTests passed (a stale build? try --build)" >&2
+    echo "error: $PASSED of $EXPECTED SessionTests + ShareTests passed (a stale build? try --build)" >&2
     TEST_RC=1
 fi
 
@@ -192,6 +202,38 @@ else
 fi
 [[ $LEAK_RC -eq 0 ]] || TEST_RC=1
 
+# ------------------------------------------------------------------ F3 / D1 --
+# ShareTests share a link with XYZ in its URL, a note NOTE-XYZ and a file
+# secret-XYZ.pdf. D1: no log line may carry a URL, title, note or filename.
+# Validated by the share having been sent in this same log -- a scan of a log
+# with no share in it would prove nothing. Then the log lines the spec names
+# for the sweep and the capture refusal, which the UI cannot read.
+say "F3: nothing about a share is logged (D1); the sweep and the capture refusal are"
+F3_RC=0
+if [[ -n "$CONTAINER" ]]; then
+    LOGS=("$LOG_DIR/unified.log")
+    while IFS= read -r d; do LOGS+=("$d"); done \
+        < <(find "$CONTAINER/Library/Application Support" -type d -name Logs 2>/dev/null)
+    SCAN_RC=0
+    scan "$LOG_DIR/share-in-logs.txt" -rn "XYZ" "${LOGS[@]}" || SCAN_RC=$?
+    if [[ -s "$LOG_DIR/share-in-logs.txt" ]]; then
+        echo "error: shared content reached a log (D1):" >&2
+        head -5 "$LOG_DIR/share-in-logs.txt" | sed 's/^/    /' >&2
+        F3_RC=1
+    elif [[ $SCAN_RC -ge 2 ]]; then
+        echo "error: the D1 scan could not read everything" >&2; F3_RC=1
+    fi
+fi
+for want in "Share: sent " "Share: uploaded " "Share: swept [1-9][0-9]* item" "Share: refused .* over 50 MB"; do
+    if grep -qE "$want" "$LOG_DIR/unified.log"; then
+        echo "    ok ($want)"
+    else
+        echo "error: no \"$want\" line in the unified log" >&2; F3_RC=1
+    fi
+done
+[[ $F3_RC -eq 0 ]] && echo "    ok (D1: no XYZ in the unified log or the app's Logs, and shares were sent)"
+[[ $F3_RC -eq 0 ]] || TEST_RC=1
+
 # ------------------------------------------------------------------ summary --
 ELAPSED=$(( $(date +%s) - START ))
 curl -s http://127.0.0.1:8481/__state > "$LOG_DIR/gateway-state.json" 2>/dev/null || true
@@ -201,4 +243,4 @@ if [[ $TEST_RC -ne 0 ]]; then
     say "FAILED in ${ELAPSED}s — logs, screenshot and xcresult in $LOG_DIR"
     exit 1
 fi
-say "passed in ${ELAPSED}s"
+say "passed in ${ELAPSED}s${ONLY:+ (ONLY=$ONLY: not the whole suite)}"
