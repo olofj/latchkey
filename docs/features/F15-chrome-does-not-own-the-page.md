@@ -73,11 +73,42 @@ discoverability: a control nobody can find is a control that does not exist.
 **D. Keep the overlays, move them out of the page's way.** Cheapest, and it does
 not hold: "out of the way" is defined by a layout we do not control.
 
-**Recommended: B.** It satisfies the principle exactly — the app never draws over
-the page — without spending page height on a control used a few times a day, and
-it matches the model the app already claims to follow. It also answers the second
-report: the bar occupies the reclaimed strip's neighbourhood, so the space stops
-reading as a gap.
+**DECIDED 2026-09-24: B**, by Olof. It satisfies the principle exactly — the app
+never draws over the page — without spending page height on a control used a few
+times a day, and it matches the model the app already claims to follow. It also
+answers the second report: the bar occupies the reclaimed strip's neighbourhood,
+so the space stops reading as a gap.
+
+### 4a. The tension B must resolve, discovered in F9
+
+An iOS navigation bar normally *overlays* content and the content insets itself
+by the safe area, so nothing is hidden. **That does not work here.** F9 measured
+this gateway ignoring `env(safe-area-inset-*)` outside an installed web app — its
+`--safe-area-top` is defined only under `display-mode: standalone`. So a bar that
+overlays and relies on the page padding itself would cover the page's content, in
+exactly the way this spec exists to prevent. We cannot rely on any gateway
+insetting itself; F7 says the app must work against tailnets we do not control.
+
+**Therefore the bar displaces: the web view's top edge is the bar's bottom edge.**
+The cost is that showing and hiding resizes the web view, and a resize reflows the
+page — jarring if it happens on every scroll wobble.
+
+Mitigate with hysteresis, not cleverness: change state only on a deliberate
+scroll of some distance in one direction, never on small movements, and never
+mid-momentum. Getting this threshold right is most of the feel of this feature.
+
+### 4b. Constraints that are not negotiable
+
+- **The bar must always be reachable.** If the page is too short to scroll, it
+  stays shown — a control that can only be revealed by a gesture the page cannot
+  perform is unreachable.
+- **Hidden must not mean gone for VoiceOver.** A visually retracted bar still
+  needs an accessibility path to Settings. On 2026-09-24 this app shipped a
+  control that was on screen and not hittable because of accessibility ordering;
+  do not add a second way to lose one.
+- **Respect Reduce Motion:** no animated retraction when it is on.
+- **Do not steal the page's scroll.** The bar observes the web view's scroll; it
+  never intercepts or consumes the gesture.
 
 Whichever is chosen, the audit is the same and is the bulk of the work: **every
 one of the eight overlays is re-homed or justified in place.** The transient
