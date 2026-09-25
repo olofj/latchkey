@@ -5,7 +5,7 @@
 //  ShareTests.swift
 //  LatchkeyUITests
 //
-//  F3 stage 1: sharing into a session, against KiroCrew's REAL 0.6.0
+//  F3 stage 1: sharing into a session, against KiroCrew's REAL pinned 0.7.1
 //  frontend and the fake gateway's share routes (F3 §7, session rows).
 //
 //  Links enter the way the owner's Shortcut and any other app enter them:

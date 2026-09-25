@@ -1,42 +1,43 @@
 #!/usr/bin/env python3
-"""A fake KiroCrew gateway that serves the REAL 0.6.0 frontend (PLAN M4.1, R19).
+"""A fake KiroCrew gateway that serves the REAL 0.7.1 frontend (PLAN M4.1, R19).
 
 Testing the app's session handling against a page we wrote would be circular:
 the refresh scheduler, the 403 interceptor, the `mc-auth-*` events and the
 `#mc-session-expired` banner exist only in KiroCrew's real bundles. So this
-serves the installed `kiro_crew/static/dist` byte for byte -- pinned, with the
-server code the emulation was read from, and refusing to start on a mismatch
--- and emulates the server side of the auth contract as read from the
-installed 0.6.0 source. Nothing of KiroCrew's is run or imported (D10): the
-credentials here are opaque test strings this fake invents, meaningless to a
-real gateway.
+serves the pinned wheel's `kiro_crew/static/dist` byte for byte -- pinned,
+with the server code the emulation was read from, and refusing to start on a
+mismatch -- and emulates the server side of the auth contract as read from
+the 0.7.1 source (re-read against 0.6.0's on 2026-09-25). Nothing of
+KiroCrew's is run or imported (D10): the credentials here are opaque test
+strings this fake invents, meaningless to a real gateway.
 
 What is emulated (server source references are to kiro_crew/dashboard/):
 
   * Middleware order: Host allowlist (hostname only) -> CSRF (mutating
     methods) -> auth. Host and CSRF failures are text/plain 403s WITHOUT
-    X-Auth-Required (server.py:627-705, origin.py:344).
+    X-Auth-Required (server.py:681-792, 4869-4896, origin.py:342).
   * Auth-exempt paths return before any credential is looked at, so a
-    `?token=` on one is not redeemed (token_auth.py:2559-2601).
+    `?token=` on one is not redeemed (token_auth.py:2819-2861).
   * Credentials: a `?token=` is validated FIRST. A valid link mints an access
     session and a NEW refresh chain and sets both cookies on whatever the
     route returns (`/` -> index.html, 200, no redirect) -- even over a valid
     cookie. An invalid link falls back to the cookie; without a valid cookie
-    the link's failure stands (token_auth.py:2603-2681, 2785-3037).
+    the link's failure stands (token_auth.py:2863-2941, 3045-3310).
   * Links: redeemable for min(300 s, ttl) from MINT, re-redeemable inside
-    that window; the session runs to mint + ttl (token_auth.py:828, 2745). A
+    that window; the session runs to mint + ttl (token_auth.py:870, 3005). A
     restart forgets unredeemed links.
   * Cookies `mc_token_<P>` (HttpOnly; Max-Age; Path=/; SameSite=Lax; Secure)
     and `mc_refresh_<P>` (Path=/api/auth, 30 d sliding). <P> is the Host
     header's port, or the LISTEN port when the Host has none -- behind
-    `tailscale serve` that is 5476 (token_auth.py:1353-1369). Redemption also
-    clears the legacy `mc_token`; rotation does not (token_auth.py:2915,
-    auth_refresh.py:557-561, 673-676).
+    `tailscale serve` that is 5476 (token_auth.py:1395-1411). Redemption also
+    clears the legacy `mc_token`; rotation does not (token_auth.py:3188,
+    auth_refresh.py:598-602, 714-717).
   * Denials: 403 + `X-Auth-Required: true`; JSON {"error","code"} on /api/*,
     an HTML sign-in page elsewhere. GET/HEAD outside the data prefixes gets
     the SPA shell instead, so the SPA can boot and refresh
-    (token_auth.py:599-687, 3097).
-  * `GET /api/auth/me` -> {"user_id","session_exp","refresh_exp"}.
+    (token_auth.py:606-700, 3370).
+  * `GET /api/auth/me` -> {"user_id","session_exp","refresh_exp","token_accepted",
+    "owner_ok"} (auth_refresh.py:418-436; the last two new in 0.7.x).
   * `POST /api/auth/refresh`, in the real order: rate limit (60 per sliding
     60 s per remote; 429 + Retry-After: 60) -> 401 no_refresh_cookie ->
     unknown/expired -> 401 invalid_refresh -> revoked chain -> 401
@@ -44,19 +45,27 @@ What is emulated (server source references are to kiro_crew/dashboard/):
     `boot` mismatch -> 401 invalid_refresh (no clear) -> a superseded token is
     forgiven only as the chain head, from the same remote, within 60 s (the
     same tokens re-served); any other reuse revokes the chain
-    (auth_refresh.py:398-678, refresh_tokens.py:345-392, 720-769).
+    (auth_refresh.py:440-719, refresh_tokens.py:343-390, 718-767).
   * `boot`: QR-shaped links (and everything minted from them) are
     boot-bound; CLI links are not, so their sessions survive a restart (R24).
   * Revocation generation (`kirocrew logout`): `/__logout-all` bumps it --
-    every access session and refresh token is refused (token_auth.py:1315).
+    every access session and refresh token is refused (token_auth.py:1357).
   * `POST /api/auth/logout`: revokes the chain, denylists the access cookie,
-    clears both, answers {"logged_out": true} (auth_refresh.py:760-820).
+    clears both, answers {"logged_out": true} (auth_refresh.py:799-858).
     Counted as `logouts`, and as `logout_revocations` when a refresh cookie
     came along (the app's sign-out, R32, must show up as both).
   * /api/ws: auth before the upgrade, Origin check, then `slots` and a
-    `dashboard` message every 5 s with a constant version (ws.py:513-753).
+    `dashboard` message every 5 s with a constant version (ws.py:378-662).
+    Not sent: 0.7.x's owner-only `members_subscribed` frame, which nothing
+    at boot waits for; client frames (`slot_read`, subscriptions) are read
+    and dropped.
+  * Not emulated: `POST /api/sandbox-doc` and `GET /sandbox-doc/<id>/<tok>`
+    (handlers/sandbox_doc.py:135-259), nor the page-wide CSP headers
+    (server.py:1089-1147, 1328-1429). The SPA's widget frames get a 404
+    here, so F6's same-origin widget case is L1's, not this suite's.
   * F3's share routes, with the shapes read from 0.6.0 (and unchanged in
-    0.7.0): GET /api/chat/slots (a bare array, serialize_slots' fields),
+    0.7.0 and 0.7.1; handlers/files.py:1510, chat_handlers.py:393):
+    GET /api/chat/slots (a bare array, serialize_slots' fields),
     GET /api/chat/folders, POST /api/upload/file (multipart part `file`, the
     50 MB limit and the extension allowlist, `%PDF-` for .pdf, {"paths"}),
     POST /api/chat ({"ok","slot"}; a busy slot {"ok","queued","queue_id"}).
@@ -74,6 +83,8 @@ refresh token outside the grace window is recorded as a LINEAGE VIOLATION.
 
 Control (plain HTTP on 127.0.0.1:<control-port>):
   POST /__mint?kind=cli|qr[&ttl=S]   -> {"link", "url"}: a fresh sign-in link
+                               (0.7.x fixes a real QR at 3600 s; a qr `ttl`
+                               is test-only, tailnet_mobile.py:893-912)
   POST /__expire               expire every access session now (the 403 path)
   POST /__revoke               revoke every refresh chain, as reuse detection
                                does; access sessions stay valid
@@ -105,6 +116,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import posixpath
 import secrets
 import socket
 import ssl
@@ -112,6 +124,8 @@ import struct
 import sys
 import threading
 import time
+import urllib.request
+import zipfile
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -119,45 +133,57 @@ from tls_accept import HandshakeInThread, wrap_listener
 from urllib.parse import parse_qs, urlsplit
 
 # ---------------------------------------------------------------- the pin --
-# What this fake emulates. A different installed version, bundle or server
-# auth code is a hard failure, not a warning: the fake's semantics were read
-# from THESE files, and drift would make every test answer the wrong question.
-# After a KiroCrew upgrade: re-read the auth code, update the fake, re-pin
-# (--print-pins), and have Olof re-run O7.
-# KIROCREW_DIST names another copy of the pinned bundle -- the desktop app
-# carries its own, and it outlives an upgrade of the venv. It moves where the
-# files are read from, never what they must be: the pin below still decides.
-DEFAULT_DIST = os.environ.get("KIROCREW_DIST") or os.path.expanduser(
-    "~/.kiro/crew-venv/lib/python3.12/site-packages/kiro_crew/static/dist")
-PINNED_VERSION = "0.6.0"
+# What this fake emulates. A different version, bundle or server auth code is
+# a hard failure, not a warning: the fake's semantics were read from THESE
+# files, and drift would make every test answer the wrong question.
+#
+# The fixture is ONE released wheel, fetched from KiroCrew's own CDN (the URL
+# its signed per-version manifest, cli/stable/<v>/cli-manifest.json, names)
+# and held to the sha256 below -- the manifest's own. It is read in place:
+# nothing is extracted, installed, run or imported. It used to be whatever the
+# venv or the desktop app had installed, which KiroCrew upgrades under us: the
+# suite then refused to start for as long as nobody re-pinned (0.6.0 -> 0.7.0
+# on 2026-09-24), and the F6 session tests sat committed and unrun.
+# To move the pin: fetch the new wheel and its manifest, re-read the auth code
+# against this file, update the fake, re-pin (--print-pins), and have Olof
+# re-run O7.
+# KIROCREW_DIST names an installed copy instead (a package's static/dist, e.g.
+# the desktop app's) for a machine without the wheel. It moves where the files
+# are read from, never what they must be: the pins below still decide.
+PINNED_VERSION = "0.7.1"
+PINNED_WHEEL_URL = "https://download.crew.kiro.dev/cli/stable/0.7.1/kirocrew-0.7.1-py3-none-any.whl"
+PINNED_WHEEL_SHA256 = "dfb4a31c1d606390e21c659a44f240b1c24700728770a1685ec94d300267f461"
+WHEEL_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache",
+                           os.path.basename(PINNED_WHEEL_URL))
+DEFAULT_DIST = os.environ.get("KIROCREW_DIST") or WHEEL_CACHE
 PINNED_FILES = {
     # The frontend. index.html names every other asset by content hash, so
     # pinning it pins the entry graph; the three bundles carry the auth code.
-    "static/dist/index.html": "def6d3f52bf2c26a7fe42e6982b551670a86a05921a030c4d228d3fe1be83d95",
-    "static/dist/assets/main-BhsK4HoM.js": "c18250a3aa212370725fe5697951d0f8abe893718afbb2d420ba4d68e89c8b36",
-    "static/dist/assets/client-oM83i081.js": "ff2ba1fbb605a5b8212bcd7b43e02b1fd41c4a9b432352f6d37f194265a8db3d",
-    "static/dist/assets/App-GOBYv73C.js": "7bd964479ec2b520645db9a30bad7d99b2d22a01eda36ed447b841b70fe43fa2",
+    "static/dist/index.html": "a72d684fff1ec557faa89842c08bfea77a82ae33c4ba3cb1b5a4fbb516df095a",
+    "static/dist/assets/main-BkIou08w.js": "81cc0a9ffd1bc543b296c432c23605357a0c13d92a6b4688165368935bb831da",
+    "static/dist/assets/client-D5eTcPHC.js": "341acbee9bd048f07a7fa85bf292942a99625eb3e25ae9887e2178b8be8b3bd1",
+    "static/dist/assets/App-e17PGpKz.js": "e840f8e3b4afdbb99acab5d3a3c2d5bf0c9978ac0e982e6c40e81f6d385f1425",
     # The server code the emulation was read from (M4 review: a same-version
     # rebuild could change these while the frontend stays byte-identical).
-    "dashboard/token_auth.py": "6ccc836c2a25ce20efd8e4bde85c1afe47acba7ddeed7082c147ab966c56127a",
-    "dashboard/refresh_tokens.py": "70049328c17e81a03452379748e8d84e72eafaca02bcfed69873036eb37a8b33",
-    "dashboard/server.py": "b4b7c94e27143d711e9542c934aba2e3999ff73bf984c19c42584d25a7a6e539",
-    "dashboard/origin.py": "9ebaa0b46850f1f8d45a854690ac93521a43b370ba8c37ec699101b710c8bac1",
-    "dashboard/urls.py": "7ff8341ab3a7fb88c7107c7309f8175dc10f504a195faa31286ce1bdf6ec72c1",
-    "dashboard/ws.py": "722228f7e012f36de8455ed520c686a340dbf882116d0fb25becc16fe500f682",
+    "dashboard/token_auth.py": "801eb10ac6125273a730090fa446e2b09188db1a6ac2143951b935b887ec96c8",
+    "dashboard/refresh_tokens.py": "14fcfe0b41a7f24921249d19376b4649a70a93e8440248cebec9fe45669f25ae",
+    "dashboard/server.py": "48b7abbc7d091c1dca7dd305fec737735b122d3ec7319b35442543c185ed8cf9",
+    "dashboard/origin.py": "399ae7eb3b88c8a96c2ce2c3616eb15e709d08c73f8674dbd861d56aae9ea71d",
+    "dashboard/urls.py": "94024af4519c6e82be0f12d90a021eb995d8f227c3581122c9fa95b82994756f",
+    "dashboard/ws.py": "d7e1eb391b4a8b9a59a37baf922339984d550ed3e6e4486a19813bcb47939948",
     "dashboard/boot_id.py": "731c0285aa0b8420aef1f4deea60f087ba9eab7498e16e9fc0a4ddb839a29a8d",
     "dashboard/revocation_gen.py": "9b1d49a298540939baa57d3aaf553a279174f80e480fea4ee584fdc9323f5f62",
-    "dashboard/tailnet.py": "87d6e7aa460361674ede650d84a5ac133fefd0ef54ae58a52682e00d323eaf3d",
-    "dashboard/handlers/auth_refresh.py": "6f3cabae9adb06ffe30fce71366cc88514281c01d9558ae26b5420e1a9e71047",
-    "dashboard/handlers/tailnet_mobile.py": "5671fa16af6fe1a46d77824b7ccf7644c34ba36b930f81ee68f58af55dd62b19",
-    "dashboard/handlers/core.py": "16f0cefda3db6dda298a4860acbd318b61a5f96fc1e50d08ee43d189f5cc48de",
+    "dashboard/tailnet.py": "caf43abea9d53706ffada936e9628da845aee88f8160ae219802481fe4a70a05",
+    "dashboard/handlers/auth_refresh.py": "2b6a0ff9fd3e573ac22a38a0c3440264220b40a684151adf6a09734a250a0a89",
+    "dashboard/handlers/tailnet_mobile.py": "d3e684f63e8493b1d702ec6e57e333313292a8bf5c430474ee19c9d8e04ba803",
+    "dashboard/handlers/core.py": "401db947a55dfcce456e5b00baf5e71f0aa55c292bceef61b809c206a79a3653",
 }
 # What the app depends on (R19's smoke test): the events it listens for, the
 # banner it hides, and the terminal refresh error it must survive.
 REQUIRED_STRINGS = {
-    "static/dist/assets/client-oM83i081.js": ["mc-auth-required", "mc-auth-cleared", "mc-session-expired",
+    "static/dist/assets/client-D5eTcPHC.js": ["mc-auth-required", "mc-auth-cleared", "mc-session-expired",
                                               "X-Auth-Required", "/api/auth/refresh"],
-    "static/dist/assets/main-BhsK4HoM.js": ["refresh_chain_revoked", "/api/auth/me"],
+    "static/dist/assets/main-BkIou08w.js": ["refresh_chain_revoked", "/api/auth/me"],
 }
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -169,7 +195,7 @@ GRACE_SECS = 60
 RATE_LIMIT = 60              # refreshes per sliding 60 s, per remote
 LINK_SET_MAX = 50
 
-# F3: the share routes (dashboard/handlers/files.py and chat_handlers.py in 0.6.0).
+# F3: the share routes (dashboard/handlers/files.py, dashboard/chat_handlers.py).
 MAX_UPLOAD = 50 * 1024 * 1024
 DEFAULT_SLOTS = ["obsidian", "notes", "plan"]
 SLOT_INFO = {"obsidian": ("Obsidian vault", "f-notes"), "notes": ("Reading notes", "f-notes"),
@@ -188,26 +214,10 @@ EXEMPT_EXACT = {"/logo.png", "/favicon.ico", "/manifest.json", "/sw.js", "/pcm-w
 EXEMPT_POST = {"/api/auth/refresh", "/api/auth/logout"}
 # GET/HEAD of anything under these is a data request: no SPA shell for it.
 SHELL_EXCLUDED_PREFIXES = ("/api/", "/v1/", "/assets/", "/static/", "/sprites/", "/vendor/",
-                           "/fonts/", "/app-assets/", "/artifact-app/", "/sandbox-doc/")
+                           "/fonts/", "/app-assets/", "/artifact-app/", "/sandbox-doc/", "/feature-videos/")
 
 
-def package_root(dist):
-    return os.path.dirname(os.path.dirname(dist))
-
-
-def dist_version(dist):
-    """The installed kirocrew version, from the dist-info next to the package."""
-    site = os.path.dirname(package_root(dist))
-    for name in os.listdir(site):
-        if name.startswith("kirocrew-") and name.endswith(".dist-info"):
-            with open(os.path.join(site, name, "METADATA")) as f:
-                for line in f:
-                    if line.startswith("Version:"):
-                        return line.split(":", 1)[1].strip()
-    return None
-
-
-def sha256(path):
+def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -215,27 +225,104 @@ def sha256(path):
     return h.hexdigest()
 
 
+class Bundle:
+    """The kiro_crew package's files, read-only, by path under `kiro_crew/`:
+    from the pinned wheel (a zip, read in place) or from an installed
+    package's `static/dist` directory. Nothing is extracted or executed."""
+
+    def __init__(self, source):
+        self.source = source
+        self.lock = threading.Lock()
+        self.cache = {}
+        self.zip = None
+        if os.path.isfile(source):
+            self.zip = zipfile.ZipFile(source)
+            self.names = set(self.zip.namelist())
+            self.root = None
+        else:
+            self.root = os.path.dirname(os.path.dirname(os.path.abspath(source)))
+
+    def read(self, rel):
+        """kiro_crew/<rel>'s bytes, or None if there is no such file."""
+        rel = posixpath.normpath(rel)
+        if rel.startswith(("../", "/")) or rel in (".", ".."):
+            return None
+        with self.lock:
+            if rel in self.cache:
+                return self.cache[rel]
+            if self.zip is not None:
+                name = "kiro_crew/" + rel
+                data = self.zip.read(name) if name in self.names else None
+            else:
+                p = os.path.join(self.root, *rel.split("/"))
+                data = None
+                if os.path.isfile(p):
+                    with open(p, "rb") as f:
+                        data = f.read()
+            self.cache[rel] = data
+            return data
+
+    def version(self):
+        """The kirocrew version, from the dist-info beside the package."""
+        if self.zip is not None:
+            metas = [n for n in self.names if n.startswith("kirocrew-") and n.endswith(".dist-info/METADATA")]
+            text = self.zip.read(metas[0]).decode() if len(metas) == 1 else ""
+        else:
+            site, text = os.path.dirname(self.root), ""
+            for name in os.listdir(site):
+                if name.startswith("kirocrew-") and name.endswith(".dist-info"):
+                    with open(os.path.join(site, name, "METADATA")) as f:
+                        text = f.read()
+        for line in text.splitlines():
+            if line.startswith("Version:"):
+                return line.split(":", 1)[1].strip()
+        return None
+
+
+def fetch_wheel():
+    """Download the pinned wheel into WHEEL_CACHE, verified before it lands."""
+    if os.path.isfile(WHEEL_CACHE) and sha256_file(WHEEL_CACHE) == PINNED_WHEEL_SHA256:
+        return "cached"
+    os.makedirs(os.path.dirname(WHEEL_CACHE), exist_ok=True)
+    tmp = WHEEL_CACHE + ".part"
+    with urllib.request.urlopen(PINNED_WHEEL_URL, timeout=120) as r, open(tmp, "wb") as f:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+    got = sha256_file(tmp)
+    if got != PINNED_WHEEL_SHA256:
+        os.unlink(tmp)
+        raise SystemExit("error: %s has sha256 %s, pinned %s" % (PINNED_WHEEL_URL, got, PINNED_WHEEL_SHA256))
+    os.replace(tmp, WHEEL_CACHE)
+    return "fetched"
+
+
 def check_bundle(dist):
     """The R19 pin and smoke test. Returns a list of problems (empty = ok)."""
+    if not os.path.exists(dist):
+        return ["%s does not exist (make bundle fetches the pinned wheel)" % dist]
     problems = []
-    root = package_root(dist)
-    v = dist_version(dist)
+    b = Bundle(dist)
+    if b.zip is not None and sha256_file(dist) != PINNED_WHEEL_SHA256:
+        problems.append("%s is not the pinned wheel (sha256 %s)" % (dist, PINNED_WHEEL_SHA256[:12]))
+    v = b.version()
     if v != PINNED_VERSION:
-        problems.append("installed KiroCrew is %s, the fake was written against %s" % (v, PINNED_VERSION))
-    if os.path.exists(os.path.join(root, "BUILD_VERSION")):
+        problems.append("the bundle is KiroCrew %s, the fake was written against %s" % (v, PINNED_VERSION))
+    if b.read("BUILD_VERSION") is not None:
         problems.append("a BUILD_VERSION stamp is present: not the pinned release build")
     for rel, want in PINNED_FILES.items():
-        p = os.path.join(root, rel)
-        if not os.path.exists(p):
+        data = b.read(rel)
+        if data is None:
             problems.append("%s is missing" % rel)
-        elif sha256(p) != want:
-            problems.append("%s changed (sha256 %s, pinned %s)" % (rel, sha256(p)[:12], want[:12]))
+        elif hashlib.sha256(data).hexdigest() != want:
+            problems.append("%s changed (sha256 %s, pinned %s)"
+                            % (rel, hashlib.sha256(data).hexdigest()[:12], want[:12]))
     for rel, needles in REQUIRED_STRINGS.items():
-        p = os.path.join(root, rel)
-        if not os.path.exists(p):
+        body = b.read(rel)
+        if body is None:
             continue
-        with open(p, "rb") as f:
-            body = f.read()
         for n in needles:
             if n.encode() not in body:
                 problems.append("%s no longer contains %r" % (rel, n))
@@ -368,7 +455,7 @@ class Gateway:
                 self.counters["refresh_401"] += 1
                 return 401, {"error": "invalid_refresh"}, None, False, False
             chain = self.chains[rec["chain"]]
-            # The real order (refresh_tokens.py:745-768): revoked chain, then
+            # The real order (refresh_tokens.py:743-766): revoked chain, then
             # the revocation generation, then boot.
             if chain["revoked"]:
                 self.counters["refresh_401"] += 1
@@ -466,7 +553,7 @@ class Gateway:
                     "cookie_port": self.cookie_port}
 
     def slots(self):
-        """serialize_slots' shape (slot_projection.py:205-275), newest first."""
+        """serialize_slots' shape (state.py:7515 in 0.7.1), newest first."""
         with self.lock:
             keys, busy = list(self.slot_keys), set(self.busy)
         now = time.time()
@@ -496,7 +583,7 @@ class Gateway:
 class Page(HandshakeInThread, BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     gw = None                 # Gateway
-    dist = DEFAULT_DIST
+    bundle = None             # Bundle
     allowed_hosts = set()     # host NAMES (the real check ignores the port)
     allowed_origins = set()
 
@@ -623,21 +710,20 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
 
     def serve_file(self, path, cookies=()):
         rel = "index.html" if path in ("/", "/index.html") else path.lstrip("/")
-        full = os.path.normpath(os.path.join(self.dist, rel))
-        if not full.startswith(os.path.normpath(self.dist) + os.sep) or not os.path.isfile(full):
+        data = self.bundle.read("static/dist/" + rel)
+        if data is None:
             # Client-side routes get the shell, as the real SPA fallback does.
-            if "." not in os.path.basename(path) and not path.startswith(SHELL_EXCLUDED_PREFIXES):
-                full = os.path.join(self.dist, "index.html")
+            if "." not in posixpath.basename(path) and not path.startswith(SHELL_EXCLUDED_PREFIXES):
+                rel = "index.html"
+                data = self.bundle.read("static/dist/index.html")
             else:
                 return self.send(404, "not found", "text/plain")
-        if full.endswith("index.html"):
+        if rel.endswith("index.html"):
             self.gw.count("shell_loads")
-        ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
-        if full.endswith((".js", ".mjs")):
+        ctype = mimetypes.guess_type(rel)[0] or "application/octet-stream"
+        if rel.endswith((".js", ".mjs")):
             ctype = "text/javascript; charset=utf-8"
         cache = "public, max-age=31536000, immutable" if path.startswith("/assets/") else None
-        with open(full, "rb") as f:
-            data = f.read()
         return self.send(200, data, ctype, cookies=cookies, cache=cache)
 
     def exempt(self, path):
@@ -702,8 +788,13 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             self.gw.count("auth_me_ok")
             if self.headers.get("X-Latchkey-Check"):
                 self.gw.count("app_auth_checks")
+            # 0.7.1: token_accepted is true only when THIS request's ?token=
+            # authenticated it (a redemption sets new cookies; a failed link
+            # that fell back to the cookie does not); owner_ok is true for
+            # the owner's own browser session (auth_refresh.py:418-436).
             return self.json(200, {"user_id": "olof", "session_exp": session["exp"],
-                                   "refresh_exp": self.gw.refresh_exp(cookies.get("mc_refresh_%s" % port))},
+                                   "refresh_exp": self.gw.refresh_exp(cookies.get("mc_refresh_%s" % port)),
+                                   "token_accepted": bool(new_cookies), "owner_ok": True},
                              cookies=new_cookies)
         if path == "/api/auth/refresh" and m == "POST":
             status, body, tokens, clear, drop = self.gw.rotate(cookies.get("mc_refresh_%s" % port),
@@ -804,7 +895,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             uploaded = set(self.gw.uploads)
         item = self.headers.get("X-Latchkey-Share")
         if not listed:
-            # The real gateway would CREATE this session (chat_handlers.py:314).
+            # The real gateway would CREATE this session (chat_handlers.py:515-517).
             self.gw.violation("post to a slot not in the list: the real gateway would create it",
                               slot=slot, item=item)
             return self.json(404, {"error": "no such slot (the real gateway would have created one)"})
@@ -972,25 +1063,32 @@ def main():
     ap.add_argument("--cookie-port", type=int, default=5476,
                     help="the listen port being emulated (names the cookies when Host has no port)")
     ap.add_argument("--expire-in", type=int, default=0, help="access-session TTL in seconds (0 = real defaults)")
-    ap.add_argument("--dist", default=DEFAULT_DIST)
+    ap.add_argument("--dist", default=DEFAULT_DIST,
+                    help="the pinned wheel (default) or an installed package's static/dist")
+    ap.add_argument("--fetch", action="store_true", help="download the pinned wheel (verified) and exit")
     ap.add_argument("--check-bundle", action="store_true", help="run the pin/smoke test and exit")
-    ap.add_argument("--print-pins", action="store_true", help="print the installed files' hashes and exit")
+    ap.add_argument("--print-pins", action="store_true", help="print the bundle's file hashes and exit")
     a = ap.parse_args()
 
+    if a.fetch:
+        print("pinned wheel: %s (KiroCrew %s, sha256 %s)" % (fetch_wheel(), PINNED_VERSION, PINNED_WHEEL_SHA256[:12]))
+        return
     if a.print_pins:
-        print("version:", dist_version(a.dist))
+        b = Bundle(a.dist)
+        print("version:", b.version())
         for rel in PINNED_FILES:
-            print('    "%s": "%s",' % (rel, sha256(os.path.join(package_root(a.dist), rel))))
+            data = b.read(rel)
+            print('    "%s": "%s",' % (rel, hashlib.sha256(data).hexdigest() if data is not None else "MISSING"))
         return
     problems = check_bundle(a.dist)
     if a.check_bundle:
         for p in problems:
             print("FAIL:", p)
-        print("bundle check: %s" % ("ok (KiroCrew %s, %d pinned files)" % (PINNED_VERSION, len(PINNED_FILES))
-                                    if not problems else "FAILED"))
+        print("bundle check: %s" % ("ok (KiroCrew %s, %d pinned files, from %s)"
+                                    % (PINNED_VERSION, len(PINNED_FILES), a.dist) if not problems else "FAILED"))
         sys.exit(1 if problems else 0)
     if problems:
-        print("fake_gateway: refusing to start -- the installed KiroCrew is not the pinned one:", file=sys.stderr)
+        print("fake_gateway: refusing to start -- the bundle is not the pinned one:", file=sys.stderr)
         for p in problems:
             print("  " + p, file=sys.stderr)
         sys.exit(2)
@@ -999,7 +1097,7 @@ def main():
 
     gw = Gateway(a.expire_in, a.cookie_port)
     Page.gw = Control.gw = gw
-    Page.dist = a.dist
+    Page.bundle = Bundle(a.dist)
     Page.allowed_hosts = {a.host, "127.0.0.1", "localhost", "[::1]"}
     Page.allowed_origins = {"https://%s" % a.host, "https://127.0.0.1:%d" % a.port,
                             "https://localhost:%d" % a.port}

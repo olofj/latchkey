@@ -12,6 +12,9 @@ testing/harness/*.log
 
 # Offline harness runtime state (pidfiles, logs, the proxy journal).
 testing/harness/.run/
+# The pinned KiroCrew wheel the fake gateway serves (make bundle; its sha256
+# is in fake_gateway.py).
+testing/harness/.cache/
 # L2 tsnet harness: its binary, pidfile, log and node state.
 testing/tsnet-harness/.run/
 # ...and the binary a plain `go build` there leaves beside the sources.

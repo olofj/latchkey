@@ -9,13 +9,14 @@
 #   make harness-status  what is running
 #   make certs           mint the test CA + leaf (idempotent)
 #   make trust           teach the booted simulator to trust the test CA
-#   make gateway-up      start the fake KiroCrew gateway (real 0.6.0 bundle, M4)
+#   make bundle          fetch the pinned KiroCrew wheel into .cache (verified)
+#   make gateway-up      start the fake KiroCrew gateway (real pinned bundle, M4)
 #   make gateway-down    stop it
 #   make gateway-check   its host-side contract self-test (starts and stops it)
 #
 # The fake gateway is separate from harness-up on purpose: it refuses to start
-# unless the installed KiroCrew bundle is the pinned one, and a KiroCrew
-# upgrade must not take the offline (L1) suite down with it.
+# unless its bundle is the pinned one, and a missing or wrong bundle must not
+# take the offline (L1) suite down with it.
 #
 # BLACKHOLE=1 starts the proxy in refuse-every-CONNECT mode, which is the
 # negative fixture: the page load must FAIL rather than quietly succeeding by
@@ -168,6 +169,10 @@ harness-reap:  ## Stop strays on the harness ports, pidfile or not
 	done
 	@rm -f $(PROXY_PID) $(DASH_PID) $(GW_PID)
 	@echo "::: strays reaped :::"
+
+.PHONY: bundle
+bundle:  ## Fetch the pinned KiroCrew wheel (a no-op when cached and intact)
+	@$(PY) fake_gateway.py --fetch
 
 .PHONY: gateway-up
 gateway-up: certs gateway-down  ## Start the fake KiroCrew gateway (GW_EXPIRE_IN=seconds)

@@ -5,7 +5,7 @@
 //  SessionTests.swift
 //  LatchkeyUITests
 //
-//  M4: the dashboard session, against KiroCrew's REAL 0.6.0 frontend (R19).
+//  M4: the dashboard session, against KiroCrew's REAL frontend, pinned 0.7.1 (R19).
 //
 //  The page is the installed KiroCrew bundle, served byte for byte by
 //  testing/harness/fake_gateway.py, which emulates the server's auth
@@ -108,7 +108,7 @@ final class SessionTests: XCTestCase {
         })
     }
 
-    /// Signs in on the real 0.6.0 bundle with every connection proxied, and
+    /// Signs in on the real pinned bundle with every connection proxied, and
     /// lets the dashboard settle with its chat live.
     private func signedInEverythingProxied(extra: [String] = []) async throws -> XCUIApplication {
         _ = try await Self.post("\(Self.proxyControl)/reset")

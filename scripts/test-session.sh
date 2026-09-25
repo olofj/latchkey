@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# M4: the dashboard session against KiroCrew's REAL 0.6.0 frontend (R19).
+# M4: the dashboard session against KiroCrew's REAL frontend, the pinned 0.7.1 wheel (R19).
 #
 #   scripts/test-session.sh [--build]
 #
@@ -57,18 +57,20 @@ teardown() {
 }
 trap teardown EXIT
 say "bundle pin and smoke test (R19)"
-# The venv follows KiroCrew upgrades (0.7.0 since 2026-09-24); the desktop app
-# keeps a copy of its own backend. Either may serve, but only if it passes the
-# pin byte for byte -- the fallback relaxes where the bundle is, not what it is.
+# The fixture is one released wheel, pinned by version and sha256 in
+# fake_gateway.py and fetched once into testing/harness/.cache -- not the
+# venv's or the desktop app's install, which KiroCrew upgrades under us (the
+# old 0.6.0 pin stopped the suite from starting for a day unnoticed). Offline,
+# an installed copy may stand in, but only if it passes the same pin.
 DESKTOP_DIST=/Applications/KiroCrew.app/Contents/Resources/backend-dist/kirocrew-backend-arm64/lib/python3.12/site-packages/kiro_crew/static/dist
-if [[ -z "${KIROCREW_DIST:-}" ]] && ! python3 "$HARNESS/fake_gateway.py" --check-bundle >/dev/null 2>&1 \
+if [[ -z "${KIROCREW_DIST:-}" ]] && ! make -C "$HARNESS" --no-print-directory bundle 2>&1 | sed 's/^/    /' \
         && [[ -d "$DESKTOP_DIST" ]] \
         && python3 "$HARNESS/fake_gateway.py" --check-bundle --dist "$DESKTOP_DIST" >/dev/null 2>&1; then
     export KIROCREW_DIST="$DESKTOP_DIST"
-    echo "    the venv's KiroCrew is not the pinned one; serving the desktop app's copy"
+    echo "    the pinned wheel could not be fetched; serving the desktop app's copy, which matches the pin"
 fi
 if ! python3 "$HARNESS/fake_gateway.py" --check-bundle | sed 's/^/    /'; then
-    echo "error: no pinned KiroCrew bundle to serve (neither the venv nor the desktop app)" >&2; exit 1
+    echo "error: no pinned KiroCrew bundle to serve (make -C testing/harness bundle)" >&2; exit 1
 fi
 say "fake gateway contract self-test"
 make -C "$HARNESS" --no-print-directory gateway-check > "$LOG_DIR/gateway-check.log" 2>&1 \

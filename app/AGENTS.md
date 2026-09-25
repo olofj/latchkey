@@ -244,8 +244,9 @@ device build.
     host-side fake control plane (`testing/tsnet-harness`), with login and
     device approval.
   - `scripts/test-session.sh` — M4: the dashboard session against KiroCrew's
-    real 0.6.0 frontend, served by `testing/harness/fake_gateway.py`. It is
-    pinned to that bundle and refuses to run against another.
+    real frontend, served by `testing/harness/fake_gateway.py` from one
+    released wheel pinned by version and sha256 (0.7.1; `make -C
+    testing/harness bundle` fetches it). It refuses to run against another.
   - `scripts/test-discovery.sh` — M5: gateway discovery on the L2 harness,
     with a real-looking gateway peer, a non-gateway page, a dead peer and a
     peer that never answers. It also enforces the discovery timing budget
