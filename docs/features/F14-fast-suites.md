@@ -315,3 +315,80 @@ control state. The ideal wall time is ~26 s + max(38 s, 544 s ÷ N):
 not include simulator contention, which is unmeasured. The longest test
 (38 s) bounds it below at ~65 s. §2's "L1 under 90 s" needs N ≥ 8, and even
 then only if contention is small.
+
+**2026-09-25, simulator contention measured: F14 reaches 240 s at N = 4.**
+The projection above assumed simulators do not slow each other. This measures
+that, with `scripts/bench-sim-contention.py` (run `simbench-logs/20260925-043549`,
+all rounds passing). It times L1's own fixed cost: `testAFirstLaunchExplainsItself`
+(an XCUITest launch into the gate, four checks, a terminate). It runs with
+`-test-iterations 10` on N dedicated iPhone 17 simulators at once, one
+`xcodebuild test-without-building` each. The gate needs no node and no
+certificates. One stub answering 200 on the two control ports satisfies every
+simulator's `setUp`. Confounders kept out: all 12 simulators were booted and
+settled before anything was timed, and a warm-up round was discarded. Iteration
+1 of each run (the cold launch after install) is dropped, so install is in no
+number. Only iterations wholly inside the window where all N ran are counted. A
+closing N = 1 round came in at 0.97× the first, so there was no drift. No
+thermal warning was recorded in any round. N = 1 ran with the other 11
+simulators booted and idle; a two-simulator smoke run gave the same 6.7 s.
+
+| N | kept | test median s (p25–p75, max) | launch to usable s | × N=1 | launches/s, all sims | speedup | per-sim efficiency | CPU busy median/max % | swap |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 9 | 6.66 (6.53–6.92, 7.23) | 5.36 | 1.00 | 0.142 | 1.00 | 1.00 | 37/60 | 0 |
+| 2 | 17 | 6.78 (6.63–6.85, 7.02) | 5.41 | 1.02 | 0.275 | 1.94 | 0.97 | 42/84 | 0 |
+| 4 | 33 | 7.08 (7.02–7.19, 9.40) | 5.68 | 1.06 | 0.526 | 3.71 | 0.93 | 56/98 | 0 |
+| 6 | 49 | 7.26 (7.17–7.40, 8.33) | 5.73 | 1.09 | 0.738 | 5.20 | 0.87 | 71/100 | 0 |
+| 8 | 65 | 7.61 (7.52–7.77, 8.57) | 6.03 | 1.14 | 0.945 | 6.66 | 0.83 | 89/100 | 0 |
+| 12 | 91 | 7.87 (7.72–8.36, 19.15) | 6.21 | 1.18 | 1.207 | 8.50 | 0.71 | 100/100 | 153 MB |
+
+"Launch to usable" runs from XCUITest's `Open` to the first UI query. Terminate
+is 1.05–1.08 s at every N. Speedup is measured throughput, which is lower than
+N ÷ (× N=1) because it also counts stragglers.
+
+- **Contention is real but modest up to 8.** A launch costs 6 % more at N = 4
+  and 14 % more at N = 8. Adding simulators stops paying at **N ≈ 8**. Each one
+  added from 2 to 8 returns 0.7–0.9 of a simulator. From 8 to 12 each returns
+  0.46. At N = 8 the CPU is 89 % busy at the median. At N = 12 it is pinned at
+  100 %, swapping starts, and a straggler takes 19 s.
+- **Memory is not the limit.** Twelve booted simulators took
+  `kern.memorystatus_level` from 87 to ~50 (about 1.8 GB each of 64 GB), and
+  nothing swapped below N = 12.
+- **Booting is the expensive part, and it must stay out of the run.** One
+  first boot takes 20–23 s. Twelve at once took 70–343 s each, then 8 min
+  before the host dropped under 25 % busy. F14's simulators must stay booted
+  between runs, or be booted one at a time, never all at once inside L1.
+- **Per-shard `xcodebuild` spin-up,** including installing the app and runner,
+  grows from 6.1 s at N = 1 to 8.7 s (max) at N = 8: about +3 s of wall time.
+
+*Corrected L1 projection* (replacing ~160 s / ~95 s). The model is 26 s outside
+the tests plus the longest-first packing of the 38 per-test times ("after"
+column above) onto N simulators. The low figure slows only each test's
+launch/terminate share, by × N=1. The high figure slows whole tests by the
+throughput loss. The high figure is pessimistic: most variable time is timers
+and sleeps, which do not contend.
+
+| N | no contention | measured contention |
+|---|---|---|
+| 2 | 300 s | 303–309 s |
+| 4 | 164 s | **168–175 s** |
+| 6 | 118 s | 123–133 s |
+| 8 | 97 s | **103–111 s** |
+| 12 | 73 s | 79–93 s (CPU-saturated, swapping) |
+
+Add ~3 s for the slower spin-up at N ≥ 4. **F14 can reach the 240 s budget: N
+= 4 gives ~170–180 s, with room for the suite to grow.** N = 3 interpolates to
+~215 s, which leaves too little margin. §2's "under 90 s" is not reachable on
+this host. It would take N = 12, which saturates the CPU and swaps, and the
+38 s longest test × 1.18 bounds it at ~71 s anyway. N = 8 (~105–115 s) is
+where the curve stops paying.
+
+Not covered by this measurement:
+
+- The gate has no WebView. Most L1 launches also start WebKit's three
+  processes (§9: ~6.0 s to idle, against 5.0 s), so page launches may contend
+  somewhat more than measured. The high column is meant to absorb that.
+- It says nothing about the per-instance harness state F14 has to build.
+- The sandbox hid the host's process list, so nothing other than the idle 8 %
+  baseline and CPU samples before each round could be attributed. The 1-minute
+  load average (500–1000) counts simulator threads and is not comparable to the
+  20 cores.
