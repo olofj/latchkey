@@ -171,7 +171,6 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
         do {
             let params = NWParameters.tcp
             params.requiredInterfaceType = .loopback
-            params.allowLocalEndpointReuse = true
             l = try NWListener(using: params)
         } catch {
             logger.log("sockslog: failed to start (\(error)); using tsnet proxy directly")
