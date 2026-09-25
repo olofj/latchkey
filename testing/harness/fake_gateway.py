@@ -105,6 +105,10 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
   POST /__upload-limit?bytes=N the upload limit (default 50 MB)
   POST /__csrf-deny?on=1       refuse POST /api/chat and /api/upload/file as
                                a CSRF failure (the 8443 origin case, F1 §4a)
+  POST /__slow?slots=S&post=S  hold a share's GET /api/chat/slots for S
+                               seconds before answering, and a POST /api/chat
+                               for S seconds AFTER it is recorded (the
+                               gateway has the message; the answer is late)
   GET  /__state                counters, violations, recent requests, unknown paths
 
   python3 fake_gateway.py --port 8444 --control-port 8481 --cert server.pem \\
@@ -370,6 +374,8 @@ class Gateway:
         self.busy = {"plan"}
         self.upload_limit = MAX_UPLOAD
         self.csrf_deny = False
+        self.slow_slots = 0.0
+        self.slow_post = 0.0
         self.uploads = {}        # returned path -> bytes
         self.posts = []          # {"slot", "message", "item", "at"}
         self.navigations = []    # {"sid", "prefill"} for GET /chat?...
@@ -837,6 +843,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         if path == "/api/chat/slots" and m == "GET":
             if self.headers.get("X-Latchkey-Share"):
                 self.gw.count("slot_lists")
+                time.sleep(self.gw.slow_slots)
             return self.json(200, self.gw.slots(), cookies=new_cookies)
         if path == "/api/chat/folders" and m == "GET":
             return self.json(200, FOLDERS, cookies=new_cookies)
@@ -917,6 +924,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             self.gw.posts.append({"slot": slot, "message": message, "item": item, "at": time.time()})
             if item:
                 self.gw.counters["share_posts"] += 1
+        time.sleep(self.gw.slow_post)
         if busy:
             return self.json(200, {"ok": True, "queued": True, "queue_id": "q-" + secrets.token_hex(4)})
         return self.json(200, {"ok": True, "slot": slot, "mid": "m-" + secrets.token_hex(4)})
@@ -1046,6 +1054,10 @@ class Control(BaseHTTPRequestHandler):
         if u.path == "/__csrf-deny":
             with self.gw.lock:
                 self.gw.csrf_deny = num("on") != 0
+            return self.reply({"ok": True})
+        if u.path == "/__slow":
+            with self.gw.lock:
+                self.gw.slow_slots, self.gw.slow_post = num("slots"), num("post")
             return self.reply({"ok": True})
         if u.path == "/__drop-next-refresh":
             with self.gw.lock:
