@@ -392,3 +392,58 @@ Not covered by this measurement:
   baseline and CPU samples before each round could be attributed. The 1-minute
   load average (500–1000) counts simulator threads and is not comparable to the
   20 cores.
+
+**2026-09-25, stage 1: the harnesses are per-instance.** Two suite runs can
+now share the host. The shard runner is stage 2 and is not built.
+
+- *Ports.* `INSTANCE=k` (0–9) in both harness Makefiles moves every port up
+  by 100·k (proxy 1080→1180, dashboard 8443→8543, controls 8480/1081→
+  8580/1181, tsnet 8490/8491→8590/8591). `make ports` prints an instance's
+  ports. The scripts take `LATCHKEY_INSTANCE` (default 0, the old layout
+  and the only one used unless asked for) and export each port as
+  `TEST_RUNNER_LATCHKEY_<NAME>`. xcodebuild hands those to the test runner.
+  `HarnessInstance` in `UITestSupport.swift` reads them, with the old
+  constants as defaults. The app needed no change: its ports already came in
+  as launch arguments (`-TestProxyEndpoint`, `-TestControlURL`).
+- *Certificates.* No per-instance leaf. SANs name hosts, not ports, and each
+  instance's stub proxy maps the same fixture names to its own listeners.
+  Minting is serialised with `lockf`, so two first starts cannot both
+  rewrite the CA. The one port that was fixed anyway was the fake
+  dashboard's away origin (`dash.localtest.me:8443`), which now follows
+  `--port`.
+- *State.* Pidfiles, logs, the proxy journal, and the tsnet state and binary
+  live in `.run/i<k>`. The dashboard and proxy report their instance. L1 and
+  L2 `setUp` refuse a harness that is not theirs. Shown to fail: told it is
+  instance 1 on instance 0's ports, `setUp` fails with "…/__state is harness
+  instance 0, not this run's 1".
+- *Teardown.* `harness-up`/`up` still stop a previous instance first, but only
+  their own. The tsnet Makefile's calls into `../harness` now pass the
+  instance on; before, they always started and stopped instance 0.
+
+Verified, all on one host:
+
+| Run | Result | Time |
+|---|---|---|
+| L1 serial, default path, `--build` (a real 12 s rebuild) | 38/38 | 587 s (tests 565 s) |
+| L1 ×2 at once: instance 0 on `iPhone 17`, 1 on `Latchkey Shard 1` | 38/38 and 38/38 | 588 s / 593 s (tests 582 / 587 s) |
+| L2 serial, default path | 9/9 | 229 s (self-test rerun included) |
+| L2 ×2 at once, instance 0 with the variable unset | 9/9 and 9/9 | 204 s / 211 s |
+| `make check` ×2 at once, both harnesses | 17/17 checks each; tsnet self-test ok each | — |
+
+Isolation, from the concurrent L1 run's journals: instance 0's proxy saw
+the leak origin only as `dash.localtest.me:8443` (10 CONNECTs) and instance
+1's only as `:8543` (9). Their dashboards served 634 and 741 requests. The
+test that blackholes, closes or stalls a proxy passed on both sides, and so
+did the one that serves a 502. On a shared harness they would have broken
+each other. In L2 each dashboard was reached through its own tsnet dash
+peer (164 / 165 requests), and each run approved its node on its own API.
+The second simulator was created and booted (22 s) before anything was timed.
+
+At N = 2 a whole L1 suite runs 3–4 % slower than alone, against the bench's
+2 % for launches into the gate (no WebView). That fits the bench's caveat
+that page launches contend more; the projection's high column allows for it.
+
+The session, discovery and lifecycle suites still use instance 0's
+constants (`SessionTests`, `DiscoveryTests`, `LifecycleHarnessTests`,
+`ShareTests`). Nothing here changes them, and they are not needed to shard
+L1.
