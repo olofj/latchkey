@@ -282,6 +282,22 @@ def run(port, cport, ca):
     s, _, body, _ = d2.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
     check(s == 401 and json.loads(body).get("error") == "refresh_chain_revoked", "retry after restart: %d %r" % (s, body))
 
+    step("...and ?restart=1 restarts at the loss itself: an immediate retry revokes the chain")
+    control(cport, "POST", "/__reset")
+    d3 = Client(port, ca)
+    d3.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    boot = control(cport, "GET", "/__state")["boot"]
+    control(cport, "POST", "/__drop-next-refresh?restart=1")
+    try:
+        d3.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
+    except (OSError, http.client.HTTPException):
+        pass
+    st = control(cport, "GET", "/__state")
+    check(st["boot"] != boot and st["counters"]["restarts"] == 1, "no restart at the loss: %r" % st["counters"])
+    s, _, body, _ = d3.req("POST", "/api/auth/refresh", {"Origin": ORIGIN})
+    check(s == 401 and json.loads(body).get("error") == "refresh_chain_revoked",
+          "immediate retry after restart-at-loss: %d %r" % (s, body))
+
     step("a restart drops open connections, and down=S refuses new ones for S seconds")
     control(cport, "POST", "/__reset")
     w2 = Client(port, ca)

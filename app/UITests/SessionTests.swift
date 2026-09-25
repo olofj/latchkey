@@ -41,7 +41,9 @@ final class SessionTests: XCTestCase {
     static let gatewayHost = "gw.tail-scale.ts.net"
 
     /// The page's own banner input; present in the tree only when visible.
-    static let bannerPlaceholder = "Paste token URL or raw token…"
+    /// 0.7.x's English `api.client.paste_token_url_or_raw_token` (0.6.0's
+    /// was "Paste token URL or raw token…").
+    static let bannerPlaceholder = "Paste sign-in URL…"
 
     override func setUp() async throws {
         continueAfterFailure = false
@@ -406,12 +408,17 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
         try await signIn(app, kind: "cli")
 
-        _ = try await Self.post("\(Self.gatewayControl)/__drop-next-refresh")
+        // The restart happens at the loss itself. Restarting after polling
+        // for the drop lost the race on 0.7.x: its page retried within a
+        // second, inside the grace window, and recovered (grace_reserves 1,
+        // no violation) before the restart landed.
+        _ = try await Self.post("\(Self.gatewayControl)/__drop-next-refresh?restart=1")
         for _ in 0..<15 {
             try await Task.sleep(for: .seconds(1))
             if counter(try await gatewayState(), "refresh_dropped") > 0 { break }
         }
-        _ = try await Self.post("\(Self.gatewayControl)/__restart")
+        let atLoss = try await gatewayState()
+        XCTAssertEqual(counter(atLoss, "refresh_dropped"), 1, "the refresh response was lost")
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 75),
                       "the chain is revoked by the retry; the app asks for a token")
         let afterRestart = try await gatewayState()

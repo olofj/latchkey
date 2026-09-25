@@ -93,8 +93,12 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
   POST /__restart[?down=S]     a gateway restart: new boot id; forget links
                                and grace caches; drop every open connection;
                                optionally refuse connections for S seconds
-  POST /__drop-next-refresh    the next refresh is carried out (the token is
-                               consumed) but its response is lost
+  POST /__drop-next-refresh[?restart=1]
+                               the next refresh is carried out (the token is
+                               consumed) but its response is lost; with
+                               restart=1 the gateway restarts at that instant,
+                               so no retry can reach the grace cache first
+                               (0.7.x's page retries within a second)
   POST /__config?expire_in=S   access TTL for sessions minted/rotated from now
   POST /__reset                forget everything (a fresh gateway)
   POST /__slots?keys=a,b[&busy=b]   the live sessions (F3), and which are busy
@@ -484,7 +488,7 @@ class Gateway:
             tokens = (access, rt2, ttl)
             chain["last"] = {"remote": remote, "at": now, "body": body, "tokens": tokens}
             self.counters["rotations"] += 1
-            drop = self.drop_next_refresh
+            drop = self.drop_next_refresh      # False, "drop" or "restart"
             self.drop_next_refresh = False
             if drop:
                 self.counters["refresh_dropped"] += 1
@@ -806,6 +810,8 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
                     self.connection.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
+                if drop == "restart":
+                    self.gw.restart()
                 return None
             extra = [("Retry-After", "60")] if status == 429 else []
             cks = self.auth_cookies(tokens[0], tokens[1], tokens[2]) if tokens else []
@@ -841,6 +847,10 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             self.gw.record_unknown("%s %s" % (m, path))
             return self.json(404, {"error": "not found"}, cookies=new_cookies)
+        if path in ("/logo.png", "/favicon.ico") and m in ("GET", "HEAD"):
+            # Served from static/, outside dist (handlers/core.py:429-437):
+            # a 404 here is one of "the gateway's own assets failed" (F6).
+            return self.send(200, self.bundle.read("static/kirocrew-logo.png"), "image/png")
         if m in ("GET", "HEAD"):
             return self.serve_file(path, cookies=new_cookies)
         self.gw.record_unknown("%s %s" % (m, path))
@@ -1039,7 +1049,7 @@ class Control(BaseHTTPRequestHandler):
             return self.reply({"ok": True})
         if u.path == "/__drop-next-refresh":
             with self.gw.lock:
-                self.gw.drop_next_refresh = True
+                self.gw.drop_next_refresh = "restart" if num("restart") else "drop"
             return self.reply({"ok": True})
         actions = {"/__expire": self.gw.expire_all, "/__revoke": self.gw.revoke_chains,
                    "/__logout-all": self.gw.logout_all, "/__reset": self.gw.reset}
