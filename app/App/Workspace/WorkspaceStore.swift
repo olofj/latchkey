@@ -417,6 +417,36 @@ enum WorkspaceStore {
         return dir
     }
 
+    /// Renames the workspace's `state/` aside so a fresh node can be created,
+    /// and returns where it went (F8 §4.4). NEVER deletes: this directory IS
+    /// the node's identity, and an owner who taps this is already having a
+    /// bad day. The aside copy stays inside the backup-excluded root, which
+    /// is right: it holds node keys. Nothing sweeps these up.
+    static func setStateDirAside(_ id: UUID, now: Date = Date()) throws -> URL {
+        try setAside(stateDir: workspaceDir(id).appending(path: "state", directoryHint: .isDirectory),
+                     now: now)
+    }
+
+    /// `state/` → `state-aside-<ISO 8601>/` beside it, then an empty `state/`.
+    /// A rename in the same directory, so it needs no permission on `state/`
+    /// itself: it works for the unreadable directory that is its main case.
+    static func setAside(stateDir: URL, now: Date) throws -> URL {
+        let fm = FileManager.default
+        let format = ISO8601DateFormatter()
+        format.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
+        let parent = stateDir.deletingLastPathComponent()
+        let stamp = "state-aside-\(format.string(from: now))"
+        var aside = parent.appending(path: stamp, directoryHint: .isDirectory)
+        var n = 2
+        while fm.fileExists(atPath: aside.path) {
+            aside = parent.appending(path: "\(stamp)-\(n)", directoryHint: .isDirectory)
+            n += 1
+        }
+        try fm.moveItem(at: stateDir, to: aside)
+        try fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        return aside
+    }
+
 
     static func tabsURL(_ id: UUID) -> URL {
         workspaceDir(id).appending(path: "tabs.json")

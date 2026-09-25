@@ -52,10 +52,12 @@ final class WorkspaceManager: ObservableObject {
         if TestHooks.flag("-UITestResetNodeLog") {
             NodeLog.removeFiles(in: WorkspaceStore.logsDir)
         }
-        do {
-            try TailscaleLogging.setup(directory: WorkspaceStore.logsDir.path)
-        } catch {
-            fatalError("Could not initialize process logging: \(error)")
+        //
+        // A failure is not a trap (F8 §4.6): the app runs, and no node is
+        // created until logging works — `TSNetManager` asks `ProcessLogging`
+        // before every start and shows the refusal on the gate (G7).
+        if let error = ProcessLogging.setUp() {
+            logger.log("NODE START REFUSED at launch: process logging is unavailable: \(error). No node will be started until it is; nothing on disk has been changed.")
         }
 
         // Before any node key or cookie is written (R5): the data root holds

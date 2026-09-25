@@ -117,11 +117,30 @@ final class TSNetManager {
             logger.log("startTailscale: already in flight, skipping")
             return
         }
+        startRetryTask?.cancel()
+        startRetryTask = nil
         startInFlight = true
+        // F8 §4.6: never a node without process logging. Its filch is what
+        // redacts tsnet's Go stderr, and that stderr carries login links.
+        if let error = ProcessLogging.setUp() {
+            startInFlight = false
+            let failure = startTracker.failed(stage: .logging, errnoValue: Self.errnoValue(of: error),
+                                              message: String(describing: error))
+            model.startFailure = failure
+            logger.log("NODE START REFUSED: process logging is unavailable (\(error)); no node is created without it. Nothing on disk has been changed. Try now retries.")
+            return
+        }
 #if LATCHKEY_TEST_HOOKS
+        // F8 §6.1: fail this attempt as a node that could not be created
+        // would, above both the fixture and the real start.
+        if let error = NodeStartFailureHook.nextAttemptError() {
+            nodeStartFailed(error)
+            return
+        }
         // R11: the offline harness supplies what a node would have produced
         // and everything above the model runs as in production.
         if let fixture = TestNetworkFixture.fromLaunchArguments() {
+            nodeStartSucceeded()
             startFromTestFixture(fixture)
             return
         }
@@ -129,6 +148,99 @@ final class TSNetManager {
         Task(priority: .userInitiated) {
             await startTailscale()
         }
+    }
+
+    /// F8: consecutive failed starts and the one on screen.
+    @MainActor private var startTracker = NodeStartTracker()
+    /// The next scheduled attempt after a failed start, if any (F8 §4.3).
+    @MainActor private var startRetryTask: Task<Void, Never>?
+    /// Set on background, so a foreground can tell a return to the app (new
+    /// information: retry now, on a fresh schedule) from the launch's own
+    /// first `.active`.
+    @MainActor private var backgroundedSinceStartFailure = false
+
+    /// A start could not produce a node (F8 §4.1). Nothing on disk is
+    /// touched; the gate says so, and the next attempt is scheduled.
+    @MainActor
+    private func nodeStartFailed(_ error: Error) {
+        startInFlight = false
+        let details = Self.startFailureDetails(error)
+        let failure = startTracker.failed(stage: .node, errnoValue: details.errno, message: details.message)
+        model.startFailure = failure
+        let next = failure.nextRetryIn.map { "next in \($0)" } ?? "no more automatic retries"
+        logger.log("NODE START FAILED: \(error) (errno \(failure.errnoValue.map(String.init) ?? "none")). Nothing on disk has been changed. Attempt \(failure.attempt) of \(NodeStartFailure.retryDelays.count + 1); \(next).")
+        guard let delay = failure.nextRetryIn else { return }
+        startRetryTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled else { return }
+            self.startRetryTask = nil
+            self.startTailscaleIfNeeded()
+        }
+    }
+
+    /// The one place a start failure is cleared (F8 §4.2).
+    @MainActor
+    private func nodeStartSucceeded() {
+        if model.startFailure != nil {
+            logger.log("NODE START succeeded after \(model.startFailure?.attempt ?? 0) failed attempt(s)")
+        }
+        startTracker.succeeded()
+        model.startFailure = nil
+    }
+
+    /// Try now (F8 §2): an attempt at once, on a fresh schedule. For a
+    /// logging refusal, the setup is retried first and the node follows in
+    /// the same tap.
+    @MainActor
+    func retryStartNow() {
+        guard model.startFailure != nil else { return }
+        logger.log("NODE START: Try now")
+        startTracker.restartSchedule()
+        startTailscaleIfNeeded()
+    }
+
+    /// Start a new node (F8 §4.4): the node's state directory is renamed
+    /// aside by `setAside` — never deleted — and a fresh start follows. Only
+    /// while a node start is failing, and never for a logging refusal, which
+    /// a new identity would not fix.
+    @MainActor
+    func startNewNode(setAside: () throws -> URL) async throws -> URL {
+        guard let failure = model.startFailure, failure.stage == .node, !startInFlight else {
+            throw TSNetError.noNode
+        }
+        startRetryTask?.cancel()
+        startRetryTask = nil
+        // A start that failed after creating the node (in tailscaleUp) left it
+        // holding the directory: close it before the rename.
+        await shutdown()
+        let aside = try setAside()
+        logger.log("NODE START, NEW NODE: the previous state directory was kept, renamed to \(aside.lastPathComponent); starting a fresh node")
+        startTracker.restartSchedule()
+        startTailscaleIfNeeded()
+        return aside
+    }
+
+    /// The errno and message a failed start carried. A `TsnetStart` failure
+    /// has no errno (`recErr` returns -1 for every Go error): its message
+    /// is the evidence, and `NodeStartFailure` reads the errno from it.
+    nonisolated static func startFailureDetails(_ error: Error) -> (errno: Int32?, message: String) {
+        switch error as? TailscaleError {
+        case .posixError(let e, let details):
+            return (e.code.rawValue, details ?? String(describing: e.code))
+        case .unknownPosixError(let code, let details):
+            return (code, details ?? "error \(code)")
+        case .internalError(let details):
+            return (nil, details ?? "internal error")
+        default:
+            return (errnoValue(of: error), String(describing: error))
+        }
+    }
+
+    nonisolated private static func errnoValue(of error: Error) -> Int32? {
+        if let e = error as? POSIXError { return e.code.rawValue }
+        if case .posixError(let e, _)? = error as? TailscaleError { return e.code.rawValue }
+        let ns = error as NSError
+        return ns.domain == NSPOSIXErrorDomain ? Int32(ns.code) : nil
     }
 
     func getModel() -> TSNetModel {
@@ -185,10 +297,15 @@ final class TSNetManager {
             await MainActor.run { setLocalAPIClient(localAPIClient) }
 
             try await tailscaleUp(localAPI: localAPIClient, consumer: consumer)
+            // After the whole start, not at node creation: clearing there would
+            // reset the schedule on every retry of a failing tailscaleUp, and
+            // the bounded backoff would become a 1 s loop (F8 §3).
+            await MainActor.run { nodeStartSucceeded() }
 
         } catch {
-            await MainActor.run { startInFlight = false }
-            fatalError("Error setting up Tailscale: \(error)")
+            // Not a trap (F8): a crash here was a crash loop at launch whose
+            // only exit, deleting the app, deleted the node's identity.
+            await MainActor.run { nodeStartFailed(error) }
         }
     }
 
@@ -900,13 +1017,26 @@ final class TSNetManager {
 
     func willEnterBackground() {
         logger.log("Background: leaving tsnet, proxy, and observers unchanged")
+        if model.startFailure != nil { backgroundedSinceStartFailure = true }
     }
 
     func willEnterForeground() {
         // Recovery is driven by an actual loopback connection failure, not by
         // scene lifecycle: iOS can defunct sockets for reasons other than lock.
         logger.log("Foreground: no lifecycle recovery; awaiting actual socket errors")
-        if node == nil { startTailscaleIfNeeded() }
+        if model.startFailure != nil {
+            // F8 §4.3: a return to the app is new information (a port freed,
+            // space made), so a failing start is retried now on a fresh
+            // schedule. The launch's own first `.active` is not a return,
+            // and must not jump the schedule already running.
+            if backgroundedSinceStartFailure {
+                backgroundedSinceStartFailure = false
+                startTracker.restartSchedule()
+                startTailscaleIfNeeded()
+            }
+        } else if node == nil {
+            startTailscaleIfNeeded()
+        }
         // The relay listener is the one socket nothing polls (R30 review), so
         // it is asked -- a loopback connect, off the main actor. A refusal is
         // the socket error awaited above; an answer changes nothing.

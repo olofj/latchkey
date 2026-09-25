@@ -37,6 +37,12 @@ struct StatusView: View {
                 Spacer()
             }
 
+            // G7 (F8): no node could be created. First, because the states
+            // below are what the model reports while there is no node.
+            if let failure = viewModel.startFailure {
+                NodeStartFailureText(failure: failure, startNewNode: viewModel.startNewNode)
+            }
+
             // G2/G6 (F4 §3.6). "Connecting…" and "Starting…" are unbounded —
             // the node reaches another state when it does — so after 15 s the
             // gate says where to look instead of spinning silently. Three status
@@ -87,7 +93,7 @@ struct StatusView: View {
             return .green
         case "person.crop.circle.badge.exclamationmark", "clock.badge.exclamationmark":
             return .orange
-        case "stop.circle.fill":
+        case "stop.circle.fill", "exclamationmark.triangle.fill":
             return .red
         case "hourglass.circle.fill":
             return .blue

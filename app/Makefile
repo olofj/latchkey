@@ -212,6 +212,7 @@ test-policy:  ## Run the host-only unit tests (fast; no simulator, no framework)
 	@./scripts/test-workspace-store.sh
 	@./scripts/test-session-manager.sh
 	@./scripts/test-browser-view-model.sh
+	@./scripts/test-node-start-failure.sh
 
 .PHONY: test-ios-ui
 test-ios-ui: framework app  ## Run every required iOS UI test on the simulator

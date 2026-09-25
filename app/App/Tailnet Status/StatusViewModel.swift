@@ -20,7 +20,17 @@ final class StatusViewModel:  ObservableObject {
     /// G2 (F4 §3.6): the node has not reached a state that says anything yet.
     /// Unbounded by design — it ends when the node gets somewhere — so the gate
     /// puts a clock and a place to look on it rather than spinning silently.
-    var isStartingUp: Bool { tsnetState == nil || tsnetState == .NoState || tsnetState == .Starting }
+    /// Not while a start has failed (G7): those states are what the model
+    /// reports while there is no node, and "Connecting…" over a node that will
+    /// never exist is F4's "misleading" verdict (F8 §4.5).
+    var isStartingUp: Bool {
+        startFailure == nil && (tsnetState == nil || tsnetState == .NoState || tsnetState == .Starting)
+    }
+    /// G7 (F8): the node could not be created. Ahead of every other state.
+    @Published var startFailure: NodeStartFailure?
+    /// Start a new node (F8 §4.4), set by the workspace that owns the state
+    /// directory. Returns where the old one went.
+    var startNewNode: (() async throws -> URL)?
     /// G6: stopped, which said "Stopped" and nothing about what happens next.
     var isStopped: Bool { tsnetState == .Stopped }
     /// True after the backend explicitly confirms authentication but before it
@@ -151,20 +161,30 @@ final class StatusViewModel:  ObservableObject {
             }
             .store(in: &observers)
 
-        Publishers.CombineLatest3(
+        manager.model.$startFailure
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] failure in self?.startFailure = failure }
+            .store(in: &observers)
+
+        Publishers.CombineLatest4(
             manager.model.$tailnetName,
             manager.model.$state,
-            $loggedInConnecting
+            $loggedInConnecting,
+            manager.model.$startFailure.map { $0 != nil }.removeDuplicates()
         )
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] name, state, loggedInConnecting in
+            .sink { [weak self] name, state, loggedInConnecting, startFailed in
                 guard let self else { return }
-                updateStatusText(state, name: name, loggedInConnecting: loggedInConnecting)
+                updateStatusText(state, name: name, loggedInConnecting: loggedInConnecting,
+                                 startFailed: startFailed)
             }.store(in: &observers)
     }
 
-    private func updateStatusText(_ state: Ipn.State?, name: String?, loggedInConnecting: Bool) {
-        let mapping = mapState(state, name, loggedInConnecting: loggedInConnecting)
+    private func updateStatusText(_ state: Ipn.State?, name: String?, loggedInConnecting: Bool,
+                                  startFailed: Bool) {
+        let mapping = startFailed
+            ? (text: "Not started", icon: "exclamationmark.triangle.fill")
+            : mapState(state, name, loggedInConnecting: loggedInConnecting)
         statusText = mapping.text
         statusIconName = mapping.icon
     }

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | spec — not implemented. Deferred deliberately from the 2026-09-23 adversarial review, which recorded it under "Left open": *"Needs a design, not a quick guard."* |
+| **Status** | implemented 2026-09-25. Deferred from the 2026-09-23 adversarial review, which recorded it under "Left open": *"Needs a design, not a quick guard."* Where the build departs from §4 and §6, §9 says so and why |
 | **Requested** | Not by Olof directly. Found by the full-codebase adversarial review of 2026-09-23 and left open in `../DECISIONS.md` because the obvious fix — catch the error and carry on — produces a running app with no node, which is a worse lie than the crash |
 | **Revision** | one: `TSNetManager` **never traps** on a node it could not create. Every timeout, budget, poll cadence and the split tunnel are unchanged |
 | **Extends** | [F4](F4-never-a-bare-screen.md). F4 enumerates every state the root view can be in (§2, G0–G6 / D1–D11 / P1–P8) and this state is **absent from that table** — because today it is not a state, it is a `fatalError`. F8 adds one row, **G7**, and reuses F4's failure screen, wording rules and identifiers rather than inventing a second failure surface |
@@ -377,6 +377,41 @@ contents, not merely its existence. An empty `state-aside-*` beside a fresh
 
 ## 9. Log
 
+- 2026-09-25: implemented. Where the build departs from the text above:
+  - **The gate moved under it.** F11 (`5e78558`) split the sign-in button out
+    of `StatusView` into `GateLoginButton`, pinned below the gate's
+    `ScrollView`. G7 follows that split rather than §4.5's single view: its
+    words (`NodeStartFailureText`) are in `StatusView`, with *Start a new
+    node* as their last line, and Try now and Logs (`NodeStartFailureActions`)
+    take the pinned slot, so no text size pushes them off screen. The F11
+    introduction is not shown over G7.
+  - **§1.3's errno column is not what arrives.** `TsnetStart` returns -1 for
+    every Go error, so a real failure is `.internalError(message)` with no
+    errno. The sentence is chosen from the errno when the error carries one
+    (the hook's) and from Go's error text otherwise.
+  - **The message was being lost as well.** TailscaleKit's `getErrorMessage`
+    returned "Error message buffer too small" for anything over 256 bytes,
+    which a container path alone exceeds; the vendored wrapper now grows its
+    buffer (a separate commit). `testAnUnwritableStateDirectoryIsSurvived`
+    found this; no hook-driven test could have.
+  - **Cleared after the whole start, not at node creation** (§4.2): clearing
+    there reset the schedule on each retry of a failing `tailscaleUp`, and the
+    backoff became a 1 s loop.
+  - **The schedule** is the first attempt plus five retries at 1, 2, 4, 8,
+    16 s. Try now and a return from the background restart it; the launch's
+    own first foreground does not, or it would add an attempt at once.
+  - **No *Start a new node* for the logging refusal** (§4.6 said the action
+    was the same for both): a new identity does not fix the logs directory,
+    and offering it there costs the node for nothing.
+  - **`loggingUnavailable` is `ProcessLogging`, not a `WorkspaceManager`
+    property:** `TSNetManager` asks before every start and has no reference to
+    the manager. Try now re-runs the setup first, as §4.6 asks.
+  - **Try now's test uses a count, not a control port.** The app has no
+    control port to flip the hook through; `-UITestNodeStartFailsTimes 4`
+    leaves an 8 s wait after the fourth failure, and the tap must reach the
+    dashboard inside 5 s.
+  - **The confirmation** is a popover on iOS 26, with no Cancel button; the
+    dismissal test taps outside it.
 - 2026-09-23: specced, and the spec found a second defect. The review recorded
   one trap; writing the design turned up `WorkspaceManager.init`'s, which fires
   **earlier** on the same unwritable-container fault, so fixing only the one that

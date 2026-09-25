@@ -2843,14 +2843,9 @@ change, then install.
 - ~~`TSNetManager.startTailscale` calls `fatalError` when the node cannot be
   created, so an unopenable state dir is a crash loop whose only exit is
   deleting the app — which is identity loss. Needs a design, not a quick guard.~~
-  **Specced 2026-09-23 as [F8](features/F8-node-start-failure.md); still to
-  build.** Writing it found a **second** trap on the same fault, firing earlier:
-  `WorkspaceManager.init`'s `fatalError` when `TailscaleLogging.setup` throws, on
-  a directory in the same unwritable tree. Fixing only the reported one would
-  have left the crash loop intact for precisely the case that motivated the fix.
-  It also cannot merely be caught: the filch that redacts tsnet's Go stderr is
-  what failed, so a logging failure has to *prevent* node creation rather than be
-  reported and ignored.
+  **Done 2026-09-25 as [F8](features/F8-node-start-failure.md)**, with the
+  second trap it found (`WorkspaceManager.init`'s, on logging setup); see that
+  day's entry, "The launch path does not trap".
 - A relay with a dead upstream surfaces as `-1009`, which
   `SocksRelayRecovery.isTransportFailure` does not classify. By design (the
   status poll repairs it), recorded so the next reader does not treat it as a
@@ -3123,3 +3118,46 @@ Rejected:
 
 **Evidence:** `docs/features/F15-chrome-does-not-own-the-page.md` §9,
 "revised: the bar is absent in the steady state".
+
+## 2026-09-25 — The launch path does not trap
+
+**Decision:** no `fatalError` on any launch path a release build can reach. A
+node that cannot be created is G7 (F8): a screen that names the cause, says
+nothing was deleted, retries at 1, 2, 4, 8 and 16 s and then stops, and
+offers Try now, Logs and — confirmed, last — *Start a new node*, which
+renames `state/` aside and never deletes it. Both traps went:
+`TSNetManager.startTailscale`'s and `WorkspaceManager.init`'s on
+`TailscaleLogging.setup`. A logging failure now **refuses** every node start
+(`ProcessLogging`, asked before each one) rather than being caught and
+ignored: its filch is what redacts tsnet's Go stderr, which carries login
+links.
+
+**Why:** the only exit from the crash loop was deleting the app, which
+deleted the node's identity; the cheapest recovery from a transient fault was
+a permanent loss. "Catch and continue" was rejected in the 2026-09-23 review
+because a running app with no node and no explanation is worse than the crash.
+
+Found while building it:
+
+- **A real start failure carries no errno.** `TsnetStart` returns -1 for every
+  Go error (`recErr`), so TailscaleKit throws `.internalError(message)`. The
+  cause sentence is chosen from the errno when there is one and from Go's
+  error text ("permission denied", "no space left on device", "address already
+  in use") otherwise. A mapping keyed on errno alone would never have matched
+  a real failure.
+- **The message itself was lost.** `getErrorMessage` asked for 256 bytes and,
+  on `ERANGE`, returned "Error message buffer too small" instead of the
+  message. A Go error names its path first and its cause last, and a
+  simulator container path alone overflows 256. Fixed in the vendored Swift
+  wrapper as its own commit: the buffer grows until the message fits.
+  L1's `chmod 000` test is what found it; the hook-driven tests could not.
+- **A clear on node creation would loop.** Clearing the failure when
+  `setupNode` returned, as §4.2 read, reset the schedule on every retry of a
+  failing `tailscaleUp`, turning the bounded backoff into a 1 s loop. It is
+  cleared after the whole start succeeds.
+- **No new node for a logging refusal.** A new identity does not fix the
+  logs directory, so G7 does not offer one there (F8 §4.6 said the action
+  was the same for both causes).
+
+**Evidence:** `docs/features/F8-node-start-failure.md` §9; L1's six F8 tests
+and `scripts/test-node-start-failure.swift`, each shown to fail there.

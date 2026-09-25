@@ -31,7 +31,12 @@ struct LogViewer: View {
 
     /// Pre-filled with `socks` because that's the reason this screen exists;
     /// clear it to see everything.
-    @State private var filter: String = "socks"
+    @State private var filter: String
+
+    init(dismissAction: @escaping () -> Void, initialFilter: String = "socks") {
+        self.dismissAction = dismissAction
+        _filter = State(initialValue: initialFilter)
+    }
     @State private var lines: [LogRing.Entry] = []
     @State private var filtered: [LogRing.Entry] = []
     @State private var total: Int = 0

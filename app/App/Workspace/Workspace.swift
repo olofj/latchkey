@@ -58,7 +58,14 @@ final class Workspace: ObservableObject, Identifiable {
                                      // A load that failed on transport goes to the
                                      // manager, which may restart its relay (R30).
                                      reportLoadFailure: { [manager] in manager.pageLoadFailed($0) })
-    lazy var statusViewModel = StatusViewModel(manager: manager)
+    lazy var statusViewModel: StatusViewModel = {
+        let vm = StatusViewModel(manager: manager)
+        // F8 §4.4: the move is the workspace's, since it names the directory.
+        vm.startNewNode = { [id, manager] in
+            try await manager.startNewNode { try WorkspaceStore.setStateDirAside(id) }
+        }
+        return vm
+    }()
     /// Finds KiroCrew gateways on this workspace's tailnet (M5).
     lazy var discovery = GatewayDiscovery(model: model) { [manager] in
         await manager.refreshStatusNow()

@@ -54,6 +54,9 @@ final class TSNetModel: ObservableObject {
     /// than here, where F4 §4.5 first put it: three host tests compile that file
     /// already, and one target means `TSNet/` can name the type regardless.
     @Published var lastProxyFailure: ProxyReply?
+    /// The node could not be created (F8, G7). Nil once one is — and only
+    /// then: `TSNetManager` clears it on a successful start and nowhere else.
+    @Published var startFailure: NodeStartFailure?
 
     var wantRunning: Bool {
         if let prefs = prefs {

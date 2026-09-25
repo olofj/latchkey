@@ -49,7 +49,7 @@ struct ConnectionGateView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if statusViewModel.needsAuth && !hasEverConnected {
+                    if statusViewModel.needsAuth && !hasEverConnected && statusViewModel.startFailure == nil {
                         GateIntroduction()
                     }
                     StatusView(viewModel: statusViewModel)
@@ -61,7 +61,13 @@ struct ConnectionGateView: View {
             // Outside the ScrollView, deliberately (F11 §4.3). The same
             // precedence StatusView gives its hints: approval and "logged in,
             // connecting" both mean there is nothing to sign in to.
-            if statusViewModel.needsAuth && !statusViewModel.needsMachineAuth
+            // G7 (F8) takes the slot: with no node there is nothing to sign
+            // in to, and Try now must be as unmissable as sign-in is.
+            if statusViewModel.startFailure != nil {
+                NodeStartFailureActions(onRetry: { statusViewModel.manager.retryStartNow() })
+                    .padding(.horizontal)
+                    .padding(.vertical, 12)
+            } else if statusViewModel.needsAuth && !statusViewModel.needsMachineAuth
                 && !statusViewModel.loggedInConnecting {
                 GateLoginButton(viewModel: statusViewModel)
                     .padding(.horizontal)

@@ -1021,6 +1021,235 @@ final class OfflineHarnessTests: XCTestCase {
         return bottom ?? -1
     }
 
+    // MARK: - F8 §6: a node that cannot start is a screen, not a crash
+
+    /// The defect itself: a failed node start was a `fatalError`, so the app
+    /// died at launch, every launch. Now it runs, says why, says nothing was
+    /// deleted, counts its retries down — and stops counting after five.
+    /// Shown to fail by restoring the `fatalError` in `nodeStartFailed`: the
+    /// app is gone and XCUITest reports it not running.
+    func testANodeThatCannotStartShowsAScreenInsteadOfDying() async throws {
+        let launched = Date()
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         extra: ["-UITestNodeStartFails", "EACCES"])
+        defer { app.terminate() }
+
+        XCTAssertTrue(element(app, "node-start-failed").appears(within: 20), "G7 is shown")
+        try await sleep(until: launched.addingTimeInterval(10))
+        XCTAssertEqual(app.state, .runningForeground, "the app is still running 10 s after launch")
+        XCTAssertTrue(element(app, "node-start-failed-cause").label.contains("storage permissions"),
+                      "the cause names permissions: \(element(app, "node-start-failed-cause").label)")
+        XCTAssertTrue(element(app, "node-start-nothing-deleted").label.contains("Nothing has been deleted"),
+                      "the screen says nothing was deleted")
+        XCTAssertTrue(app.buttons["node-start-retry-now"].exists, "Try now is offered")
+        XCTAssertTrue(app.buttons["node-start-logs"].exists, "and Logs")
+        XCTAssertFalse(element(app, "gate-starting-hint").exists, "not G2's 'still starting' over a node that won't exist")
+        XCTAssertFalse(app.buttons["login-button"].exists, "and no sign-in: there is no node to sign in")
+
+        // 1 + 2 + 4 + 8 + 16 s after the first failure, the schedule is spent.
+        XCTAssertTrue(element(app, "node-start-retry-stopped").appears(within: 40),
+                      "the retries stop after five: no unbounded loop")
+        XCTAssertFalse(element(app, "node-start-retry-countdown").exists, "and the countdown goes with them")
+        XCTAssertTrue(app.buttons["node-start-retry-now"].exists, "while Try now stays")
+        XCTAssertEqual(app.state, .runningForeground, "the app is still running")
+    }
+
+    /// A failure that clears on retry reaches the dashboard with no tap.
+    /// Shown to fail by an empty retry schedule (one attempt): G7 stays and
+    /// no page ever loads.
+    func testTheNodeStartRetryIsVisibleAndSucceeds() async throws {
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         extra: ["-UITestNodeStartFailsTimes", "2"])
+        defer { app.terminate() }
+
+        XCTAssertTrue(element(app, "node-start-failed").appears(within: 20), "G7 is shown")
+        XCTAssertTrue(element(app, "node-start-retry-countdown").exists, "with its countdown")
+        _ = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 30) {
+            $0["title"] as? String == "FAKE DASHBOARD"
+        }
+        XCTAssertFalse(element(app, "node-start-failed").exists, "G7 is gone once a start succeeds")
+    }
+
+    /// Try now does not wait out the backoff. Four failures leave an 8 s
+    /// wait; the tap must reach the dashboard well inside it. Shown to fail
+    /// by making `retryStartNow` a no-op: the page only arrives with the
+    /// scheduled retry, after the bound.
+    func testTryNowRestartsTheNodeImmediately() async throws {
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         extra: ["-UITestNodeStartFailsTimes", "4"])
+        defer { app.terminate() }
+
+        let countdown = element(app, "node-start-retry-countdown")
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline, (countdown.value as? String)?.hasPrefix("attempt=4 ") != true {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(countdown.value as? String, "attempt=4 next=8", "the fourth failure waits 8 s")
+        let tapped = Date()
+        app.buttons["node-start-retry-now"].tap()
+        _ = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 5) {
+            $0["title"] as? String == "FAKE DASHBOARD"
+        }
+        let took = Date().timeIntervalSince(tapped)
+        add(XCTAttachment(string: "TRY-NOW tap→dashboard \(String(format: "%.1f", took)) s"))
+        XCTAssertLessThan(took, 5, "Try now reached the dashboard in \(took) s, inside the 8 s backoff")
+    }
+
+    /// *Start a new node* moves the old identity aside, never deletes it —
+    /// and does nothing at all unless the owner confirms. Shown to fail by
+    /// making `setAside` a delete (no aside directory), and by skipping the
+    /// confirmation (the cancel step finds the directory moved).
+    func testStartingANewNodeMovesTheOldStateAsideAndKeepsIt() async throws {
+        let first = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        XCTAssertTrue(first.webViews.firstMatch.appears(within: 30), "the first launch creates the workspace")
+        first.terminate()
+
+        let state = try stateDirectory()
+        let planted = state.appending(path: "planted-identity.bin")
+        let bytes = Data((0..<4096).map { _ in UInt8.random(in: 0...255) })
+        try bytes.write(to: planted)
+
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         reset: false, extra: ["-UITestNodeStartFails", "EACCES"])
+        defer { app.terminate() }
+        let newNode = app.buttons["node-start-new-node"]
+        XCTAssertTrue(newNode.reveal(scrolling: app.scrollViews.firstMatch), "Start a new node is offered")
+
+        // Dismissed: nothing on disk may move. iOS 26 presents the dialog as
+        // a popover with no Cancel button; a tap outside it dismisses.
+        newNode.tap()
+        let confirm = app.buttons.matching(identifier: "node-start-new-node-confirm").firstMatch
+        XCTAssertTrue(confirm.appears(within: 5), "the confirmation is shown")
+        app.otherElements["PopoverDismissRegion"].tap()
+        XCTAssertTrue(confirm.disappears(within: 5), "and dismissed")
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(try Data(contentsOf: planted), bytes, "a dismissed confirmation moves nothing")
+        XCTAssertEqual(try asideDirectories(beside: state), [], "and sets nothing aside")
+
+        newNode.tap()
+        XCTAssertTrue(confirm.appears(within: 5), "the confirmation offers the move")
+        confirm.tap()
+
+        var aside: [URL] = []
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline, aside.isEmpty {
+            aside = try asideDirectories(beside: state)
+            if aside.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
+        }
+        XCTAssertEqual(aside.count, 1, "the old state directory is set aside, not deleted")
+        let kept = try XCTUnwrap(aside.first).appending(path: "planted-identity.bin")
+        XCTAssertEqual(try? Data(contentsOf: kept), bytes, "with the old node's files in it, byte for byte")
+        var isDir: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: state.path, isDirectory: &isDir) && isDir.boolValue,
+                      "and a fresh state/ is in its place")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: planted.path), "which does not hold the old files")
+        XCTAssertEqual(app.state, .runningForeground, "the app is still running")
+    }
+
+    /// The real thing, not the hook: the workspace's state directory made
+    /// unreadable from the host, the real tsnet start, and a real failure —
+    /// which arrives with no errno, only Go's "permission denied". Shown to
+    /// fail by restoring the `fatalError` (the app is gone), and is the one
+    /// test proving the hook models the real failure.
+    func testAnUnwritableStateDirectoryIsSurvived() async throws {
+        let first = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        XCTAssertTrue(first.webViews.firstMatch.appears(within: 30), "the first launch creates the workspace")
+        first.terminate()
+
+        let state = try stateDirectory()
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: state.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: state.path)
+        }
+
+        // No fixture: the real node starts. Its control URL is a dead
+        // loopback port, so were the start to succeed it would reach nothing.
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-UITestHomePage", Self.gateway,
+            "-TestControlURL", "http://127.0.0.1:9",
+        ]
+        app.launch()
+        defer { app.terminate() }
+
+        XCTAssertTrue(element(app, "node-start-failed").appears(within: 20), "G7 is shown")
+        let cause = element(app, "node-start-failed-cause").label
+        XCTAssertTrue(cause.contains("storage permissions"), "the real failure names permissions: \(cause)")
+        try await Task.sleep(for: .seconds(3))
+        XCTAssertEqual(app.state, .runningForeground, "the app is still running")
+    }
+
+    /// No node is ever created while process logging is unavailable (F8
+    /// §4.6): its filch redacts tsnet's stderr. So G7 with the log-files
+    /// sentence and no countdown, the log saying no node was started, and
+    /// ZERO traffic — before and after Try now. Shown to fail by letting the
+    /// start carry on after reporting the refusal: the fixture node starts
+    /// and the proxy sees the dashboard's CONNECT.
+    func testLoggingSetupFailureStopsTheNodeRatherThanStartingItBlind() async throws {
+        let launched = Date()
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         extra: ["-UITestLoggingSetupFails"])
+        defer { app.terminate() }
+
+        // Traffic first: a start that carried on would also replace the gate
+        // with the dashboard, and the G7 check would hide what matters.
+        // Ten seconds is past where a started node's page has dialled.
+        try await sleep(until: launched.addingTimeInterval(10))
+        var connects = try await journalConnects()
+        XCTAssertTrue(connects.isEmpty, "no node means no traffic: the proxy saw \(connects)")
+        try await assertZeroRequests(host: "dash.tail-scale.ts.net")
+
+        XCTAssertTrue(element(app, "node-start-failed").appears(within: 20), "G7 is shown")
+        let cause = element(app, "node-start-failed-cause").label
+        XCTAssertTrue(cause.contains("can't open its own log files"), "the cause is the logging refusal: \(cause)")
+        XCTAssertFalse(element(app, "node-start-retry-countdown").exists, "with no countdown")
+        XCTAssertFalse(app.buttons["node-start-new-node"].exists, "and no new node, which would not help")
+
+        app.buttons["node-start-retry-now"].tap()
+        try await Task.sleep(for: .seconds(5))
+        XCTAssertTrue(element(app, "node-start-failed").exists, "Try now is refused again")
+        connects = try await journalConnects()
+        XCTAssertTrue(connects.isEmpty, "nor after Try now: the proxy saw \(connects)")
+        try await assertZeroRequests(host: "dash.tail-scale.ts.net")
+
+        app.buttons["node-start-logs"].tap()
+        let refused = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "NODE START REFUSED: process logging is unavailable")).firstMatch
+        XCTAssertTrue(refused.appears(within: 10), "the app log records that no node was started")
+    }
+
+    /// The only workspace's `state/`, in the app's container. The simulator's
+    /// test runner reads the filesystem as the host user.
+    private func stateDirectory() throws -> URL {
+        let root = try appSupportDirectory()
+        let data = try Data(contentsOf: root.appending(path: "workspaces.json"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let list = try XCTUnwrap(json["workspaces"] as? [[String: Any]], "workspaces.json lists workspaces")
+        XCTAssertEqual(list.count, 1, "one workspace, as -UITestResetWorkspaces seeds")
+        let id = try XCTUnwrap(list.first?["id"] as? String)
+        return root.appending(path: "Workspaces/\(id)/state", directoryHint: .isDirectory)
+    }
+
+    private func appSupportDirectory() throws -> URL {
+        // .../Containers/Data/Application/<runner>/ → its siblings.
+        let applications = URL(fileURLWithPath: NSHomeDirectory()).deletingLastPathComponent()
+        let fm = FileManager.default
+        for dir in try fm.contentsOfDirectory(at: applications, includingPropertiesForKeys: nil) {
+            let meta = dir.appending(path: ".com.apple.mobile_container_manager.metadata.plist")
+            guard let plist = NSDictionary(contentsOf: meta),
+                  plist["MCMMetadataIdentifier"] as? String == "net.lixom.latchkey" else { continue }
+            return dir.appending(path: "Library/Application Support/Latchkey-UI-Test-iOS",
+                                 directoryHint: .isDirectory)
+        }
+        throw NSError(domain: "OfflineHarnessTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "the app's container is not visible from the test runner"])
+    }
+
+    private func asideDirectories(beside state: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: state.deletingLastPathComponent(),
+                                                    includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("state-aside-") }
+    }
+
     // MARK: - Launch
 
     /// `state` is the fixture's `BackendState`: `NeedsLogin` holds the app at
