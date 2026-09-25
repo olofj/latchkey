@@ -447,3 +447,83 @@ The session, discovery and lifecycle suites still use instance 0's
 constants (`SessionTests`, `DiscoveryTests`, `LifecycleHarnessTests`,
 `ShareTests`). Nothing here changes them, and they are not needed to shard
 L1.
+
+**2026-09-25, stage 2: L1 is sharded by default, 168–189 s at N = 4.**
+`scripts/test-offline.sh` now runs L1 across four simulators;
+`--serial` is the old one-simulator path and `--shards N` (2–9) picks N.
+
+- *Shape.* `scripts/test-offline-shards.py` is the coordinator.
+  test-offline.sh is the worker, run once per shard: simulator
+  `Latchkey Shard k` against harness instance k, with its list of tests.
+  So preflight, the harness self-test, R1's scan and teardown are the
+  serial path's own. The build runs once (`--build-only` on shard 1).
+  Every shard then runs `test-without-building -xctestrun` against that
+  one product. Shards use instances 1–N, which leaves instance 0 and
+  `iPhone 17` to the serial path and L2.
+- *Simulators.* Any shard simulator that is missing or shut down is created
+  and booted one at a time before the clock starts, and left booted.
+  `test-offline-shards.py sims` lists them, `sims down` shuts them down and
+  `sims delete` removes them. The first run's three first boots took 22,
+  29 and 35 s.
+- *Balance.* Longest first, by `scripts/l1-durations.txt` (seeded from
+  the "after" column above). The four `settledDefaultRun` observers are
+  found in the source and kept together, since only the first pays the
+  launch. The sign-in test's weight includes its second `xcodebuild` pass.
+  Planned per shard: 133/139/138/139 s at N = 4, 272/278 s at N = 2.
+  Measured test time ran 5–12 % over plan, which is contention. Each shard
+  also spent 13–31 s outside its tests on spin-up, install, self-test and,
+  on the sign-in shard, R1's `log show`.
+- *Verdict.* Every test is reported under its own name, with its result,
+  duration, shard and failure text (file:line from the xcodebuild log).
+  Results are read from the xcresult and from the log, because a killed
+  shard's xcresult is empty. The run passes only if each of the file's
+  tests passed exactly once, every shard exited 0 inside its time limit
+  (2 × planned + 300 s), and every shard simulator is still booted. A test
+  that never reported is **NOT RUN**, which counts as a failure.
+- *A stall found on the way.* After a failure the runner is relaunched,
+  and xcodebuild can then idle up to 600 s after the last test. The serial
+  run `20260923-220228` did this too, so sharding does not cause it.
+  `run_tests` now stops xcodebuild once all its tests have reported, or the
+  runner has printed its closing summary, and the log has been quiet for
+  60 s. The pass then fails and says why. This is on both paths.
+
+| Run | Result | Wall |
+|---|---|---|
+| N = 4, `--build`; shards 2–4 created and first-booted just before | 38/38 | 196 s (+16 s build) |
+| N = 4, warm | 38/38 | **169 s** |
+| N = 4, warm | 38/38 | **168 s** |
+| N = 2 | 38/38 | 304 s |
+| N = 4, shard 3's simulator re-booted before the clock | 38/38 | 189 s |
+| serial, `--serial`, with the final `run_tests` | 38/38 | 574 s |
+| N = 4, induced failure (line 656 expects `"defined"`) | 37/38, 1 failed | 188 s |
+| N = 4, `Latchkey Shard 3` shut down 75 s in | 37/38, 1 not run | 343 s |
+
+Names: two serial runs (572 s before the watchdog's last change, 574 s
+after it) and a sharded run each passed 38. The lists `diff`
+clean against the file's `func test…` list and against each other. N = 2
+matches the projection (303–309 s). N = 4 is at or under the 168–175 s
+projected, with 50–70 s of margin on the 240 s budget.
+
+The induced failure, as the aggregate prints it:
+
+```
+    FAILED     8.8 s  testTheGatewaysOwnMachineryStillWorks  [shard 2]
+
+FAILED testTheGatewaysOwnMachineryStillWorks  (shard 2, Latchkey Shard 2, Failed)
+    XCTAssertEqual failed: ("Optional("undefined")") is not equal to ("Optional("defined")") - no service workers without app-bound domains
+
+FAILED shard 2 (Latchkey Shard 2, instance 2): exit 1
+::: FAILED: 37 of 38 passed, 1 failed, 0 not run, 1 shard(s) failed, in 188 s
+```
+
+(From the next run on, the message leads with
+`OfflineHarnessTests.swift:656:`.) With the simulator shut down mid-run,
+xcodebuild re-booted it and ran the rest. The test in flight never
+reported, so the verdict named it: `NOT RUN testDashboardLoadsThroughTheProxy
+[shard 3]`. Shard 3 failed with the watchdog's "11 of 12 reported" and "its
+simulator … is Shutdown after the run". The next run re-booted it before
+the clock and passed 38/38.
+
+Not done here: the 240 s budget is unchanged (§7.4 asks for it to be re-set
+once the figure settles), and `l1-durations.txt` is refreshed by hand from a
+run's `durations.txt`.

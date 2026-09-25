@@ -239,7 +239,14 @@ device build.
   `testSettingsRefusesAGatewayTheTailnetDoesNotCarry`.
 - The suites that need **no** tailnet, all driven from the parent repo:
   - `scripts/test-offline.sh` — L1: the real app and WKWebView against a stub
-    SOCKS5 proxy and a fake dashboard, including the anti-leak tests.
+    SOCKS5 proxy and a fake dashboard, including the anti-leak tests. By
+    default it runs across four simulators (`Latchkey Shard 1..4`, each on
+    its own harness instance; F14), which it creates and boots on first use
+    and leaves booted: `scripts/test-offline-shards.py sims down` shuts them
+    down, `sims delete` removes them. `--serial` is the one-simulator path
+    (`iPhone 17`), `--shards N` picks N. Shards are balanced by
+    `scripts/l1-durations.txt`; refresh it from a run's `durations.txt`
+    when tests are added or change length.
   - `scripts/test-tailnet.sh` — L2: the app's real tsnet node against a
     host-side fake control plane (`testing/tsnet-harness`), with login and
     device approval.
