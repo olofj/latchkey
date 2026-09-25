@@ -3309,3 +3309,28 @@ two-strike trigger, and a stall that survives `RestartLoopback`. Adding
 the hook, and the 2026-09-24 log that would tie the owner's report to
 this fault (F16 §8) has not been read. The 3 s bound is chosen, not
 measured, and the new slow-answer log is there to measure it.
+
+## 2026-09-25 — F17's tap tests wait for the page to render
+
+The F17 L1 failure recorded above has its cause found. It was never Maps:
+Maps is a runtime system app, installed on every shard simulator, and
+`HandOffPolicy` does not consult `canOpenURL`. The tap reached nothing.
+`appears(within:)` finds a web link as soon as the page is parsed. After
+`testAReturningUserIsNotReintroduced` the app launches warm, and the tap
+landed about 100 ms after the page committed, before WebKit could
+hit-test it. The app log then shows no navigation at all, so there was
+no policy call and no prompt. Passing runs tapped 0.5 s or more after
+the commit. In that order the test failed 3/3 on shard 1 and 1/2 on
+shard 2, and it passed 2/2 run alone.
+
+F17's page now reports `rendered: true` after its load and two frames.
+Both tap tests (`testATappedLinkToAnotherAppAsksFirst`,
+`testATapThatNavigatesByScriptStillOpensSafari`) wait for it before
+tapping. The other L1 web taps already waited on a page report first.
+With the change, the failing order passed 12/12 on the four shards, and
+full L1 passed 42/42 twice. One earlier full L1 went 41/42 on
+`testAnUntappedLinkAwayAsksOnlyOnce`, whose path the change does not
+touch. It did not recur in 12 runs of its shard order, and its cause is
+not found. Opening a tapped custom scheme without asking (`.open` for
+`userStarted`) still fails the test on all four shards, with the log
+showing Maps opened unasked.

@@ -436,6 +436,13 @@ final class OfflineHarnessTests: XCTestCase {
         return launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
     }
 
+    /// Waits until F17's page has rendered, not only parsed. Its links are
+    /// in the accessibility tree before WebKit can hit-test them; a tap in
+    /// that gap reaches nothing, so no click, no navigation and no prompt.
+    private func waitForHandOffRendered() async throws {
+        _ = try await handOffReport("", timeout: 30) { $0["rendered"] as? Bool == true }
+    }
+
     private func handOffReport(_ mode: String, timeout: TimeInterval = 40,
                                until predicate: @escaping ([String: Any]) -> Bool) async throws -> [String: Any] {
         try await waitForReport(host: "dash.tail-scale.ts.net", timeout: timeout) {
@@ -450,8 +457,9 @@ final class OfflineHarnessTests: XCTestCase {
         maps.terminate()
         let app = try await launchHandOff("handoff")
         defer { app.terminate(); maps.terminate() }
+        try await waitForHandOffRendered()
         let link = app.webViews.links["Open in Maps"]
-        XCTAssertTrue(link.appears(within: 30), "the maps: link renders")
+        XCTAssertTrue(link.appears(within: 10), "the maps: link renders")
 
         link.tap()
         let alert = app.alerts[Self.handOffAlert]
@@ -522,8 +530,9 @@ final class OfflineHarnessTests: XCTestCase {
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
         let app = try await launchHandOff("handoff")
         defer { app.terminate() }
+        try await waitForHandOffRendered()
         let button = app.webViews.buttons["Script link away"]
-        XCTAssertTrue(button.appears(within: 30), "the button renders")
+        XCTAssertTrue(button.appears(within: 10), "the button renders")
         button.tap()
         XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 15),
                       "a tap whose handler navigates opens Safari; alert: \(app.alerts.firstMatch.exists)")

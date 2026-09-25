@@ -31,7 +31,8 @@ Page routes (HTTPS):
   GET  / (root=handoff, handoff-app, handoff-web)
                     F17 §6's page: a maps: link, a button whose onclick sets
                     location off-origin, and (app/web) navigations no tap
-                    started; reports page: "handoff", auto, auto_tries
+                    started; reports page: "handoff", auto, auto_tries,
+                    rendered
 
 Control routes (plain HTTP, 127.0.0.1:<control-port>):
   GET  /__state     {"reports": {host: latest report}, "requests": {host: n},
@@ -502,6 +503,10 @@ PNG_1X1 = base64.b64decode(
 #   "web"  sets location to the away origin every 2 s, ten times
 # Each attempt is counted in the report (auto_tries), and auto: done follows
 # the last, so a test can tell "nothing happened" from "nothing was tried".
+# rendered: true follows the load and two frames. A link is in the
+# accessibility tree once it is parsed, before WebKit can hit-test a tap on
+# it; tapped then, the tap reaches nothing and no click is ever dispatched.
+# A tap test waits for rendered first.
 HANDOFF = """<!doctype html><meta charset=utf-8>
 __VIEWPORT__
 <title>HANDOFF</title>
@@ -512,12 +517,17 @@ __VIEWPORT__
 <a id=maps-hidden href="maps://?q=Latchkey+synthetic" style="display:none">hidden</a>
 <script>
 var AWAY = '__AWAY__', MODE = '__AUTO__', TRIES = 0, DONE = MODE ? 'pending' : 'none';
-var DOC = Math.random().toString(36).slice(2);
+var DOC = Math.random().toString(36).slice(2), RENDERED = false;
 function report() {
   fetch('/__report', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({doc: DOC, page: 'handoff', mode: MODE, auto: DONE,
-                          auto_tries: TRIES, ts: Date.now()})}).catch(function () {});
+                          auto_tries: TRIES, rendered: RENDERED, ts: Date.now()})}).catch(function () {});
 }
+addEventListener('load', function () {
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () { RENDERED = true; report(); });
+  });
+});
 if (MODE === 'app') {
   setTimeout(function () { TRIES++; location.href = 'maps://?q=Latchkey+location'; report(); }, 3000);
   setTimeout(function () { TRIES++; document.getElementById('maps-hidden').click(); DONE = 'done'; report(); }, 4000);
