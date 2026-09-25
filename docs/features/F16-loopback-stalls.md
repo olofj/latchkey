@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | designed; four stages, **stage 1 first** (§4.0). Specced from [issue #3](https://github.com/olofj/latchkey/issues/3). Of its four faults, two are confirmed as stated, one is a real code defect whose trigger this pass could not show happens on its own, and **one is contradicted by a recorded measurement** (§1.5). That one gets measured before anything is fixed |
+| **Status** | **stage 1 built** 2026-09-25 (`5864df9`, `c5d5198`, `4c5a65d`; §9). Stages 2-4 designed, not built. Four stages, **stage 1 first** (§4.0). Specced from [issue #3](https://github.com/olofj/latchkey/issues/3). Of its four faults, two are confirmed as stated, one is a real code defect whose trigger this pass could not show happens on its own, and **one is contradicted by a recorded measurement** (§1.5). That one gets measured before anything is fixed |
 | **Requested** | 2026-09-25, by Olof, as issue #3: *"The network layer has several ways to stall for seconds to a minute when the loopback path misbehaves."* Owner-visible evidence from 2026-09-24: the gateway picker sat at "Searching…"; reported as *"scan didn't work, nothing found"*, together with an empty screen showing only the cogwheel |
 | **Revision** | none. No documented behaviour changes. Timeouts get shorter on paths where the owner is waiting, and a stalled loopback is now recovered |
 | **Touches** | `TSNet/TSNetManager.swift` (status bound, recovery trigger, bus-watcher install, async relay start), `TSNet/SocksLogProxy.swift` (async `start`, one test hook), `App/Discovery/GatewayDiscovery.swift` (no change beyond the bounded closure it is handed), the vendored tree (**one** debug hook, its own commit, R16), the L2 lifecycle and discovery suites, L1, host tests |
@@ -524,3 +524,61 @@ unfixed build.
     today. `loadInitial` does not wait for the proxy, and the fixture path
     publishes `Running` before it. §4.3 adds the guard, and the R10 anti-leak
     tests are re-run under a slow relay start to prove it.
+- 2026-09-25: **stage 1 built** in `5864df9` (vendored hook), `c5d5198`
+  (bound and recovery) and `4c5a65d` (L2 tests and script instruments).
+  **Stages 2, 3 and 4 are not built.** Faults 4, 1 and 3 are as §1 describes
+  them. The build departs from the text above in these ways:
+  - **`bounded` is not a task group.** A task group awaits its losing child,
+    and a call queued on a busy node actor does not see cancellation until
+    the actor reaches it, so the bound would not hold in the case it exists
+    for. The losing request is cancelled and not awaited. A host check
+    stands in for the difference: a call that ignores cancellation must
+    still be abandoned at the bound.
+  - **`LoopbackStatusTimeout`, `statusBound` and the classifier live in
+    `App/Network/LoopbackHealth.swift`, not `TSNetManager`**, so the host
+    test compiles them without TailscaleKit.
+    `isLocalLoopbackConnectionFailure` moved there with its body unchanged,
+    and the -1001 comment is above it.
+  - **The vendored hook drains a stalled connection rather than holding it
+    unread**, so a request the client abandons does not keep a descriptor
+    open. The client sees no difference: no byte ever comes back.
+  - **The discovery tests stall before the first status is published**
+    (`-UITestTCPChaosDelay 0`). That status starts the sweep, so the chaos
+    plumbing's usual "after the first Running poll" would race it.
+  - **The second discovery test ends on `token-sheet`, not on
+    `gateway-<gw>`.** A first-run sweep that finds one gateway chooses it by
+    itself, so the row is gone before a test can see it. Recovery is read
+    from `tcp-chaos-test-status`, which the picker now shows in test builds.
+    The exact log lines are checked by the two scripts, from the unified log.
+  - **§8's slow-answer log is in:** an answer over 500 ms logs `Status
+    request answered after N ms`. Login stays unbounded (§8, the owner's
+    question).
+  - **§7's grep** finds one bare `backendStatus()` outside `boundedStatus`:
+    `App/TimingHarness.swift:335`. That is the test-build timing harness,
+    not a UI path.
+  - Two Go tests for the hook (`TestLatchkeyStalled…`), run by
+    `scripts/test-all.sh`.
+- Shown able to fail. Each mutation was built and run, and the source was
+  restored afterwards:
+  - **Today's behaviour** (status unbounded, everything else kept): both
+    discovery tests fail with no P6 within 30 s. The lifecycle test fails
+    with "never read recovered within 45 s; last: damaged". The other 15 tests
+    in the two suites pass.
+  - **No two-strike trigger:** the second discovery test fails with no
+    recovery (status "damaged"). The first test passes, as it should: the
+    bound alone ends the search.
+  - **The stall survives `RestartLoopback`** (a vendored mutation, with the
+    framework rebuilt): recovery runs, but the next search finds nothing and
+    the gateway is never loaded.
+  - **Host:** adding -1001 to the classifier fails "a bus -1001 is not a
+    loopback failure". Awaiting the losing request fails the
+    ignores-cancellation check (2.1 s against a 0.3 s bound).
+  - **Go:** a listener that ignores the mark fails "a stalled listener
+    answered".
+- Measured: searching → P6 **6.2 s** (budget 16 s) in both discovery runs.
+  Searching → loopback recovered **6.5 s and 6.8 s** (budget 25 s). Under a
+  live page, damage → recovered **13.3 s and 13.6 s**. `make test-policy`
+  passed, with the new host test at 21/21. Discovery passed 12/12, with its
+  parser counting both stalled sweeps and one recovery. Lifecycle passed
+  6/6. The quick tier (`scripts/test-all.sh --build`) is recorded in
+  `../DECISIONS.md`.

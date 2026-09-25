@@ -3248,3 +3248,64 @@ is 240 s. `make test-policy` is green, with 76 new checks and the 25 R3
 checks unchanged. **Not yet:** device testing. A universal link to an
 installed app should still open without a prompt, but the simulator has
 no such app.
+
+## 2026-09-25 — F16 stage 1 built: a silent loopback costs seconds (issue #3)
+
+**Decision:** every status request the app waits on is raced against a
+3 s bound (`LoopbackHealth.bounded`, `TSNetManager.boundedStatus`). That
+covers discovery's proxy check, `pageLoadFailed`'s relay verdict and the
+5 s poll. An abandoned request is a `LoopbackStatusTimeout`, and two in a
+row replace the loopback the way a refused one is replaced. -1001 is
+still **not** a loopback failure: the IPN bus's long-poll dies with it
+every idle minute by design, and counting it would restart the loopback
+every minute. A host check holds that line. Stages 2 (bus watcher
+install), 3 (async relay start) and 4 (measure fault 3) are **not
+built**. Issue #3 stays open.
+
+**Why:** on a loopback that accepts and never answers, TailscaleKit's
+fixed 60 s request timeout kept the picker on "Searching…" for about
+64-72 s. That fits the owner's "scan didn't work" of 2026-09-24. The -1001
+that ended the wait started no recovery.
+
+Findings that shaped the build:
+
+- **No harness could produce a silent loopback without the vendored
+  tree.** LocalAPI requests take their address from the node actor's
+  cached loopback config, and the app has no seam to redirect them. So
+  `DebugStallLoopback` went in as its own vendored commit (R16). Its mark
+  belongs to one listener, so `RestartLoopback`'s replacement starts
+  clean. That is what lets a test show that the recovery fixed the stall.
+- **A task group cannot enforce the bound.** It awaits the losing child,
+  and a call queued on a busy node actor ignores cancellation until the
+  actor reaches it. The losing request is cancelled and not awaited.
+- **The stalled sweep has purgatory's signature** (4 probed, 0 answered,
+  4 failed). `scripts/test-discovery.sh` tells them apart by the
+  abandoned-request line inside the sweep's window. It expects exactly two
+  stalled sweeps and still exactly one purgatory sweep.
+
+**Evidence:** F16 §9. Measured: searching → P6 in 6.2 s (budget 16 s);
+searching → recovered in 6.5-6.8 s (budget 25 s); under a live page,
+damage → recovered in 13.3-13.6 s. Three mutations were each built and
+run, and each failed the tests it targets: today's unbounded status, no
+two-strike trigger, and a stall that survives `RestartLoopback`. Adding
+-1001 to the classifier fails the host test. Quick tier
+(`scripts/test-all.sh --build` at `4c5a65d`):
+
+- **Passed:** host tests (the new one 21/21), L2, session, discovery 12/12
+  and lifecycle 6/6.
+- **L1: failed 41/42 in the tier, then 41/42 again on a rerun without
+  `--build`.** Both times the failure was F17's
+  `testATappedLinkToAnotherAppAsksFirst`, on shard 1. Built from the
+  pre-F16 app sources, L1 then passed 42/42 (189 s), and HEAD rebuilt
+  passed 42/42 (187 s). No F16 code runs in L1, where the fixture path has
+  no LocalAPI client. So it is an intermittent F17 test, not an F16
+  regression, and its cause is not found. L1 is unchanged at 42 tests.
+- **Vendored Go:** failed in the tier because of the agent sandbox, not
+  the code. cgo resolved `#include "../tailscale.h"` against a scratch
+  `TMPDIR` whose parent it may not read. With `TMPDIR=/private/tmp`, the
+  same selections ran 8/8, 1/1 and 2/2.
+
+**Not yet:** device testing. No silent loopback has been seen outside
+the hook, and the 2026-09-24 log that would tie the owner's report to
+this fault (F16 §8) has not been read. The 3 s bound is chosen, not
+measured, and the new slow-answer log is there to measure it.
