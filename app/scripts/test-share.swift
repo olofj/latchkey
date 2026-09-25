@@ -204,5 +204,68 @@ expect(ShareItem.sanitisedFilename("") == "file", "an empty name becomes file")
 expect(full.fileExtension == ".pdf", "the extension, with its dot")
 expect(item(.document, filename: "README").fileExtension == "", "no extension")
 
+print("== ShareInbox on disk (stage 2: the group container, then the app's own)")
+let tmp = FileManager.default.temporaryDirectory.appending(path: "share-inbox-\(UUID().uuidString)")
+defer { try? FileManager.default.removeItem(at: tmp) }
+let groupRoot = tmp.appending(path: "group/ShareInbox"), appRoot = tmp.appending(path: "app/ShareInbox")
+expect(ShareInboxStore.locations(appSupport: tmp.appending(path: "app"), groupContainer: tmp.appending(path: "g"))
+       .map(\.lastPathComponent) == ["ShareInbox", "ShareInbox"]
+       && ShareInboxStore.locations(appSupport: tmp.appending(path: "app"), groupContainer: tmp.appending(path: "g"))[0]
+          .path.contains("/g/Library/Application Support/"),
+       "the group container comes first, under Library/Application Support")
+expect(ShareInboxStore.locations(appSupport: tmp, groupContainer: nil).count == 1,
+       "without the entitlement, the app's own container only")
+let both = ShareInbox(roots: [groupRoot, appRoot])
+let appOnly = ShareInboxStore(root: appRoot)
+func disk(_ id: String, age: TimeInterval = 0) -> ShareItem {
+    ShareItem(id: id, kind: .link, url: "https://e.com/\(id)", byteCount: 10,
+              createdAt: Date().addingTimeInterval(-age), source: .extension)
+}
+// A write that fails partway (the payload cannot be copied) leaves no item:
+// item.json is written last, in staging, and only a whole item is renamed in.
+let broken = ShareItem(id: "broken", kind: .document, filename: "x.pdf", byteCount: 5,
+                       createdAt: Date(), source: .extension)
+let brokenInbox = ShareInboxStore(root: tmp.appending(path: "broken/ShareInbox"))
+do {
+    try brokenInbox.add(broken, payloadFile: tmp.appending(path: "does-not-exist.pdf"))
+    expect(false, "a missing payload fails the add")
+} catch {
+    expect(brokenInbox.items().isEmpty, "a failed write leaves no item behind (item.json is last): \(brokenInbox.items().map(\.id))")
+}
+try! appOnly.add(disk("old-app", age: 60))                 // a stage-1 item, already waiting
+try! both.add(disk("from-ext"))
+expect(FileManager.default.fileExists(atPath: groupRoot.appending(path: "from-ext/item.json").path),
+       "a write goes to the first location (the group container)")
+expect(both.items().map(\.id) == ["old-app", "from-ext"], "reads span both, oldest first: \(both.items().map(\.id))")
+expect(both.summary().count == 2, "the summary counts both")
+var moved = both.items()[0]
+moved.state = .failed
+try! both.update(moved)
+expect(appOnly.items().first?.state == .failed, "an update lands where the item is")
+both.delete("old-app")
+expect(both.items().map(\.id) == ["from-ext"], "a delete finds the item wherever it is")
+for i in 0..<19 { try! appOnly.add(disk("fill-\(i)")) }
+do {
+    try both.add(disk("twenty-first"))
+    expect(false, "the cap counts both locations: a 21st item is refused")
+} catch {
+    expect((error as? ShareInboxStore.AddError) == .refused(.inboxFull(waiting: 20)),
+           "the cap counts both locations: \(error)")
+}
+// Half-written items are invisible: a staged dir, and a dir with a payload but no item.json.
+try! FileManager.default.createDirectory(at: groupRoot.appending(path: ".staging/half"), withIntermediateDirectories: true)
+try! Data("{}".utf8).write(to: groupRoot.appending(path: ".staging/half/item.json"))
+try! FileManager.default.createDirectory(at: groupRoot.appending(path: "nojson"), withIntermediateDirectories: true)
+try! Data("%PDF-".utf8).write(to: groupRoot.appending(path: "nojson/payload"))
+expect(!both.items().contains { ["half", "nojson"].contains($0.id) } && both.summary().count == 20,
+       "an item without item.json, or still in .staging, does not exist")
+// A real add leaves nothing in .staging.
+let stagingLeft = (try? FileManager.default.contentsOfDirectory(atPath: appRoot.appending(path: ".staging").path)) ?? []
+expect(stagingLeft.isEmpty, "a finished write leaves nothing staged: \(stagingLeft)")
+try! appOnly.add(disk("ancient", age: 8 * 86400), waiting: (0, 0))
+try! ShareInboxStore(root: groupRoot).add(disk("ancient-g", age: 8 * 86400), waiting: (0, 0))
+expect(both.sweep(now: Date()) == 2 && !both.items().contains { $0.id.hasPrefix("ancient") },
+       "the sweep takes 8-day items from both locations")
+
 print(failures == 0 ? "share: all \(checks) checks passed" : "share: \(failures) of \(checks) FAILED")
 if failures != 0 { exit(1) }

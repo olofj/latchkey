@@ -20,7 +20,7 @@
 import Foundation
 
 enum ShareTestHooks {
-    static func apply(store: ShareInboxStore, defaults: ShareDefaults, onSeeded: () -> Void) {
+    static func apply(store: ShareInbox, defaults: ShareDefaults, onSeeded: () -> Void) {
         if TestHooks.flag("-UITestResetShare") {
             store.removeAll()
             defaults.removeAll()

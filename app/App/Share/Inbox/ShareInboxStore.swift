@@ -11,10 +11,13 @@
 //  first, then `item.json` -- and renames the directory into place: one
 //  atomic rename on one volume, so a reader never sees half an item.
 //
-//  Stage 1 writes only to the app's own container
-//  (`WorkspaceStore.appSupportDir/ShareInbox/`), which needs no App Group and
-//  no entitlement. `locations` is a list so that stage 2's group container
-//  can be put in front of it without a migration (F3 §4.3, §8 Q1).
+//  Two locations (F3 §4.3), drained in this order: the App Group container
+//  `group.net.lixom.latchkey` (stage 2: the share extension writes there,
+//  the only place both processes can see), then the app's own
+//  `WorkspaceStore.appSupportDir/ShareInbox/` (stage 1, and the fallback
+//  when the entitlement is absent). A process writes to the first location
+//  it has; the app reads both (`ShareInbox`), so no migration is needed in
+//  either direction.
 //
 //  Everything here is synchronous file IO and `nonisolated`: the 50 MB copy
 //  is run off the main actor by the caller.
@@ -29,14 +32,19 @@ nonisolated struct ShareInboxStore: Sendable {
     static let payloadFile = "payload"
     static let stagingDir = ".staging"
 
-    /// Where the app looks, in drain order. Stage 1: the app's own container.
-    static func locations(appSupport: URL) -> [URL] {
-        [appSupport.appending(path: "ShareInbox", directoryHint: .isDirectory)]
+    static let appGroup = "group.net.lixom.latchkey"
+
+    /// The inbox in the App Group container, if this process has the
+    /// entitlement (`containerURL` is nil without it).
+    static func groupRoot(_ container: URL?) -> URL? {
+        container?.appending(path: "Library/Application Support/ShareInbox", directoryHint: .isDirectory)
     }
 
-    /// Where this process writes: the first location.
-    static func writeLocation(appSupport: URL) -> ShareInboxStore {
-        ShareInboxStore(root: locations(appSupport: appSupport)[0])
+    /// Where the app looks, in drain order: the group container when there
+    /// is one, then the app's own container.
+    static func locations(appSupport: URL?, groupContainer: URL?) -> [URL] {
+        [groupRoot(groupContainer),
+         appSupport?.appending(path: "ShareInbox", directoryHint: .isDirectory)].compactMap { $0 }
     }
 
     private var fm: FileManager { .default }
@@ -61,10 +69,13 @@ nonisolated struct ShareInboxStore: Sendable {
     /// clone on APFS: no bytes through memory) or `payloadData`. Admission is
     /// checked here, against what is on disk now, so every entry point gets
     /// the same caps. Returns the advisory, if any.
+    /// `waiting` is the whole inbox's summary when this store is one of
+    /// several (`ShareInbox`); by default, this store's own.
     @discardableResult
-    func add(_ item: ShareItem, payloadFile: URL? = nil, payloadData: Data? = nil) throws -> String? {
+    func add(_ item: ShareItem, payloadFile: URL? = nil, payloadData: Data? = nil,
+             waiting: (count: Int, bytes: Int64)? = nil) throws -> String? {
         try prepare()
-        let waiting = summary()
+        let waiting = waiting ?? summary()
         let admission = ShareInboxPolicy.admit(byteCount: item.byteCount, fileExtension: item.fileExtension,
                                                inboxCount: waiting.count, inboxBytes: waiting.bytes)
         guard case .admitted(let advisory) = admission else {
@@ -75,6 +86,8 @@ nonisolated struct ShareInboxStore: Sendable {
         do {
             try? fm.removeItem(at: staging)
             try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+            // The payload first and item.json last, then one rename: a reader
+            // never sees an item whose payload is still being written.
             let payload = staging.appending(path: Self.payloadFile)
             if let payloadFile {
                 try fm.copyItem(at: payloadFile, to: payload)
@@ -149,4 +162,52 @@ nonisolated struct ShareInboxStore: Sendable {
         }
         return old.count
     }
+}
+
+/// Every inbox location this process can see, as one (F3 §4.3). Writes go to
+/// the first; reads, updates and deletes find the item wherever it is.
+nonisolated struct ShareInbox: Sendable {
+    let stores: [ShareInboxStore]
+
+    init(roots: [URL]) {
+        stores = roots.map { ShareInboxStore(root: $0) }
+    }
+
+    /// The app's view: the group container (if entitled) and its own.
+    static func app(appSupport: URL) -> ShareInbox {
+        let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: ShareInboxStore.appGroup)
+        return ShareInbox(roots: ShareInboxStore.locations(appSupport: appSupport, groupContainer: group))
+    }
+
+    var writer: ShareInboxStore { stores[0] }
+    /// Whether the group container is among the locations.
+    var hasGroup: Bool { stores.count > 1 }
+
+    func prepare() throws { for s in stores { try s.prepare() } }
+
+    @discardableResult
+    func add(_ item: ShareItem, payloadFile: URL? = nil, payloadData: Data? = nil) throws -> String? {
+        try writer.add(item, payloadFile: payloadFile, payloadData: payloadData, waiting: summary())
+    }
+
+    /// Oldest first, across locations; an id seen twice is read once.
+    func items() -> [ShareItem] {
+        var seen = Set<String>()
+        return stores.flatMap { $0.items() }.filter { seen.insert($0.id).inserted }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    func summary() -> (count: Int, bytes: Int64) {
+        stores.map { $0.summary() }.reduce((0, 0)) { ($0.0 + $1.count, $0.1 + $1.bytes) }
+    }
+
+    private func owner(_ id: String) -> ShareInboxStore {
+        stores.first { FileManager.default.fileExists(atPath: $0.itemDir(id).path) } ?? writer
+    }
+
+    func payloadURL(_ id: String) -> URL { owner(id).payloadURL(id) }
+    func update(_ item: ShareItem) throws { try owner(item.id).update(item) }
+    func delete(_ id: String) { for s in stores { s.delete(id) } }
+    func removeAll() { for s in stores { s.removeAll() } }
+    func sweep(now: Date) -> Int { stores.reduce(0) { $0 + $1.sweep(now: now) } }
 }

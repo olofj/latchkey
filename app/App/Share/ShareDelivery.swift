@@ -89,7 +89,7 @@ final class ShareDelivery: ObservableObject {
     /// Raw bytes per page-world call: 50 MB is 13 calls of ~5.6 MB strings.
     nonisolated static let chunkBytes = 4 * 1024 * 1024
 
-    let store: ShareInboxStore
+    let store: ShareInbox
     let defaults: ShareDefaults
 
     private weak var workspace: Workspace?
@@ -117,13 +117,14 @@ final class ShareDelivery: ObservableObject {
 
     private init() {
         let appSupport = WorkspaceStore.appSupportDir
-        store = ShareInboxStore.writeLocation(appSupport: appSupport)
+        store = ShareInbox.app(appSupport: appSupport)
         defaults = ShareDefaults(file: appSupport.appending(path: "share-defaults.json"))
 #if LATCHKEY_TEST_HOOKS
         ShareTestHooks.apply(store: store, defaults: defaults) { [weak self] in self?.receivedCount += 1 }
 #endif
         try? store.prepare()
         let swept = store.sweep(now: Date())
+        logger.log("Share: inbox in \(store.hasGroup ? "the App Group container and the app's own" : "the app's own container only (no App Group)")")
         if swept > 0 {
             AppDiagnostics.shared.sharesSwept += swept
         }

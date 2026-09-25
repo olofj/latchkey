@@ -35,7 +35,7 @@ nonisolated enum ShareOutcome: Equatable {
     /// The one the owner reads.
     var sentence: String { Self.sentence(for: self, gatewayHost: nil) }
 
-    static let unreachableCode = "unreachable"
+    static let unreachableCode = ShareInboxPolicy.unreachableCode
 
     /// A response as the page-world fetch reports it: `status` 0 or nil when
     /// the request never got an answer.

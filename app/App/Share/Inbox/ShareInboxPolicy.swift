@@ -30,6 +30,10 @@ nonisolated enum ShareInboxPolicy {
     static let stagingLifetime: TimeInterval = 10 * 60
     /// Automatic retries of an unreachable gateway, one per foreground.
     static let maxAutomaticAttempts = 5
+    /// The `lastError` of an item that failed only for want of a path to the
+    /// gateway (`ShareOutcome.unreachable`). Here, not there, so the share
+    /// extension compiles this file without the delivery side.
+    static let unreachableCode = "unreachable"
 
     /// The gateway's upload allowlist: `_ALLOWED_IMAGE_EXT | _ALLOWED_TEXT_EXT
     /// | _ALLOWED_DOC_EXT` and the video set, handlers/files.py:984-1040 in
@@ -100,6 +104,6 @@ nonisolated enum ShareInboxPolicy {
     /// only when nothing was wrong with it but the path to the gateway.
     static func retriesAutomatically(_ item: ShareItem) -> Bool {
         item.state != .failed
-            || (item.lastError == ShareOutcome.unreachableCode && item.attempts < maxAutomaticAttempts)
+            || (item.lastError == unreachableCode && item.attempts < maxAutomaticAttempts)
     }
 }

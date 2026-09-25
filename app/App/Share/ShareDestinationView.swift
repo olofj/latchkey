@@ -163,6 +163,13 @@ struct ShareDestinationView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("share-item")
+#if LATCHKEY_TEST_HOOKS
+            // Where the item came from: F3 stage 2's test proves the
+            // extension wrote it, not the URL handler or the intent.
+            Text(item.source.rawValue)
+                .font(.system(size: 1)).opacity(0.01)
+                .accessibilityIdentifier("share-item-source")
+#endif
         }
     }
 
