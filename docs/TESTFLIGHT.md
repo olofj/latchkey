@@ -75,7 +75,9 @@ loop; the two installs coexist only if they use different bundle ids.
   distribution certificate in the keychain. Stops if there is none.
 - Exports with `ExportOptions.AppStore.plist` (automatic signing, but without
   `-allowProvisioningUpdates`, so only on-disk profiles) and uploads with
-  `xcrun altool --upload-package`. See "Why a local certificate is not enough".
+  `xcrun altool --upload-package`, with altool's `TMPDIR` set to
+  `app/build/altool-tmp`. See "Why a local certificate is not enough" and
+  "The upload's temporary directory".
 
 ## Privacy manifests
 
@@ -110,8 +112,11 @@ From a shell outside the logged-in GUI session (an agent's, KiroCrew's),
 same happens with the agent's own sandbox disabled. Without that service it
 cannot use Xcode's cloud-managed distribution signing, so the export needs an
 Apple Distribution certificate already in the keychain. `altool` does not use
-that service, which is why the upload goes through it (measured 2026-09-24:
-`altool --list-apps` with the API key lists the app record).
+that service, which is why the upload goes through it. `altool --list-apps`
+with the API key listing the app record (2026-09-24) proved only that it
+authenticates. The first upload from `make tf` was accepted later that day,
+after the fix in "The upload's temporary directory" below. Before that fix,
+every altool upload was rejected.
 
 **And the certificate is necessary but not sufficient.** Signing also needs an
 App Store *provisioning profile*, and cloud signing is what would create one —
@@ -170,6 +175,44 @@ rsync error: syntax or usage error (code 1) at main.c(1886) [server=3.5.0]
 which rejects openrsync's `-E`. Xcode.app is launched with launchd's `PATH`,
 without Homebrew, so the Organizer never meets it. `testflight.sh` runs the
 export with `/usr/bin` first on `PATH`.
+
+## The upload's temporary directory
+
+With the export working, the upload was rejected:
+
+```
+Missing or invalid signature. The bundle 'net.lixom.latchkey' at bundle path
+'Payload/Latchkey.app' is not signed using an Apple submission certificate. (90034)
+NSUnderlyingError : A server error occurred. (-19241)
+```
+
+That `.ipa` was correctly signed: Apple Distribution on both binaries,
+`codesign --verify --deep --strict` clean, and the same certificate accepted
+from the Organizer that morning. The cause was where altool ran. Before sending,
+altool unpacks the `.ipa` into `$TMPDIR` and analyses it locally (`swinfo`,
+which runs `tapi-analyze`, `codesign_allocate` and others). The upload ran from
+an agent session, and there `$TMPDIR` is the agent's sandboxed scratch
+directory (`~/.kiro/crew/scratch/…`). Inside it those tools fail with
+`Operation not permitted`. Even `codesign -d` on an app unpacked there reports
+"bundle format is ambiguous". altool still exits 0 from the analysis, uploads,
+and the server returns 90034. Measured 2026-09-24, same `.ipa` (build
+202609250001), same session:
+
+| `TMPDIR` | invocation | result |
+|---|---|---|
+| agent scratch | `--upload-package <ipa>` (the script, and `make tf` at 17:02) | 90034 |
+| agent scratch | `--upload-app -f <ipa> -t ios` | 90034 |
+| `app/build/altool-tmp/` | `--upload-package <ipa>` | `UPLOAD SUCCEEDED`, delivery `b179ec1b-08db-48cc-a916-80a88f6b8965` |
+
+So `testflight.sh` gives altool its own `TMPDIR` under `app/build/`
+(gitignored), whoever calls it. The upload flag was not the problem.
+`--upload-package` takes a bare `.ipa` in current altool (27.0.5; `altool
+--help` shows exactly that), and `--upload-app` failed identically. The
+Organizer, and presumably `make tf` from a plain Terminal (`TMPDIR` under
+`/var/folders`, untested), never meet the sandbox.
+
+The signing and the stamping were never involved. `LatchkeyGitSHA` is a plain
+`Info.plist` key, and the accepted upload carries it.
 
 ## Troubleshooting
 

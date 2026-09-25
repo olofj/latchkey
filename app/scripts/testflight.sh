@@ -260,8 +260,18 @@ fi
 # com.apple.dt.Xcode.ITunesSoftwareService ("Connection init failed at lookup
 # with error 3"), while altool talks to App Store Connect with the API key
 # directly (measured 2026-09-24).
+#
+# altool's own TMPDIR is build/altool-tmp, not the caller's. altool unpacks the
+# .ipa there and analyses it (swinfo, tapi-analyze, codesign) before sending.
+# An agent's TMPDIR is its sandboxed scratch directory, where those tools get
+# "Operation not permitted", and App Store Connect then rejects a correctly
+# signed build as "not signed using an Apple submission certificate (90034)".
+# Same .ipa, same flags, TMPDIR moved: accepted (measured 2026-09-24).
+ALTOOL_TMP="$PWD/build/altool-tmp"
+rm -rf "$ALTOOL_TMP"
+mkdir -p "$ALTOOL_TMP"
 echo "::: Uploading $IPA to App Store Connect :::"
-xcrun altool --upload-package "$IPA" \
+TMPDIR="$ALTOOL_TMP/" xcrun altool --upload-package "$IPA" \
     --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --p8-file-path "$ASC_KEY_PATH"
 echo "✅ Uploaded build $BUILD_NUMBER (commit $GIT_SHA). It appears in App Store Connect → TestFlight" \
      "once processing finishes; the first build asks the export-compliance question there."
