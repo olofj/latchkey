@@ -3161,3 +3161,49 @@ Found while building it:
 
 **Evidence:** `docs/features/F8-node-start-failure.md` §9; L1's six F8 tests
 and `scripts/test-node-start-failure.swift`, each shown to fail there.
+
+## 2026-09-25 — F6 built: the web view fetches from its gateway and four CDNs
+
+**Decision:** a WebKit content rule list, compiled per gateway origin and
+installed by `BrowserViewModel.loadResolved` before any http(s) load,
+blocks every request except the gateway's exact origin (and its `wss:`
+twin), `blob:`, `about:`, top documents and popups (still
+`NavigationPolicy`'s), and — unless *Settings → Privacy → Allow widget
+CDNs* is off — `https://esm.sh/`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`
+and `cdn.tailwindcss.com`. Google's font hosts stay blocked. A list that
+cannot be compiled loads nothing. Recorded as revision **R41**, which
+states both the tightening and the four exceptions.
+
+**Why:** the 0.6.0 bundle preconnects to Google twice and loads its fonts
+from there on every dashboard load, and any agent image or embed loaded
+from wherever it pointed; R3 covered navigations only, and WebKit never
+asks the navigation delegate about a subresource.
+
+Found while building it:
+
+- **L1 could not observe the CDNs without `-ProxyEverything`.** In L1 a
+  non-tailnet host loads direct, so the F6 page would have fetched from the
+  real esm.sh and from Google on every run, the positive control included.
+  F6's tests run proxied, and the stub maps each name to the fake.
+- **Two of the spec's WebKit readings do not hold on iOS 26.** With
+  `top-document` removed from the exemption, a main-frame redirect off the
+  gateway still reaches the navigation delegate first; with the `about:`
+  rule removed, a `srcdoc` frame still loads. Both exemptions are kept
+  (WebKit `main` orders these the other way; neither admits a network
+  destination), and the finding is in F6 §9. `popup`, `wss:` and `blob:`
+  are each shown necessary.
+- **The strict-mode test flips the real toggle in one process.** The list
+  is always compiled, so a relaunch cannot show the stale-list trap; the
+  per-process cache can, and is keyed by an identifier carrying the CDN
+  setting.
+- **The spec's marker test could not fail on the fault it names**: four
+  main-frame images are marked anyway, so `>= 3` passed with the script in
+  the main frame only. The page now reports its inner frame's marks.
+
+**Evidence:** F6 §9: every L1 test shown to fail by a named sabotage;
+`scripts/test-offline.sh --build` 38/38 in 605 s, and 38/38 in 609 s after
+the review's fixes (budget 240 s, unchanged; the ten F6 tests are about
+145 s of it); `make test-policy` green with four new
+host suites. **Not yet:** the session suite, whose pinned 0.6.0 bundle is
+no longer on this Mac, so the real-bundle connection test, its control and
+the session regression net are committed unrun.

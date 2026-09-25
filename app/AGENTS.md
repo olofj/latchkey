@@ -47,6 +47,15 @@ non-goals, not omissions.
   is what makes a dead proxy fail the load instead of leaking a direct
   connection. Flipping it would be a silent privacy regression with no visible
   symptom.
+- **The web view fetches from the gateway's origin and four CDN hosts,
+  nothing else** (R41, F6). `App/Browser/ContentRules.swift` compiles a
+  content rule list that `BrowserViewModel.loadResolved` installs before
+  any http(s) load. Adding a host to `allowedCDNHosts` widens a promise
+  written in R41: say so in a revision, not only in the code. Never look
+  a compiled list up by identifier (the store hands back whatever was
+  compiled under that name); bump `schemaVersion` when the template
+  changes. Never add `WKAppBoundDomains` to Info.plist without reading F6
+  §4.2: it would let service workers exist in this view.
 - **Swift 6 strict concurrency.** `SWIFT_STRICT_CONCURRENCY = complete`,
   `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. The module is implicitly
   `@MainActor` unless you opt out.

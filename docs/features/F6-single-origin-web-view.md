@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | **designed 2026-09-23; ready to build.** Revised the same day: Olof accepted an allowlisted CDN set, so the promise is "one origin plus four fixed hosts" (§4.1a) rather than "one origin" |
+| **Status** | **built 2026-09-25** (§9). Designed 2026-09-23 and revised the same day: Olof accepted an allowlisted CDN set, so the promise is "one origin plus four fixed hosts" (§4.1a) rather than "one origin" |
 | **Requested** | 2026-09-23, by Olof: "no URLs or network fetches should be attempted in the built in web browser, they should go to the regular browser on the device. This might already be the case, not sure -- since the whole app is a web surface." |
-| **Revision** | will need one: it tightens a documented invariant (R3's "exactly one destination") from navigations to every request, **and then names four exceptions to it** (§4.1a) — the revision must state both halves, or it records a promise the code does not keep. Number assigned when recorded |
+| **Revision** | **R41** (`../PLAN-REVISIONS.md`): it tightens a documented invariant (R3's "exactly one destination") from navigations to every request, **and then names four exceptions to it** (§4.1a). R41 states both halves |
 | **Touches** | `App/Browser` (new `ContentRules.swift`, `BrowserViewModel`, `PageScripts`, `PageScriptSources`), `App/Settings` (one toggle, §4.1a), `App/Diagnostics` (three counters), `testing/harness` (`dashboard.py`, `Makefile`), the L1 offline and session suites, three host tests. `NavigationPolicy`, `TSNet/`, the split tunnel: untouched |
 
 ## 1. Why, and what already holds
@@ -946,3 +946,143 @@ launches, not fixtures.
   because otherwise flipping it would silently reuse the stale compiled list.
   Four new L1 tests, one new host test; the anchoring test (`esm.sh` yes,
   `esm.sh.away.example` no, in the same run) is the one that matters.
+- 2026-09-25, **built** (commits `9ad47f3` harness, `c6c93ef` app and host
+  tests, `bdc3ef3` L1, `e1b2869` session). Revision **R41** records both
+  halves of the promise. The §4 design held against what changed since it
+  was written: F15's bar, F13's bottom inset, F11's gate and F8's G7 all sit
+  outside `loadResolved`, which is still where the app's own loads start.
+  (`reload()`, back/forward and `routeNewWindow`'s same-origin load call
+  WebKit directly and rely on the list already installed in the view's
+  controller, which only `loadResolved` and `unloadWebView` change.) Where
+  the build departs from §4 and §6, and why:
+  - **L1 runs F6's page with `-ProxyEverything`.** §6 assumed the harness
+    could observe `esm.sh` and the font hosts, but in L1 a non-tailnet host
+    loads *direct*: the page would have fetched from the real CDNs and from
+    Google, and the positive control would have done so on every run.
+    Proxied, every connection reaches the stub, which maps each name to the
+    fake on loopback. The font hosts map to the fake, not to `127.0.0.1:9`,
+    so a leak is counted by Host and by SNI rather than only journaled.
+  - **The page is served at `/`** (`/__mode?root=single`) as well as at
+    `/single-origin`: the app loads only an origin.
+  - **`ContentRules` is split in two files**: the pure builder
+    (`ContentRules.swift`) and the WebKit installer
+    (`ContentRulesInstaller.swift`), so the host tests can compile the pure
+    one alone. The installer's `State` enum was not needed; the page's
+    state is F4's.
+  - **The strict-mode test flips the real toggle, in-process**, instead of
+    relaunching with a hook. Because the list is always compiled, never
+    looked up, a relaunch cannot show the identifier trap; the trap lives
+    in the per-process cache, which is keyed by identifier. Sabotaging the
+    identifier to drop `cdn0|cdn1` makes this test fail (below).
+    `-UITestNoCDNAllowlist` was not added.
+  - **A compile failure does not call `navigationError`**, which would
+    report a transport failure to the relay (R30) for a load that never
+    started. It sets F4's failed state with a new cause,
+    `filterUnavailable`, worded "Couldn't open <host> safely … could not
+    build the filter that keeps this page to its gateway".
+  - **Counts are posted as increments** 1 s after the last error, not
+    "once per document".
+  - **The "ported gateway" row is not built**: F1 is not.
+  - **The L1 budget was not raised** (§6 proposed 360 s); the owner asked
+    for the figure instead. `scripts/test-offline.sh --build`, 2026-09-25:
+    **38/38 passed in 605 s** against the 240 s budget (7 s of it the
+    build, 569 s the main pass). The ten F6 tests take 143 s together, so
+    the suite was about 462 s before them. After the review's fixes (below):
+    **38/38 in 609 s**, the F6 tests 147 s of it.
+- 2026-09-25, **every test shown able to fail**, each by a deliberate
+  sabotage of the app, rebuilt, run, and restored
+  (`app/build/f6-logs/sabotage.py`, not committed):
+  - no list at all (today's build): `testOffOriginLoadsNeverReachTheAwayOrigin`
+    (17 requests to the away origin), `testThePageCannotWidenTheAllowlist`
+    (`/f6/widen.js` served in-app), `testTheFontHostsStayBlocked…`;
+  - allow rule without its trailing `/`: `testAnAllowlistedCDN…` —
+    `esm.sh.away.example` **and** `esm.shady.example` both served (the
+    unanchored `^https://esm\.sh` is a prefix of `esm.shady`);
+  - both font hosts added to `allowedCDNHosts`: `testTheFontHostsStayBlocked…`;
+  - identifier without the CDN flag: `testStrictModeBlocksTheAllowlistedCDNs`
+    (esm.sh's script still ran after the toggle went off);
+  - `popup` dropped from rule 2: `testWindowOpenToAnotherOriginStillOpensSafari`;
+  - marker script main-frame only: `testBlockedImageShowsAMarkerThatOpensSafari`
+    — through a new `blocked_marks_inner` count; the spec's `>= 3` alone
+    would have passed, since the main frame has four blocked images;
+  - `isTrusted` check removed: the same test (Safari opened on the page's
+    own `el.click()`);
+  - `load(url)` in the compile-failure catch: `testFailedRuleCompileLoadsNothing`
+    (9 requests to the gateway);
+  - rule 4 (`wss:`) dropped: `testTheGatewaysOwnMachineryStillWorks`
+    (`ws:idle`); rule 5 (`blob:`) dropped: the same (`blob_img: fail`,
+    `blob_worker` never reports);
+  - the L1 positive control, `testWithoutTheRuleList…`, is its own
+    failure demonstration: the same page and instruments, which read zero
+    with the list.
+  **The session suite's two F6 tests have not run.** Its fake gateway is
+  pinned to KiroCrew 0.6.0's bundle; on 2026-09-25 the venv held 0.7.0 and
+  the desktop app, the fallback since `41d8980`, had updated itself to 0.7.1,
+  and no 0.6.0 package is published. `testTheRealDashboardConnectsToNothing…`,
+  its control and the `LOADED-PAGE` check in `test-session.sh` are
+  committed unrun; so is the session suite as F6's regression net (the
+  acceptance criterion "sign-in, chat, `/__drop_ws` reconnect … the session
+  suite green" is **not met yet**). They need a 0.6.0 bundle (`KIROCREW_DIST`)
+  or the fake re-pinned to 0.7.x.
+  Host tests: sabotages recorded by the implementing agent — a CDN rule
+  without `/` or `^`, a fifth host, an identifier without the version, a
+  misspelled `"top-documents"` (WebKit: `WKErrorDomain 6`, "Invalid string
+  in the trigger flags array"), `(https|wss)` ("Disjunctions are not
+  supported yet"), the marker without `isTrusted` or without its
+  same-origin check, and a workspace decoder reading the wrong key.
+- 2026-09-25, **two claims of §4.1 did not hold on the iOS 26 simulator**,
+  found by the sabotage runs:
+  - **Rule 2's `top-document` half is not observably needed.** With it
+    removed, the redirect-away test still passes: the navigation delegate
+    is asked about a main-frame redirect before the list is consulted, and
+    cancels it, so no `WebKitErrorDomain 104` arises. The `popup` half *is*
+    needed (`window.open` dies without it). The exemption is kept: WebKit
+    `main` orders the two the other way (§4.1), it admits nothing
+    `NavigationPolicy` does not already decide, and the redirect-away test
+    still fails loudly if a future WebKit changes the order.
+  - **Rule 6 (`about:`) is not observably needed.** With it removed, the
+    `srcdoc` frame still loads and posts to its parent: iOS 26 does not
+    evaluate a `srcdoc` document against the list. Kept, since `about:` has
+    no network destination and `main` does evaluate it.
+- 2026-09-25, §8's preconnect question answered for the simulator: with the
+  list, the page's three `<link rel=preconnect>` (the away origin and both
+  font hosts) produced **zero** TLS handshakes, and without it at least one
+  per host. Either iOS 26 checks preconnects against the list or it does
+  not preconnect through a proxy; both leave nothing to decide. On a device,
+  where font hosts go direct, it remains unobserved.
+- The compiled list is stored under `Library/WebKit/<bundle id>/
+  ContentRuleLists/`, inside R5's existing `WebKit` backup exclusion; no
+  change to `BackupExclusion` was needed (§5).
+- 2026-09-25, **adversarial review** (no path found that loads without a
+  list, or with another origin's). Fixed:
+  - **A late compile could load over sign-out's blank page** (medium): the
+    `about:blank` branch of `loadResolved` did not advance
+    `loadGeneration`, so a compile in flight for the gateway loaded it
+    after `Workspace.blankCurrentPage` — the R32 window. Every
+    `loadResolved` and `unloadWebView` now advance it, and `loadResolved`
+    starts nothing without a web view (the assertion would otherwise fire).
+  - **The marker trusted any element carrying its attribute** (low):
+    sanitized agent HTML keeps `data-*`, so an overlay could route a real
+    tap to any URL. Only images the script itself marked count, with the
+    URL it saw, held in its own world. Two Node checks, failing on the
+    previous script.
+  - **An origin with a regex operator in its host** (`a+b`) would have
+    compiled to a rule wider than the origin (low; no MagicDNS name has
+    one). Such an origin now gets no rules, and the fallback fails closed.
+    Five host checks, failing on the previous builder.
+  - **The allowlist test's `esm.sh:8444` zero had no control** (low): the
+    L1 control now shows that port reached without the list.
+  Not changed, and why:
+  - The CDN rules carry no `resource-type`, so the four hosts also accept
+    `fetch`, beacons and frames. §4.1a(4) chose this deliberately; limiting
+    them to `script`/`style-sheet` would stop a widget sending data to
+    them, and is Olof's call (it narrows R41's exception).
+  - A downgrade to a pre-F6 build rewrites `workspaces.json` without the
+    toggle, so strict mode reverts to the default (on) after a
+    re-upgrade. Accepted: the default is the owner's choice, and no pre-F6
+    build is distributed.
+  - `test-session.sh`'s font check reads only runs with the list and has
+    no positive control for "a Google face loaded": the dump runs at
+    `didFinish`, before a font may land. The journal assertion, with its
+    control, is the evidence; the log check is supporting. (Neither has run;
+    above.)
