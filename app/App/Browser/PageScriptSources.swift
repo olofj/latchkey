@@ -274,6 +274,10 @@ enum PageScriptSources {
         document.documentElement.appendChild(style);
       } catch (e) {}
 
+      // Only images this script marked, with the URL it saw, count: a page
+      // (or sanitized agent HTML, which keeps data-* attributes) can set
+      // the attribute on anything, but cannot reach this world's map.
+      var marked = new WeakMap();
       var blocked = 0, gatewayFailed = 0, countsTimer = null;
       function flushCounts() {
         countsTimer = null;
@@ -299,6 +303,7 @@ enum PageScriptSources {
         if (url.origin === location.origin) { gatewayFailed += 1; scheduleCounts(); return; }
         blocked += 1;
         if (tag === 'img') {
+          marked.set(el, url.href);
           el.setAttribute(ATTR, url.href);
           el.setAttribute('aria-label', LABEL);
         }
@@ -308,11 +313,11 @@ enum PageScriptSources {
       document.addEventListener('click', function (e) {
         if (!e.isTrusted) { return; }
         var t = e.target;
-        var el = t && t.closest ? t.closest('[' + ATTR + ']') : null;
-        if (!el) { return; }
+        var el = t && t.closest ? t.closest('img[' + ATTR + ']') : null;
+        if (!el || !marked.has(el)) { return; }
         e.preventDefault();
         e.stopPropagation();
-        post({event: 'open', url: el.getAttribute(ATTR)});
+        post({event: 'open', url: marked.get(el)});
       }, true);
 
       var hosts = {}, hostsTimer = null;

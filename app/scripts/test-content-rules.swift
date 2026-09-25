@@ -66,7 +66,10 @@ expect(ContentRules.urlFilterEscaped(#"\{}[.?*$]/:-a"#) == #"\\\{\}\[\.\?\*\$]/:
 
 section("not an http(s) origin: no rules")
 for bad in ["ftp://gw.example.ts.net", "gw.example.ts.net", "https://", "https://gw.example.ts.net/",
-            "https://gw.example.ts.net/x", "https://gw.example.ts.net?x", "https://gw.example.ts.net#x", ""] {
+            "https://gw.example.ts.net/x", "https://gw.example.ts.net?x", "https://gw.example.ts.net#x", "",
+            // Regex operators in this dialect: a+b would also admit aab (review, 2026-09-25).
+            "https://a+b.ts.net", "https://a(b).ts.net", "https://a^b.ts.net", "https://a|b.ts.net",
+            "https://GW.example.ts.net"] {
     expect(ContentRules.json(forOrigin: bad, allowCDNs: true) == nil
            && ContentRules.json(forOrigin: bad, allowCDNs: false) == nil, "\"\(bad)\" → nil")
 }

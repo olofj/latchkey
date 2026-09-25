@@ -85,7 +85,9 @@ nonisolated enum ContentRules {
         "\(identifierPrefix)v\(schemaVersion).cdn\(allowCDNs ? 1 : 0).\(origin)"
     }
 
-    /// WebKit's own domain escape table (`getDomainList`): `\ { } [ . ? * $`.
+    /// The escape table WebKit uses for `if-domain` (`getDomainList`):
+    /// `\ { } [ . ? * $`. Enough here because `split` admits only host,
+    /// IPv6 and port characters.
     /// `/`, `:` and `-` stay literal; a bracketed IPv6 host escapes its `[`,
     /// and `]` alone is literal in this dialect.
     static func urlFilterEscaped(_ s: String) -> String {
@@ -114,8 +116,12 @@ nonisolated enum ContentRules {
             let prefix = scheme + "://"
             if origin.hasPrefix(prefix) {
                 let authority = String(origin.dropFirst(prefix.count))
-                guard !authority.isEmpty, !authority.contains("/"),
-                      !authority.contains("?"), !authority.contains("#") else { return nil }
+                // Host names, IPv6 literals and a port only. Anything else
+                // (`+`, `(`, `|`, …) is a regex operator in this dialect and
+                // would widen the rule past the origin; such an origin gets
+                // no rules, and the compile of the fallback fails closed.
+                let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789.-:[]")
+                guard !authority.isEmpty, authority.allSatisfy({ allowed.contains($0) }) else { return nil }
                 return (scheme, authority)
             }
         }

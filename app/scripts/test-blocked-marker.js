@@ -36,8 +36,10 @@ function el(tagName, props = {}, parent = null) {
     setAttribute(k, v) { attrs[k] = String(v); },
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null; },
     closest(sel) {
-      const name = /^\[([^\]]+)\]$/.exec(sel)[1];
-      for (let n = this; n; n = n.parent) { if (n.getAttribute(name) !== null) { return n; } }
+      const [, tag, name] = /^([a-z]*)\[([^\]]+)\]$/.exec(sel);
+      for (let n = this; n; n = n.parent) {
+        if (n.getAttribute(name) !== null && (!tag || n.tagName.toLowerCase() === tag)) { return n; }
+      }
       return null;
     },
   }, props);
@@ -189,12 +191,20 @@ expect(j(p.posts) === j([{ event: 'open', url: 'https://dash.localtest.me/f6/img
 expect(calls.includes('stopPropagation') && calls.includes('preventDefault'),
        'and the page\'s own handler (a lightbox) does not also run', j(calls));
 p.posts.length = 0;
-const wrapper = el('A', { href: 'https://dash.localtest.me/big.png' });
-wrapper.setAttribute(ATTR, 'https://dash.localtest.me/f6/wrapped.png');
+// Review, 2026-09-25: the page (or sanitized agent HTML, which keeps data-*)
+// can set the attribute itself. Only an image this script marked counts.
+const wrapper = el('DIV');
+wrapper.setAttribute(ATTR, 'https://phish.example/');
 const child = el('SPAN', {}, wrapper);
-calls = p.fire('click', child, { isTrusted: true });
-expect(j(p.posts) === j([{ event: 'open', url: 'https://dash.localtest.me/f6/wrapped.png' }]) && calls.length === 2,
-       'a trusted click inside a marked element finds it by closest()', j(p.posts));
+const forgedImg = el('IMG', { src: 'https://phish.example/x.png' });
+forgedImg.setAttribute(ATTR, 'https://phish.example/');
+calls = p.fire('click', child, { isTrusted: true }).concat(p.fire('click', forgedImg, { isTrusted: true }));
+expect(p.posts.length === 0 && calls.length === 0,
+       'a forged attribute, on a wrapper or on an image never blocked, posts nothing', j({ posts: p.posts, calls }));
+marked.setAttribute(ATTR, 'https://phish.example/');
+calls = p.fire('click', marked, { isTrusted: true });
+expect(j(p.posts) === j([{ event: 'open', url: 'https://dash.localtest.me/f6/img.png' }]),
+       'and rewriting a marked image\'s attribute does not change where a tap goes', j(p.posts));
 p.posts.length = 0;
 const plainImg = el('IMG', { src: ORIGIN + '/ok.png' }, el('DIV'));
 calls = p.fire('click', plainImg, { isTrusted: true });

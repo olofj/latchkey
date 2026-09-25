@@ -532,6 +532,10 @@ final class OfflineHarnessTests: XCTestCase {
                       "the journal sees the away origin; got \(connects)")
         XCTAssertTrue(connects.contains { $0.host == "dash.tail-scale.ts.net" && $0.port == 8444 },
                       "the journal sees the port probe; got \(connects)")
+        XCTAssertTrue(connects.contains { $0.host == "esm.sh" && $0.port == 8444 },
+                      "and esm.sh on another port, or its zero in the allowlist test is vacuous; got \(connects)")
+        let cdnPort = try await inAppPaths(host: "esm.sh").filter { $0.contains("/f6/cdn-port") }
+        XCTAssertFalse(cdnPort.isEmpty, "esm.sh:8444 would be served if allowed")
         let tls = try await handshakes()
         XCTAssertGreaterThanOrEqual(tls[Self.awayHost] ?? 0, 1,
                                     "the handshake counter sees the away origin, or its zero above is vacuous; saw \(tls)")
