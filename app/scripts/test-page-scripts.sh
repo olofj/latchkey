@@ -51,6 +51,17 @@ EOF3
 xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-fetch"
 "$OUT/print-fetch" | node scripts/test-session-fetch.js
 
+# F3 §4.6: the share's page-world requests and chunked upload, against a
+# fake fetch, FormData and Blob.
+cat > "$OUT/main.swift" <<'EOF6'
+import Foundation
+let payload = ["fetch": PageScriptSources.shareFetch, "stage": PageScriptSources.shareStageChunk,
+               "upload": PageScriptSources.shareUpload]
+print(String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!)
+EOF6
+xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-share"
+"$OUT/print-share" | node scripts/test-share-scripts.js
+
 # F15 §4a: the app bar's finger observer, run against a fake window.
 cat > "$OUT/main.swift" <<'EOF5'
 import Foundation

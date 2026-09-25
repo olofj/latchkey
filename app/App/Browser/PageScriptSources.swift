@@ -135,6 +135,78 @@ enum PageScriptSources {
     }
     """#
 
+    /// The JSON-answering sibling of `sessionFetch`, for a share (F3 §4.5):
+    /// the slot list, the folders and the post. Arguments `path`, `method`,
+    /// `body` (a JSON string, or null), `shareId` and `timeoutMs`. Returns
+    /// `{status, body, auth}` -- the status, the response text and whether
+    /// `X-Auth-Required` came back -- or `{status: 0}` when the request got
+    /// no answer (network, abort). As the page, for the reasons
+    /// `sessionFetch` gives; the header names the item, so the test gateway
+    /// can tell a share's requests from the page's.
+    static let shareFetch = #"""
+    const controller = new AbortController();
+    const timer = timeoutMs > 0 ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
+    try {
+      const headers = {'X-Latchkey-Share': shareId};
+      if (body !== null && body !== undefined) { headers['Content-Type'] = 'application/json'; }
+      const r = await fetch(path, {method: method, credentials: 'same-origin', cache: 'no-store',
+                                   headers: headers, body: body === null ? undefined : body,
+                                   signal: controller.signal});
+      const text = await r.text();
+      return {status: r.status, body: text, auth: r.headers.get('X-Auth-Required') !== null};
+    } catch (e) {
+      return {status: 0, body: '', auth: false};
+    } finally {
+      if (timer !== null) { clearTimeout(timer); }
+    }
+    """#
+
+    /// Stages one chunk of a shared document in the app's content world
+    /// (F3 §4.6). `callAsyncJavaScript` passes strings, not bytes, so the
+    /// file arrives as base64 of at most `ShareDelivery.chunkBytes` raw bytes
+    /// per call. Arguments `id`, `index` and `chunk`. The parts live on the
+    /// app world's `window`, which the page cannot see. Returns the number of
+    /// parts staged; a chunk out of order clears the item and returns -1, so
+    /// a retry can never append to a half-staged file.
+    static let shareStageChunk = #"""
+    const store = window.__latchkeyShare || (window.__latchkeyShare = {});
+    if (index === 0) { store[id] = []; }
+    const parts = store[id];
+    if (!parts || parts.length !== index) { delete store[id]; return -1; }
+    const bin = atob(chunk);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) { bytes[i] = bin.charCodeAt(i); }
+    parts.push(new Blob([bytes]));
+    return parts.length;
+    """#
+
+    /// Uploads the staged parts as the page (F3 §4.6): one `file` part named
+    /// `filename`, to `/api/upload/file`, the dashboard composer's route.
+    /// Arguments `id`, `filename`, `parts` (the count the app staged) and
+    /// `timeoutMs`. Returns what `shareFetch` returns; a staged count that is
+    /// not `parts` is refused here, before anything is sent. The staged
+    /// parts are dropped whatever happens.
+    static let shareUpload = #"""
+    const store = window.__latchkeyShare || {};
+    const staged = store[id];
+    const controller = new AbortController();
+    const timer = timeoutMs > 0 ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
+    try {
+      if (!staged || staged.length !== parts) { return {status: -1, body: '', auth: false}; }
+      const form = new FormData();
+      form.append('file', new Blob(staged), filename);
+      const r = await fetch('/api/upload/file', {method: 'POST', credentials: 'same-origin', body: form,
+                                                 headers: {'X-Latchkey-Share': id}, signal: controller.signal});
+      const text = await r.text();
+      return {status: r.status, body: text, auth: r.headers.get('X-Auth-Required') !== null};
+    } catch (e) {
+      return {status: 0, body: '', auth: false};
+    } finally {
+      delete store[id];
+      if (timer !== null) { clearTimeout(timer); }
+    }
+    """#
+
     /// The name `pageBackground` posts to. Registered in the app's own
     /// content world only, like the session bridge's.
     static let pageBackgroundHandler = "latchkeyPageBackground"
