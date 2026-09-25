@@ -48,6 +48,9 @@ GW_EXPIRE_IN ?= 0
 PROXY_USER   ?= tsnet
 PROXY_PASS   ?= s3cret
 DASH_HOST    ?= dash.tail-scale.ts.net
+# Where the proxy sends $(DASH_HOST):443: the fake dashboard, unless a suite
+# that never loads it wants that name for a second fake gateway (F5).
+DASH_UPSTREAM ?= 127.0.0.1:$(DASH_PORT)
 ifeq ($(INSTANCE),0)
   RUN_DIR    ?= .run
 else
@@ -60,8 +63,13 @@ PROXY_PID    := $(RUN_DIR)/socks5.pid
 DASH_PID     := $(RUN_DIR)/dashboard.pid
 PROXY_LOG    := $(RUN_DIR)/socks5.log
 DASH_LOG     := $(RUN_DIR)/dashboard.log
-GW_PID       := $(RUN_DIR)/gateway.pid
-GW_LOG       := $(RUN_DIR)/gateway.log
+# GW_NAME/GW_HOST start a second fake gateway beside the first (F5: the
+# session suite's switch between two gateways): its own pidfile and log,
+# its own ports (GW_PORT, GW_CONTROL_PORT) and the host name it answers as.
+GW_NAME      ?= gateway
+GW_HOST      ?= gw.tail-scale.ts.net
+GW_PID       := $(RUN_DIR)/$(GW_NAME).pid
+GW_LOG       := $(RUN_DIR)/$(GW_NAME).log
 
 # F6 §6: the hosts /single-origin reaches for besides the away origin. Under
 # -ProxyEverything each would be SERVED -- and counted by Host -- by the fake
@@ -123,7 +131,7 @@ harness-up: certs harness-down  ## Start the fake dashboard + stub proxy
 	@$(PY) socks5stub.py --port $(PROXY_PORT) --instance $(INSTANCE) \
 		--user $(PROXY_USER) --password $(PROXY_PASS) \
 		--journal $(JOURNAL) $(BLACKHOLE_FLAG) --control-port $(PROXY_CONTROL_PORT) \
-		--map $(DASH_HOST):443=127.0.0.1:$(DASH_PORT) \
+		--map $(DASH_HOST):443=$(DASH_UPSTREAM) \
 		--map wrong.tail-scale.ts.net:443=127.0.0.1:$(DASH_PORT) \
 		--map down.tail-scale.ts.net:443=127.0.0.1:9 \
 		--map gw.tail-scale.ts.net:443=127.0.0.1:$(GW_PORT) \
@@ -209,7 +217,7 @@ gateway-up: certs gateway-down  ## Start the fake KiroCrew gateway (GW_EXPIRE_IN
 	        echo "error: 127.0.0.1:$$port is already in use (a stray? make harness-reap)" >&2; exit 1; \
 	    fi; \
 	done
-	@$(PY) fake_gateway.py --port $(GW_PORT) --control-port $(GW_CONTROL_PORT) \
+	@$(PY) fake_gateway.py --port $(GW_PORT) --control-port $(GW_CONTROL_PORT) --host $(GW_HOST) \
 		--cert server.pem --key server.key --expire-in $(GW_EXPIRE_IN) \
 		> $(GW_LOG) 2>&1 & echo $$! > $(GW_PID)
 	@pid=$$(cat $(GW_PID)); ok=0; \
@@ -221,7 +229,7 @@ gateway-up: certs gateway-down  ## Start the fake KiroCrew gateway (GW_EXPIRE_IN
 	    sleep 0.1; \
 	done; \
 	if [ $$ok -ne 1 ]; then echo "error: the fake gateway is not listening after 10s" >&2; cat $(GW_LOG) >&2; exit 1; fi
-	@echo "::: fake gateway up — https://gw.tail-scale.ts.net via the stub, :$(GW_PORT), control :$(GW_CONTROL_PORT) :::"
+	@echo "::: fake gateway up — https://$(GW_HOST) via the stub, :$(GW_PORT), control :$(GW_CONTROL_PORT) :::"
 
 .PHONY: gateway-down
 gateway-down:  ## Stop the fake KiroCrew gateway
