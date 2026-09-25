@@ -118,6 +118,11 @@ final class ShareDelivery: ObservableObject {
     private var deferred: Set<String> = []
     /// Failed items already retried automatically in this foreground.
     private var retriedThisForeground: Set<String> = []
+    /// Items whose `POST /api/chat` has left and not yet answered. The
+    /// gateway may already have them, so Later cannot take them back: the
+    /// send runs on and its answer is recorded, and until then they are not
+    /// offered again (issue #1).
+    private var posting: Set<String> = []
 
     private init() {
         let appSupport = WorkspaceStore.appSupportDir
@@ -229,7 +234,7 @@ final class ShareDelivery: ObservableObject {
     func advance() {
         guard current == nil, appActive else { return }
         guard let next = waiting.first(where: { item in
-            guard !deferred.contains(item.id) else { return false }
+            guard !deferred.contains(item.id), !posting.contains(item.id) else { return false }
             if item.state == .failed {
                 return ShareInboxPolicy.retriesAutomatically(item) && !retriedThisForeground.contains(item.id)
             }
@@ -408,16 +413,26 @@ final class ShareDelivery: ObservableObject {
         current = sending
         runTask?.cancel()
         runTask = Task { [weak self] in
-            guard let self else { return }
-            let outcome = await self.deliver(sending, to: key)
-            self.finish(outcome, key: key)
+            guard let self, let outcome = await self.deliver(sending, to: key) else { return }
+            let posted = self.posting.remove(sending.id) != nil
+            if self.current?.id == sending.id, !Task.isCancelled {
+                self.finish(outcome, key: key)
+            } else if posted {
+                // Later, or the sheet swiped away, after the post left.
+                self.settle(outcome, item: sending)
+            }
         }
     }
 
-    private func deliver(_ item: ShareItem, to key: String) async -> ShareOutcome {
+    /// The outcome, or nil when Later stopped the send before anything was
+    /// posted. Up to the post, Later cancels; from the post on, it cannot:
+    /// `callAsyncJavaScript` runs to its end whatever happens to the task.
+    private func deliver(_ item: ShareItem, to key: String) async -> ShareOutcome? {
         // 3. verify: the key must be in a list fetched just now.
         phase = .working("Checking the session")
-        switch await fetchSessions(item: item) {
+        let verified = await fetchSessions(item: item)
+        guard !Task.isCancelled else { return nil }
+        switch verified {
         case .failure(let f):
             return f.outcome
         case .success(let fresh):
@@ -432,7 +447,10 @@ final class ShareDelivery: ObservableObject {
             case .failure(let f): return f.outcome
             }
         }
-        // 5. post.
+        // 5. post. No suspension between the check and the insert, so
+        // close() sees either a send it may stop or one it must leave be.
+        guard !Task.isCancelled else { return nil }
+        posting.insert(item.id)
         phase = .working("Sending")
         let message = ShareMessage.compose(item, uploadedPath: uploadedPath)
         let body = (try? JSONSerialization.data(withJSONObject: ["message": message, "slot": key]))
@@ -452,6 +470,8 @@ final class ShareDelivery: ObservableObject {
         while true {
             let chunk: Data? = await Task.detached { try? handle.read(upToCount: Self.chunkBytes) }.value
             guard let chunk, !chunk.isEmpty else { break }
+            // Later: the rest is not staged, and the phase is no longer ours.
+            guard !Task.isCancelled else { return .failure(.init(outcome: .uploadInterrupted(done: index, of: total))) }
             phase = .working("Uploading \(index + 1) of \(max(total, index + 1))")
             let encoded = await Task.detached { chunk.base64EncodedString() }.value
             let staged = await page?.shareCall(PageScriptSources.shareStageChunk,
@@ -497,18 +517,7 @@ final class ShareDelivery: ObservableObject {
         lastResult = outcome.label
         switch outcome {
         case .sent(let slot), .queued(let slot):
-            store.delete(item.id)
-            if let origin = gatewayOrigin {
-                let title = sessions.first { $0.key == slot }?.title
-                defaults.remember(origin: origin, .init(slotKey: slot, slotTitle: title, at: Date()))
-            }
-            if case .queued = outcome {
-                AppDiagnostics.shared.sharesQueued += 1
-                logger.log("Share: sent \(item.id) to \(slot) (queued)")
-            } else {
-                AppDiagnostics.shared.sharesSent += 1
-                logger.log("Share: sent \(item.id) to \(slot)")
-            }
+            confirm(item, outcome, slot: slot)
             phase = .done(outcome)
             reload()
             showSession(slot)
@@ -538,17 +547,60 @@ final class ShareDelivery: ObservableObject {
             phase = .picking
             logger.log("Share: \(item.id): the chosen session is gone; nothing posted")
         default:
-            item.state = .failed
-            item.attempts += 1
-            item.lastError = outcome.code
-            item.lastAttemptAt = Date()
-            try? store.update(item)
-            current = item
-            AppDiagnostics.shared.sharesFailed += 1
-            logger.log("Share: failed \(item.id): \(Self.logReason(outcome))")
+            current = markFailed(item, outcome)
             phase = .done(outcome)
             reload()
         }
+    }
+
+    /// The answer to a post the owner walked away from: recorded as
+    /// `finish` records it, with nothing shown and no navigation, since the
+    /// sheet has gone and another item may be on it.
+    private func settle(_ outcome: ShareOutcome, item: ShareItem) {
+        lastResult = outcome.label
+        // Deleted from Settings while the post was out: nothing to record.
+        guard store.items().contains(where: { $0.id == item.id }) else { return }
+        switch outcome {
+        case .sent(let slot), .queued(let slot):
+            confirm(item, outcome, slot: slot)
+        case .signedOut, .sessionGone:
+            // Not posted: kept, for the next foreground.
+            var kept = item
+            kept.state = .pending
+            try? store.update(kept)
+            logger.log("Share: \(item.id) was put aside mid-send and not posted (\(outcome.code))")
+        default:
+            _ = markFailed(item, outcome)
+        }
+        reload()
+    }
+
+    /// The gateway has it: the item is done with.
+    private func confirm(_ item: ShareItem, _ outcome: ShareOutcome, slot: String) {
+        store.delete(item.id)
+        if let origin = gatewayOrigin {
+            let title = sessions.first { $0.key == slot }?.title
+            defaults.remember(origin: origin, .init(slotKey: slot, slotTitle: title, at: Date()))
+        }
+        if case .queued = outcome {
+            AppDiagnostics.shared.sharesQueued += 1
+            logger.log("Share: sent \(item.id) to \(slot) (queued)")
+        } else {
+            AppDiagnostics.shared.sharesSent += 1
+            logger.log("Share: sent \(item.id) to \(slot)")
+        }
+    }
+
+    private func markFailed(_ item: ShareItem, _ outcome: ShareOutcome) -> ShareItem {
+        var item = item
+        item.state = .failed
+        item.attempts += 1
+        item.lastError = outcome.code
+        item.lastAttemptAt = Date()
+        try? store.update(item)
+        AppDiagnostics.shared.sharesFailed += 1
+        logger.log("Share: failed \(item.id): \(Self.logReason(outcome))")
+        return item
     }
 
     /// A failure for the log: codes and statuses, never the gateway's text
@@ -598,11 +650,17 @@ final class ShareDelivery: ObservableObject {
         showSession(key, prefill: text)
     }
 
-    /// Later: the item stays, and comes back on the next foreground.
+    /// Later: the item stays, and comes back on the next foreground. A
+    /// send whose post has left is not stopped: it finishes out of sight
+    /// and records its answer (`settle`), so a delivered item is never
+    /// offered again.
     func close() {
         if let item = current {
             deferred.insert(item.id)
-            if item.state == .sending {
+            if posting.contains(item.id) {
+                runTask = nil
+                logger.log("Share: \(item.id) put aside mid-post; its answer will be recorded")
+            } else if item.state == .sending {
                 var kept = item
                 kept.state = .pending
                 try? store.update(kept)
@@ -638,7 +696,7 @@ final class ShareDelivery: ObservableObject {
     }
 
     func retryFromSettings(_ id: String) {
-        guard current == nil, let item = waiting.first(where: { $0.id == id }) else { return }
+        guard current == nil, !posting.contains(id), let item = waiting.first(where: { $0.id == id }) else { return }
         present(item)
     }
 

@@ -308,6 +308,70 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(inboxCount(app), 0)
     }
 
+    /// Later while the post is in flight (issue #1): the gateway already has
+    /// the message, so its answer is recorded after the sheet has gone and
+    /// the item is never offered again -- a second Send would post it twice.
+    func testLaterAfterThePostLeftIsRecordedNotReoffered() async throws {
+        let app = try await launchSignedIn()
+        defer { app.terminate() }
+        share(app, "latchkey://share?url=https://example.com/later-post")
+        try pick(app, "obsidian")
+        _ = try await Self.post("\(Self.gatewayControl)/__slow?post=5")
+        element(app, "share-send").tap()
+        var posts: [[String: Any]] = []
+        for _ in 0..<60 where posts.isEmpty {
+            try await Task.sleep(for: .milliseconds(250))
+            posts = (try await gatewayState())["posts"] as? [[String: Any]] ?? []
+        }
+        XCTAssertEqual(posts.count, 1, "the gateway has the post before its answer")
+        let later = element(app, "share-cancel")
+        XCTAssertTrue(later.isHittable, "Later is offered while sending")
+        later.tap()
+        XCTAssertTrue(element(app, "share-picker").waitForNonExistence(timeout: 5), "Later closes the sheet")
+        let awaited = try await lastResult(app, timeout: 20)
+        XCTAssertEqual(awaited, "sent:obsidian", "the late answer is recorded")
+        XCTAssertEqual(inboxCount(app), 0, "a delivered share leaves the inbox")
+
+        XCUIDevice.shared.press(.home)
+        try await Task.sleep(for: .seconds(2))
+        app.activate()
+        XCTAssertFalse(element(app, "share-picker").waitForExistence(timeout: 8),
+                       "the next foreground does not offer it again")
+        let state = try await gatewayState()
+        XCTAssertEqual(counter(state, "share_posts"), 1)
+        XCTAssertEqual(violations(state), 0)
+    }
+
+    /// Later before the post left: nothing is posted, the item stays, and the
+    /// next foreground offers it again. Also the positive control for the
+    /// test above: the same foreground does bring a kept item back.
+    func testLaterBeforeThePostLeftKeepsTheItem() async throws {
+        let app = try await launchSignedIn()
+        defer { app.terminate() }
+        share(app, "latchkey://share?url=https://example.com/later-verify")
+        try pick(app, "obsidian")
+        _ = try await Self.post("\(Self.gatewayControl)/__slow?slots=4")
+        element(app, "share-send").tap()
+        XCTAssertTrue(element(app, "share-progress").waitForExistence(timeout: 5), "the send has started")
+        element(app, "share-cancel").tap()
+        XCTAssertTrue(element(app, "share-picker").waitForNonExistence(timeout: 5), "Later closes the sheet")
+        try await Task.sleep(for: .seconds(7))
+        let before = try await gatewayState()
+        XCTAssertEqual(counter(before, "share_posts"), 0, "nothing was posted after Later")
+        XCTAssertEqual(inboxCount(app), 1, "the item stays")
+
+        _ = try await Self.post("\(Self.gatewayControl)/__slow")
+        XCUIDevice.shared.press(.home)
+        try await Task.sleep(for: .seconds(2))
+        app.activate()
+        try pick(app, "obsidian")
+        element(app, "share-send").tap()
+        let awaited = try await lastResult(app)
+        XCTAssertEqual(awaited, "sent:obsidian")
+        let after = try await gatewayState()
+        XCTAssertEqual(counter(after, "share_posts"), 1, "posted once, on the second Send")
+    }
+
     /// Items older than 7 days go at launch, unsent.
     func testTheSweepRunsAtLaunch() async throws {
         let app = try await launchSignedIn(seed: "pdf:1024:age=8d")
