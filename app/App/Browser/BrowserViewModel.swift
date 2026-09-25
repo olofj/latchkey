@@ -236,6 +236,23 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// Blank popups waiting to learn where they are going (`PopupCatcher`).
     private var popupCatchers: [ObjectIdentifier: PopupCatcher] = [:]
 
+    /// A URL waiting on the owner's answer before it leaves the app (F17 §2).
+    struct PendingHandOff: Equatable {
+        let url: URL
+        let userStarted: Bool
+        /// The URL as the prompt shows it: whole, up to 300 characters.
+        var shown: String {
+            let s = url.absoluteString
+            return s.count > 300 ? String(s.prefix(300)) + "…" : s
+        }
+    }
+    @Published private(set) var pendingHandOff: PendingHandOff?
+    /// The owner's last trusted click in a gateway-origin frame (F17 §4.2).
+    private var activation = TransientActivation()
+    /// Set when the owner cancels an ask no tap started; cleared by the next
+    /// tap. A page that was told no does not get to ask again (F17 §2).
+    private var untappedAsksMuted = false
+
     /// Budget for automatic reloads after the web content process dies (R7).
     private var contentRecovery = ContentProcessRecovery()
     /// Set when the content process died while the app was in the
@@ -316,6 +333,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         PageScripts.install(into: configuration.userContentController)
         PageScripts.installBlockedMarker(into: configuration.userContentController) { [weak self] message, frame in
             self?.handleBlockedMarker(message, from: frame)
+        }
+        PageScripts.installActivationReporter(into: configuration.userContentController) { [weak self] frame in
+            self?.recordActivation(from: frame)
         }
         PageScripts.installPageBackground(into: configuration.userContentController) { [weak self] css in
             guard let self, self.pageBackgroundCSS != css else { return }
@@ -517,10 +537,62 @@ final class BrowserViewModel: NSObject, ObservableObject {
         case .allow:
             load(url: url)
         case .openExternally:
-            openExternally(url)
+            handOff(url, userStarted: true)
         case .cancel:
             logger.log("Link refused by navigation policy: \(url.redactedForLog)")
         }
+    }
+
+    /// The context menu's "Open in Safari": the owner's own choice, from a
+    /// native control, so started by them — but still not silent for a
+    /// scheme outside `HandOffPolicy.silentSchemes`.
+    func openInSystem(_ url: URL) {
+        handOff(url, userStarted: true)
+    }
+
+    /// The one way a URL leaves the app (R42, F17 §4.3). This and the
+    /// prompt's answer below are the only callers of `openExternally`.
+    func handOff(_ url: URL, userStarted: Bool) {
+        if pendingHandOff != nil {
+            logger.log("Hand-off refused (a prompt is already up): \(url.redactedForLog)")
+            return
+        }
+        switch HandOffPolicy.decide(url: url, userStarted: userStarted,
+                                    untappedAsksMuted: untappedAsksMuted) {
+        case .open:
+            openExternally(url)
+        case .ask:
+            logger.log("Hand-off asks first (\(userStarted ? "tapped" : "untapped")): \(url.redactedForLog)")
+            pendingHandOff = PendingHandOff(url: url, userStarted: userStarted)
+        case .refuse:
+            logger.log("Hand-off refused (\(userStarted ? "tapped" : "untapped")): \(url.redactedForLog)")
+        }
+    }
+
+    /// The prompt's answer. Only the prompt calls this.
+    func answerHandOff(open: Bool) {
+        guard let pending = pendingHandOff else { return }
+        pendingHandOff = nil
+        if open {
+            logger.log("Hand-off confirmed: \(pending.url.redactedForLog)")
+            openExternally(pending.url)
+        } else {
+            logger.log("Hand-off cancelled: \(pending.url.redactedForLog)")
+            if !pending.userStarted { untappedAsksMuted = true }
+        }
+    }
+
+    /// A trusted click, from the activation reporter (F17 §4.2). Only from a
+    /// frame on the gateway's origin, as for the blocked-image marker.
+    private func recordActivation(from frame: WKFrameInfo) {
+        guard SessionManager.matches(frame.securityOrigin, sessionOrigin) else { return }
+        activation.record(at: .now)
+        untappedAsksMuted = false
+    }
+
+    /// Whether the owner's last click can start a hand-off now. Consumes it.
+    private func consumeActivation() -> Bool {
+        activation.consume(at: .now)
     }
 
     /// Applies `NavigationPolicy`, plus the one case the pure policy cannot
@@ -676,7 +748,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         switch message {
         case .open(let url):
             logger.log("Blocked image opened externally: \(url.redactedForLog)")
-            openExternally(url)
+            handOff(url, userStarted: true)
         case .counts(let blocked, let gatewayFailed):
             let diagnostics = AppDiagnostics.shared
             if blocked > 0 {
@@ -1059,7 +1131,7 @@ extension BrowserViewModel: WKUIDelegate {
             // are no tabs (PLAN §1.4); the label has to say so, or the menu
             // promises something it does not do.
             let openInTab = UIAction(title: "Open in Safari", image: UIImage(systemName: "safari")) { _ in
-                Task { @MainActor [weak self] in self?.openExternally(url) }
+                Task { @MainActor [weak self] in self?.openInSystem(url) }
             }
             let copy = UIAction(title: "Copy Link", image: UIImage(systemName: "doc.on.doc")) { _ in
                 Task { @MainActor in UIPasteboard.general.url = url }
@@ -1083,6 +1155,11 @@ extension BrowserViewModel: WKUIDelegate {
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard navigationAction.targetFrame == nil else { return nil }
 
+        // Whether the owner's click asked for this window is decided NOW, when
+        // it is requested (F17 §4.2): a blank popup learns its destination
+        // after an API round trip, long after the click has expired.
+        let userStarted = consumeActivation()
+
         // `window.open()` / `window.open('')`: the destination comes later,
         // once the page sets the new window's location. Hand WebKit a
         // throwaway view that catches it, rather than nil — nil makes
@@ -1092,12 +1169,14 @@ extension BrowserViewModel: WKUIDelegate {
         guard let url = navigationAction.request.url, !PopupCatcher.isBlank(url) else {
             let catcher = PopupCatcher(
                 configuration: configuration,
-                route: { [weak self] destination in self?.routeNewWindow(to: destination) },
+                route: { [weak self] destination in
+                    self?.routeNewWindow(to: destination, userStarted: userStarted)
+                },
                 finish: { [weak self] done in self?.popupCatchers[ObjectIdentifier(done)] = nil })
             popupCatchers[ObjectIdentifier(catcher)] = catcher
             return catcher.webView
         }
-        routeNewWindow(to: url)
+        routeNewWindow(to: url, userStarted: userStarted)
         return nil
     }
 }
@@ -1150,8 +1229,11 @@ extension BrowserViewModel: WKNavigationDelegate {
         case .openExternally:
             decisionHandler(.cancel)
             if let url {
+                // Started by the owner only if they clicked within the last
+                // second — not by `navigationType`, which a script's
+                // `a.click()` sets to .linkActivated too (F17 §1).
                 logger.log("Navigation leaves the app: \(url.redactedForLog)")
-                openExternally(url)
+                handOff(url, userStarted: consumeActivation())
             }
         case .cancel:
             decisionHandler(.cancel)
@@ -1261,8 +1343,10 @@ extension BrowserViewModel {
 
     /// Decides where a new-window request goes (R3). Same-origin web pages
     /// and same-origin blobs load here, in place, with a way back shown; other
-    /// origins go to the system; anything the policy cancels is dropped.
-    fileprivate func routeNewWindow(to url: URL) {
+    /// origins go to the system, under `HandOffPolicy` with `userStarted` as
+    /// decided when the window was requested; anything the policy cancels is
+    /// dropped.
+    fileprivate func routeNewWindow(to url: URL, userStarted: Bool) {
         guard let webView else { return }
         switch navigationDecision(for: url, isMainFrame: true, in: webView) {
         case .allow:
@@ -1274,7 +1358,7 @@ extension BrowserViewModel {
             showsReturnToDashboard = true
             webView.load(URLRequest(url: url))
         case .openExternally:
-            openExternally(url)
+            handOff(url, userStarted: userStarted)
         case .cancel:
             logger.log("New-window request refused by navigation policy: \(url.redactedForLog)")
         }

@@ -23,6 +23,10 @@
 16.5 testAnUnwritableStateDirectoryIsSurvived
 14.5 testTryNowRestartsTheNodeImmediately
 14.5 testWindowOpenToAnotherOriginStillOpensSafari
+17.5 testATappedLinkToAnotherAppAsksFirst
+16.6 testAnUntappedLinkAwayAsksOnlyOnce
+14.2 testAScriptCannotOpenAnotherAppWithoutATap
+9.7 testATapThatNavigatesByScriptStillOpensSafari
 13.0 testAnAllowlistedCDNIsFetchedAndItsLookalikesAreNot
 13.3 testAReturningUserIsNotReintroduced
 0.1 testThePageCannotWidenTheAllowlist

@@ -10,12 +10,12 @@
 //
 //  Every script here is main-frame only unless it says why not (revision R3):
 //  the dashboard renders widgets in same-origin `/sandbox-doc/` iframes, and
-//  nothing in this app has any business running inside them. The one
-//  exception is F6's blocked-image marker, which says why.
+//  nothing in this app has any business running inside them. The two
+//  exceptions, F6's blocked-image marker and F17's click reporter, say why.
 //
 //  Order, as `BrowserViewModel.makeWebView` installs them: R2's token strip,
-//  F6's marker, the page-background reporter, the app bar's observer, then
-//  the session bridge. Each is an IIFE in its own world, so the order does
+//  F6's marker, F17's click reporter, the page-background reporter, the app
+//  bar's observer, then the session bridge. Each is an IIFE in its own world, so the order does
 //  not matter functionally; it is fixed so nobody has to wonder. No code
 //  path removes a user script at runtime (`removeAllUserScripts` removes
 //  every one of them, the M1 finding), and `removeAllContentRuleLists`
@@ -82,6 +82,22 @@ enum PageScripts {
                                               in: blockedMarkerWorld))
         controller.add(BlockedMarkerHandler(onMessage), contentWorld: blockedMarkerWorld,
                        name: PageScriptSources.blockedMarkerHandler)
+    }
+
+    /// The app's own world for `PageScriptSources.activationReporter`.
+    static let activationWorld = WKContentWorld.world(name: "latchkey-activation")
+
+    /// Installs the trusted-click reporter (F17 §4.2). Every frame, like the
+    /// marker: a tap inside a same-origin widget frame is still the owner's.
+    /// `onClick` gets the frame the click was in; the caller checks its origin.
+    static func installActivationReporter(into controller: WKUserContentController,
+                                          onClick: @escaping (WKFrameInfo) -> Void) {
+        controller.addUserScript(WKUserScript(source: PageScriptSources.activationReporter,
+                                              injectionTime: .atDocumentStart,
+                                              forMainFrameOnly: false,
+                                              in: activationWorld))
+        controller.add(ActivationHandler(onClick), contentWorld: activationWorld,
+                       name: PageScriptSources.activationHandler)
     }
 
     /// The app's own world for `PageScriptSources.appBarObserver`.
@@ -161,6 +177,16 @@ private final class BlockedMarkerHandler: NSObject, WKScriptMessageHandler {
         default:
             return
         }
+    }
+}
+
+/// The body carries nothing: the message itself is the signal.
+private final class ActivationHandler: NSObject, WKScriptMessageHandler {
+    let onClick: (WKFrameInfo) -> Void
+    init(_ onClick: @escaping (WKFrameInfo) -> Void) { self.onClick = onClick }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        onClick(message.frameInfo)
     }
 }
 

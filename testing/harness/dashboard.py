@@ -28,6 +28,10 @@ Page routes (HTTPS):
   GET|POST /f6/...  SINGLE's resources, answered for ANY Host (esm.sh, the
                     lookalikes and the font hosts are mapped here by the stub
                     proxy), so a leak is served and counted, never lost
+  GET  / (root=handoff, handoff-app, handoff-web)
+                    F17 §6's page: a maps: link, a button whose onclick sets
+                    location off-origin, and (app/web) navigations no tap
+                    started; reports page: "handoff", auto, auto_tries
 
 Control routes (plain HTTP, 127.0.0.1:<control-port>):
   GET  /__state     {"reports": {host: latest report}, "requests": {host: n},
@@ -37,7 +41,7 @@ Control routes (plain HTTP, 127.0.0.1:<control-port>):
                      "handshakes": {TLS SNI name or "-": n}} -- the only
                      count that sees a <link rel=preconnect> (F6)
   POST /__reset     clear all of the above (not the modes)
-  POST /__mode?front=502|0, ?root=cover|plain|product|shell|single|page
+  POST /__mode?front=502|0, ?root=cover|plain|product|shell|single|handoff*|page
                     answer the document 5xx on a live connection; or serve an
                     inset probe, F15's dashboard-shaped scroll probe ("shell")
                     or F6's page ("single") at / (the app loads only an origin)
@@ -491,9 +495,51 @@ F6_WORKERS = {
 
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
-# What /__mode?root= accepts: the page, the probes, and F6's page. "single" is
-# not a PROBE: it reports to /__report, not /__inset-report.
-ROOTS = ("page",) + PROBES + ("single",)
+# F17 §6's page: links that leave the app, tapped and untapped. maps: is the
+# "another app" (the simulator has Maps); the away origin is the web link.
+# __AUTO__ is what the page tries with no tap at all:
+#   "app"  sets location to maps: at 3 s and clicks a hidden maps: link at 4 s
+#   "web"  sets location to the away origin every 2 s, ten times
+# Each attempt is counted in the report (auto_tries), and auto: done follows
+# the last, so a test can tell "nothing happened" from "nothing was tried".
+HANDOFF = """<!doctype html><meta charset=utf-8>
+__VIEWPORT__
+<title>HANDOFF</title>
+<style>body { margin: 0; font-size: 22px; padding: calc(8px + env(safe-area-inset-top)) 8px 8px 8px; }</style>
+<h1 id=title>HANDOFF</h1>
+<p><a id=maps href="maps://?q=Latchkey+tap">Open in Maps</a></p>
+<p><button id=js-away onclick="location.href = AWAY + '/away-target?js-tap'">Script link away</button></p>
+<a id=maps-hidden href="maps://?q=Latchkey+synthetic" style="display:none">hidden</a>
+<script>
+var AWAY = '__AWAY__', MODE = '__AUTO__', TRIES = 0, DONE = MODE ? 'pending' : 'none';
+var DOC = Math.random().toString(36).slice(2);
+function report() {
+  fetch('/__report', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({doc: DOC, page: 'handoff', mode: MODE, auto: DONE,
+                          auto_tries: TRIES, ts: Date.now()})}).catch(function () {});
+}
+if (MODE === 'app') {
+  setTimeout(function () { TRIES++; location.href = 'maps://?q=Latchkey+location'; report(); }, 3000);
+  setTimeout(function () { TRIES++; document.getElementById('maps-hidden').click(); DONE = 'done'; report(); }, 4000);
+}
+if (MODE === 'web') {
+  var n = 0;
+  var t = setInterval(function () {
+    n++; TRIES++;
+    location.href = AWAY + '/away-target?untapped=' + n;
+    if (n >= 10) { clearInterval(t); DONE = 'done'; }
+    report();
+  }, 2000);
+}
+report();
+setInterval(report, 1000);
+</script>"""
+HANDOFF_ROOTS = {"handoff": "", "handoff-app": "app", "handoff-web": "web"}
+
+# What /__mode?root= accepts: the page, the probes, F6's page and F17's.
+# "single" and "handoff*" are not PROBEs: they report to /__report, not
+# /__inset-report.
+ROOTS = ("page",) + PROBES + ("single",) + tuple(HANDOFF_ROOTS)
 
 
 def away_origin():
@@ -575,6 +621,9 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         # from the control port: POST /__mode?root=cover.
         if ROOT_PROBE == "single" and path in ("/", "/index.html"):
             return self.body(f6(SINGLE).encode(), "text/html; charset=utf-8")
+        if ROOT_PROBE in HANDOFF_ROOTS and path in ("/", "/index.html"):
+            page = f6(HANDOFF).replace("__AUTO__", HANDOFF_ROOTS[ROOT_PROBE])
+            return self.body(page.encode(), "text/html; charset=utf-8")
         if ROOT_PROBE and path in ("/", "/index.html"):
             return self.body(inset_probe(ROOT_PROBE).encode(), "text/html; charset=utf-8")
         return self.body(PAGE.encode(), "text/html; charset=utf-8")
@@ -796,8 +845,8 @@ class Control(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(query)
             # root=cover|plain|product makes / serve that inset probe (F9 §6),
             # root=shell the dashboard-shaped scroll probe (F15 §6); root=page
-            # restores the dashboard page, root=single F6's page. Independent
-            # of front=.
+            # restores the dashboard page, root=single F6's page, root=handoff*
+            # F17's. Independent of front=.
             if "root" in q:
                 root = q["root"][0]
                 if root not in ROOTS:

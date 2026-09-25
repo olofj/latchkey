@@ -336,6 +336,10 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	curl -sS --fail -X POST "$$DCTL/__mode?root=single" | grep -q '"root": *"single"'; \
 	curl -s $$DCTL/__state | grep -q '"root": *"single"'; \
 	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "SINGLE ORIGIN"; \
+	curl -sS --fail -X POST "$$DCTL/__mode?root=handoff-app" | grep -q '"root": *"handoff-app"'; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "MODE = 'app'"; \
+	curl -sS --fail -X POST "$$DCTL/__mode?root=handoff-web" >/dev/null; \
+	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "AWAY = 'https://dash.localtest.me:$(DASH_PORT)', MODE = 'web'"; \
 	curl -sS --fail -X POST "$$DCTL/__mode?root=page" >/dev/null; \
 	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; \
 	loc=$$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/f6/redirect-img); \

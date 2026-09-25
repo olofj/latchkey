@@ -72,10 +72,83 @@ enum NavigationPolicy {
             // javascript: and file: have no business in the main frame.
             return .cancel
         default:
-            // mailto:, tel:, sms:, maps:, app links — the system knows what
-            // to do with these, and none of them can render in this view.
+            // mailto:, tel:, sms:, maps:, app links — none of them can render
+            // in this view. Whether one is actually handed on, and whether
+            // the owner is asked first, is `HandOffPolicy`'s call (R42).
             return .openExternally
         }
+    }
+}
+
+enum HandOffDecision: Equatable, Sendable {
+    /// Hand it to the system now.
+    case open
+    /// Ask the owner first (F17 §2's prompt).
+    case ask
+    /// Hand it to nothing.
+    case refuse
+}
+
+/// What happens to a URL `NavigationPolicy` sent out of the app (R42, F17).
+///
+/// R3 handed every such URL to `UIApplication.shared.open`, with no prompt,
+/// whatever its scheme and whoever started it — so a page script setting
+/// `location = "shortcuts://run-shortcut?…"` ran a shortcut with no tap.
+///
+/// Silent only for schemes where opening changes nothing until the owner acts
+/// again in the other app (Safari shows a page, Mail opens a draft, iOS asks
+/// before dialling), and only when a tap started it. An unknown app scheme is
+/// asked even when tapped, because a script can navigate from inside the
+/// owner's own click; untapped, it is refused, because a prompt nobody caused
+/// is how an owner is talked into tapping Open.
+enum HandOffPolicy {
+    nonisolated static let silentSchemes: Set<String> = ["http", "https", "mailto", "tel"]
+    /// Never handed on. `NavigationPolicy` does not send these; refused here
+    /// again because this is the last decision before another app.
+    nonisolated static let neverSchemes: Set<String> = ["javascript", "data", "file", "blob", "about"]
+
+    /// - Parameters:
+    ///   - userStarted: a trusted tap started it (`TransientActivation`), or a
+    ///     native control of the app's own did.
+    ///   - untappedAsksMuted: the owner cancelled an untapped ask and has not
+    ///     tapped since. A page that was told no does not get to ask again.
+    nonisolated static func decide(url: URL?, userStarted: Bool,
+                                   untappedAsksMuted: Bool) -> HandOffDecision {
+        guard let scheme = url?.scheme?.lowercased(), !neverSchemes.contains(scheme)
+        else { return .refuse }
+        if silentSchemes.contains(scheme) {
+            if userStarted { return .open }
+            return untappedAsksMuted ? .refuse : .ask
+        }
+        return userStarted ? .ask : .refuse
+    }
+}
+
+/// The owner's last trusted click, as the page's activation reporter posts it
+/// (F17 §4.2). Good for one hand-off within `window` of the click.
+///
+/// Not `WKNavigationAction.navigationType`: a script's `a.click()` reports
+/// `.linkActivated` exactly as a finger does, and a real tap on a button
+/// whose handler sets `location` reports `.other`.
+struct TransientActivation: Sendable {
+    /// A tap's own navigation reaches the policy in milliseconds. Longer only
+    /// widens what a script can piggyback; a tapped link that arrives later
+    /// (a slow redirect) degrades to a prompt, not to a dead link.
+    nonisolated static let window: Duration = .seconds(1)
+
+    private var last: ContinuousClock.Instant?
+
+    nonisolated init() {}
+
+    nonisolated mutating func record(at now: ContinuousClock.Instant) {
+        last = now
+    }
+
+    /// True when a click at most `window` old is pending; clears it either way.
+    nonisolated mutating func consume(at now: ContinuousClock.Instant) -> Bool {
+        defer { last = nil }
+        guard let last else { return false }
+        return now - last <= Self.window
     }
 }
 

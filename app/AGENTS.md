@@ -56,6 +56,12 @@ non-goals, not omissions.
   compiled under that name); bump `schemaVersion` when the template
   changes. Never add `WKAppBoundDomains` to Info.plist without reading F6
   §4.2: it would let service workers exist in this view.
+- **Every URL that leaves the app goes through `BrowserViewModel.handOff`**
+  (R42, F17). `HandOffPolicy` opens web, `mailto:` and `tel:` silently
+  only when a trusted click started it, asks otherwise, and refuses an
+  untapped custom scheme. Do not call `openExternally` from anywhere else,
+  and do not decide "the user started it" from `navigationType`: a
+  script's `a.click()` reports `.linkActivated` too.
 - **Swift 6 strict concurrency.** `SWIFT_STRICT_CONCURRENCY = complete`,
   `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. The module is implicitly
   `@MainActor` unless you opt out.

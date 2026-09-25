@@ -61,6 +61,61 @@ expect("https://gateway.example.ts.net/sandbox-doc/w1", main: false, .allow, "sa
 expect("https://www.youtube.com/embed/x", main: false, .allow, "cross-origin iframe cannot take over the view")
 expect("about:srcdoc", main: false, .allow, "srcdoc iframe")
 
+// MARK: - HandOffPolicy (R42, F17 §2)
+//
+// What happens to a URL the checks above send out of the app. Every cell of
+// F17 §2's table, tapped and untapped.
+
+func expectHandOff(_ url: String?, tapped: Bool, muted: Bool = false,
+                   _ want: HandOffDecision, _ what: String) {
+    checks += 1
+    let got = HandOffPolicy.decide(url: url.flatMap(URL.init(string:)),
+                                   userStarted: tapped, untappedAsksMuted: muted)
+    if got != want {
+        failures += 1
+        print("  FAIL: \(what)\n        url: \(url ?? "nil")  tapped: \(tapped)  muted: \(muted)\n        got: \(got)  expected: \(want)")
+    }
+}
+
+section("hand-off: web, mail and phone open when tapped, ask when not")
+for url in ["https://github.com/kirodotdev/KiroCrew", "http://example.com/",
+            "mailto:someone@example.com", "tel:+15555550123", "HTTPS://Example.com/"] {
+    expectHandOff(url, tapped: true, .open, "tapped \(url) opens")
+    expectHandOff(url, tapped: false, .ask, "untapped \(url) asks")
+    expectHandOff(url, tapped: false, muted: true, .refuse, "untapped \(url) after a Cancel is refused")
+    expectHandOff(url, tapped: true, muted: true, .open, "a tap is not muted: \(url)")
+}
+
+section("hand-off: any other scheme asks when tapped, is refused when not")
+for url in ["shortcuts://run-shortcut?name=x", "maps://?q=x", "sms:+15555550123",
+            "facetime:+15555550123", "itms-services://?action=download-manifest",
+            "someapp://do/thing", "SHORTCUTS://run-shortcut?name=x"] {
+    expectHandOff(url, tapped: true, .ask, "tapped \(url) asks")
+    expectHandOff(url, tapped: false, .refuse, "untapped \(url) is refused")
+}
+
+section("hand-off: never, tapped or not")
+for url in ["javascript:alert(1)", "data:text/html,x", "file:///etc/passwd",
+            "blob:https://evil.example/u", "about:blank", nil] {
+    expectHandOff(url, tapped: true, .refuse, "tapped \(url ?? "nil") is refused")
+    expectHandOff(url, tapped: false, .refuse, "untapped \(url ?? "nil") is refused")
+}
+
+section("transient activation: one tap, one hand-off, within a second")
+do {
+    let t0 = ContinuousClock.now
+    var a = TransientActivation()
+    expectTrue(!a.consume(at: t0), "no click yet: not tapped")
+    a.record(at: t0)
+    expectTrue(a.consume(at: t0 + .milliseconds(50)), "a click 50 ms ago: tapped")
+    expectTrue(!a.consume(at: t0 + .milliseconds(60)), "consumed: the same click does not start a second hand-off")
+    a.record(at: t0)
+    expectTrue(a.consume(at: t0 + .seconds(1)), "exactly the window: tapped")
+    a.record(at: t0)
+    expectTrue(!a.consume(at: t0 + .milliseconds(1001)), "past the window: not tapped")
+    expectTrue(!a.consume(at: t0 + .milliseconds(1002)), "an expired click is cleared too")
+}
+
 print("")
 // MARK: - ResponsePolicy (F4 §4.13, state D10)
 //

@@ -407,6 +407,28 @@ enum PageScriptSources {
     })();
     """#
 
+    /// The name `activationReporter` posts to, in the app's own content world.
+    static let activationHandler = "latchkeyActivation"
+
+    /// Tells the app the owner clicked (F17 §4.2): the one signal a page
+    /// cannot forge. `isTrusted` is false for `el.click()` and
+    /// `dispatchEvent`, and the handler exists only in the app's world, so
+    /// neither can post to it. `click` alone: a tap, a keyboard activation
+    /// and a form's implicit submit all produce one; scrolling and typing do
+    /// not. On `window`, capturing, and installed at document start, so it
+    /// runs before any listener the page adds and a page's
+    /// `stopPropagation` cannot hide a click from it.
+    static let activationReporter = #"""
+    (function () {
+      var h = window.webkit && window.webkit.messageHandlers
+        && window.webkit.messageHandlers.latchkeyActivation;
+      if (!h) { return; }
+      window.addEventListener('click', function (e) {
+        if (e.isTrusted) { try { h.postMessage(1); } catch (err) {} }
+      }, true);
+    })();
+    """#
+
     /// The name `appBarObserver` posts to, in the app's own content world.
     static let appBarHandler = "latchkeyAppBar"
 

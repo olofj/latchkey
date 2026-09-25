@@ -62,6 +62,28 @@ struct BrowserView: View {
         // everything above the web view now. The window safe-area probe that
         // was overlaid on this view's corner lives in `DashboardContent`'s
         // background: it reads the window, so it never needed to sit on the page.
+        //
+        // F17 §2: a URL about to leave the app for another app, or one no
+        // tap started. Native, so the page can neither draw nor tap it.
+        .alert("Open outside Latchkey?", isPresented: handOffPresented,
+               presenting: model.pendingHandOff) { _ in
+            Button("Cancel", role: .cancel) { model.answerHandOff(open: false) }
+            Button("Open") { model.answerHandOff(open: true) }
+        } message: { pending in
+            Text(pending.shown + "\n\n" + (pending.userStarted
+                ? "This opens another app."
+                : "The page asked for this without a tap."))
+        }
+    }
+
+    /// Dismissed any way but a button, the prompt counts as Cancel. Deferred,
+    /// so a button's own answer always lands first and this finds nothing.
+    private var handOffPresented: Binding<Bool> {
+        Binding(get: { model.pendingHandOff != nil },
+                set: { shown in
+                    guard !shown else { return }
+                    DispatchQueue.main.async { model.answerHandOff(open: false) }
+                })
     }
 }
 

@@ -425,6 +425,116 @@ final class OfflineHarnessTests: XCTestCase {
         XCTAssertTrue(inApp.isEmpty, "the other origin must never load in the app; saw \(inApp)")
     }
 
+    // MARK: - F17: another app opens only from a tap (R42, issue #2)
+
+    private static let handOffAlert = "Open outside Latchkey?"
+
+    /// Launches the app on F17's page (`dashboard.py`'s HANDOFF, at /), with
+    /// `root` choosing what the page tries by itself.
+    private func launchHandOff(_ root: String) async throws -> XCUIApplication {
+        try await Self.post("\(Self.dashboardControl)/__mode?root=\(root)")
+        return launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+    }
+
+    private func handOffReport(_ mode: String, timeout: TimeInterval = 40,
+                               until predicate: @escaping ([String: Any]) -> Bool) async throws -> [String: Any] {
+        try await waitForReport(host: "dash.tail-scale.ts.net", timeout: timeout) {
+            $0["page"] as? String == "handoff" && $0["mode"] as? String == mode && predicate($0)
+        }
+    }
+
+    /// A tapped link to another app asks first. Cancel opens nothing; Open
+    /// opens it. Before F17, one tap opened Maps with no prompt.
+    func testATappedLinkToAnotherAppAsksFirst() async throws {
+        let maps = XCUIApplication(bundleIdentifier: "com.apple.Maps")
+        maps.terminate()
+        let app = try await launchHandOff("handoff")
+        defer { app.terminate(); maps.terminate() }
+        let link = app.webViews.links["Open in Maps"]
+        XCTAssertTrue(link.appears(within: 30), "the maps: link renders")
+
+        link.tap()
+        let alert = app.alerts[Self.handOffAlert]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "a tapped maps: link asks before opening Maps")
+        XCTAssertNotEqual(maps.state, .runningForeground, "and has not opened it yet")
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "maps://")).firstMatch.exists,
+                      "the prompt shows the URL")
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "This opens another app")).firstMatch.exists,
+                      "and says it was tapped: \(alert.debugDescription)")
+        alert.buttons["Cancel"].tap()
+        try await Task.sleep(for: .seconds(3))
+        XCTAssertNotEqual(maps.state, .runningForeground, "Cancel opens nothing")
+        XCTAssertEqual(app.state, .runningForeground)
+
+        link.tap()
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "asked again on the next tap")
+        alert.buttons["Open"].tap()
+        XCTAssertTrue(maps.wait(for: .runningForeground, timeout: 15), "Open opens Maps")
+    }
+
+    /// With no tap, neither a script setting `location` to maps: nor its
+    /// `click()` on a maps: link opens Maps, and neither raises a prompt.
+    /// The synthetic click is the case `navigationType` cannot catch: WebKit
+    /// reports it as .linkActivated, like a finger (F17 §1).
+    func testAScriptCannotOpenAnotherAppWithoutATap() async throws {
+        let maps = XCUIApplication(bundleIdentifier: "com.apple.Maps")
+        maps.terminate()
+        let app = try await launchHandOff("handoff-app")
+        defer { app.terminate(); maps.terminate() }
+        let report = try await handOffReport("app") { $0["auto"] as? String == "done" }
+        XCTAssertEqual(report["auto_tries"] as? Int, 2, "both untapped attempts were made: \(report)")
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertNotEqual(maps.state, .runningForeground, "a script cannot open another app")
+        XCTAssertEqual(app.state, .runningForeground, "the app is still in front")
+        XCTAssertFalse(app.alerts.firstMatch.exists, "nor raise a prompt for one: untapped, it is refused")
+    }
+
+    /// With no tap, a script sending the page to another web origin raises
+    /// a prompt rather than opening Safari; once cancelled, the page's later
+    /// attempts are refused without asking again, and the other origin never
+    /// loads in the app.
+    func testAnUntappedLinkAwayAsksOnlyOnce() async throws {
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        let app = try await launchHandOff("handoff-web")
+        defer { app.terminate(); safari.terminate() }
+        let alert = app.alerts[Self.handOffAlert]
+        XCTAssertTrue(alert.waitForExistence(timeout: 40), "an untapped link away asks")
+        XCTAssertNotEqual(safari.state, .runningForeground, "and does not open Safari by itself")
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "without a tap")).firstMatch.exists,
+                      "the prompt says no tap started it: \(alert.debugDescription)")
+        alert.buttons["Cancel"].tap()
+        let after = try await handOffReport("web", timeout: 5) { _ in true }
+        let tries = after["auto_tries"] as? Int ?? 0
+        XCTAssertLessThanOrEqual(tries, 8, "the page still has attempts to make: \(after)")
+        _ = try await handOffReport("web", timeout: 15) { ($0["auto_tries"] as? Int ?? 0) >= tries + 2 }
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertFalse(alert.exists, "a page that was told no does not get to ask again")
+        XCTAssertNotEqual(safari.state, .runningForeground, "and nothing opened Safari")
+        let inApp = try await inAppPaths(host: Self.awayHost).filter { $0.contains("/away-target") }
+        XCTAssertTrue(inApp.isEmpty, "the other origin never loads in the app; saw \(inApp)")
+    }
+
+    /// A real tap on a button whose handler sets `location` to another
+    /// origin opens Safari with no prompt. WebKit reports that navigation as
+    /// .other, the same as an untapped one; only the trusted click reported
+    /// from the app's own world tells them apart (F17 §4.2).
+    func testATapThatNavigatesByScriptStillOpensSafari() async throws {
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        let app = try await launchHandOff("handoff")
+        defer { app.terminate() }
+        let button = app.webViews.buttons["Script link away"]
+        XCTAssertTrue(button.appears(within: 30), "the button renders")
+        button.tap()
+        XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 15),
+                      "a tap whose handler navigates opens Safari; alert: \(app.alerts.firstMatch.exists)")
+        safari.terminate()
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        XCTAssertFalse(app.alerts.firstMatch.exists, "with no prompt")
+        let inApp = try await inAppPaths(host: Self.awayHost).filter { $0.contains("/away-target") }
+        XCTAssertTrue(inApp.isEmpty, "the other origin never loads in the app; saw \(inApp)")
+    }
+
     // MARK: - F6: the page loads the gateway, four named CDNs, and nothing else
 
     /// The away origin's host, as the dashboard counts it (no port).

@@ -168,9 +168,9 @@ final class TabManager: ObservableObject {
     }
 
     /// Hands a URL to the system: Safari for web links, the owning app for
-    /// mailto:, tel: and the like. Reached for anything `NavigationPolicy`
-    /// sends out of the app (R3), and from the context menu's "Open in
-    /// Safari".
+    /// mailto:, tel: and the like. Reached only through
+    /// `BrowserViewModel.handOff`, once `HandOffPolicy` has said `.open` or
+    /// the owner has confirmed its prompt (R42, F17).
     ///
     /// Upstream opened a second tab. With `maximumTabCount == 1` that path now
     /// hits `canOpenNewTab == false` and returns nil, which means such a link
@@ -184,16 +184,18 @@ final class TabManager: ObservableObject {
     /// browser — an external link is exactly the case that belongs elsewhere.
     private static func openExternally(_ url: URL) {
 #if canImport(UIKit)
-        // NavigationPolicy never sends these here; refuse them anyway, since
+        // HandOffPolicy never sends these here; refuse them anyway, since
         // they could only reach this point through a bug.
         let scheme = url.scheme?.lowercased() ?? ""
-        guard !["javascript", "data", "file", "blob", "about"].contains(scheme) else {
+        guard !HandOffPolicy.neverSchemes.contains(scheme) else {
             logger.log("Refusing to open a \(scheme): URL externally")
             return
         }
         // http(s) goes to Safari; mailto:, tel: and friends to their apps.
         logger.log("Opening externally: \(url.redactedForLog)")
-        UIApplication.shared.open(url)
+        UIApplication.shared.open(url) { opened in
+            if !opened { logger.log("No app opened \(scheme): URL \(url.redactedForLog)") }
+        }
 #endif
     }
 
