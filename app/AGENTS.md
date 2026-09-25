@@ -12,8 +12,13 @@ says something surprising, it is because someone already got it wrong once.
 
 A SwiftUI app that loads exactly one page — a self-hosted KiroCrew dashboard —
 through an embedded userspace Tailscale node (`TailscaleKit` /
-`libtailscale`). One target, one scheme: **`Latchkey`**. Bundle id
-`net.lixom.latchkey`.
+`libtailscale`). One scheme, **`Latchkey`**, building the app (`net.lixom.latchkey`)
+and its share extension (`ShareExtension/`, `net.lixom.latchkey.share`, F3 stage 2).
+The extension is a separate process: it links no TailscaleKit and compiles
+only the inbox files it shares with the app (the `App/` exception set for
+the ShareExtension target in `project.pbxproj`). Add a file there, and it
+is not in the extension until it is added to that list. Both targets carry
+the App Group `group.net.lixom.latchkey`.
 
 It is a fork of tailscale/aperture-plus, which was a general multi-tab browser
 with a macOS app and a virtualization feature. All of that is deleted. If you

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | designed, buildable; one owner call open (§8 Q1: stage 1 only, or both — recommendation given) |
+| **Status** | built: stage 1 and stage 2. Q1 and Q2 decided by Olof (§8, §9). Owner actions open: the Shortcut, the App Group in Xcode (§8), the device check (§7) |
 | **Requested** | 2026-09-23, by Olof: "I want to be able to share from one app straight into a session on kiro to a remote gateway. The by far most common would be for me to want to share a link article straight to the obsidian session on chonk, but the feature should be generic. Share -> latchkey -> gateway/session UI flow. Map out feasability, explore options and present me with well-researched options if needed." Answers of the same day are in §6. |
 | **Revision** | needs one: a second entry point into the app (URL scheme, App Intent, optionally a share extension), a new user-facing flow, and the first App Group if stage 2 is built |
 | **Touches** | new `App/Share/`, `App/Browser/PageScriptSources.swift`, `App/LatchkeyApp.swift`, `Latchkey/Info.plist`, Settings, `testing/harness/fake_gateway.py`, the session suite; stage 2 adds a `ShareExtension/` target, an entitlements file and a pbxproj edit |
@@ -641,8 +641,9 @@ in the transcript.
 
 ## 8. Open questions and owner actions
 
-**Q1 — Stage 1 only, or both?** Recommendation: **stage 1 only, now.** The
-reasoning:
+**Q1 — Stage 1 only, or both?** **Decided by Olof, 2026-09-24: stage 1
+first, then stage 2 the same day** ("I want F3 stage 2 as well please").
+The recommendation, kept for the record:
 
 - Documents no longer pull the App Group forward: an `IntentFile` reaches
   the app's own process (§4.2), so stage 1 carries links *and* documents
@@ -662,9 +663,10 @@ If Olof says "both", §4.2's stage 2 and §4.3's first location are built as
 written, and Q2 needs an answer first.
 
 **Q2 — Does R34/D6 ("no notifications in v1") cover a local notification
-posted by the share extension?** Without one, "Saved. Open Latchkey to send
-it." is the only bounce in stage 2. With one, the owner is asked once for
-notification permission. Not needed for stage 1. Olof's call.
+posted by the share extension?** **Decided by Olof, 2026-09-24: yes — no
+notification.** "Saved. Open Latchkey to send it." is the bounce. A
+notification is additive later: permission once, one post from the
+extension after Save, nothing else changes.
 
 **Q3 — New sessions from the share flow?** Still open; not needed.
 
@@ -673,9 +675,24 @@ notification permission. Not needed for stage 1. Olof's call.
   *Show in Share Sheet* on. Five minutes, on the phone.
 - **Any gateway on 8443:** allow the ported origin first (F1 §4a), or every
   share there returns 403 and falls back to prefill.
-- **Stage 2 only:** the first install after the entitlement and the extension
-  target exist goes through Xcode's Run, to register the App Group and mint
-  the second profile; and allow notifications once, if Q2 says yes.
+- **Stage 2, once, in Xcode** (xcodebuild here cannot register an App
+  Group or mint a profile):
+  1. Open `app/Latchkey.xcodeproj`. For the **Latchkey** target, then the
+     **ShareExtension** target: Signing & Capabilities, team `DX33PQ7J4A`,
+     *Automatically manage signing* on. Each target shows **App Groups**
+     with `group.net.lixom.latchkey` (from its `.entitlements`). If it is
+     unticked or red, tick it or press the refresh button. Xcode then
+     registers the group and the App ID `net.lixom.latchkey.share`.
+  2. With the phone connected, **Run** once. This mints the development
+     profiles for both bundle ids with the group. `make device` works after
+     that, and not before: the old profile has no App Group.
+  3. For TestFlight, **Product → Archive → Distribute App → App Store
+     Connect** once from Xcode. This mints the App Store profiles for both
+     ids, which `make tf` needs on disk because it exports without
+     `-allowProvisioningUpdates`. Its preflight checks only the app's
+     profile, so a missing extension profile shows up as an export error.
+  4. On the phone: share a page from Safari. Latchkey is in the app row
+     (possibly under *More* the first time). Save, open Latchkey, and send.
 - **Device check** after the build: the four items in §7.
 
 ## 9. Log
@@ -711,3 +728,37 @@ notification permission. Not needed for stage 1. Olof's call.
   - **The fake refuses the trap:** an unlisted `slot` is a recorded violation
     and a 404, so the silent-create hazard fails a test instead of minting a
     session.
+- 2026-09-24, stage 1 built (Q1 decided by Olof: stage 1 only, first).
+  URL scheme, `SendToSessionIntent`, the inbox, `ShareDelivery`, the
+  picker, Settings → Share. The composer's attachment order, read from
+  the 0.6.0 and 0.7.0 bundles (`fileTokens-*.js`, identical): typed text,
+  then the `[attached_file N]` lines, joined by ONE newline — not the
+  blank line §4.6 guessed. Step 6 is a same-origin load of
+  `/chat?sid=<key>`: the SPA honours `sid` on a document load, but a
+  `pushState` + `popstate` from outside only after an in-app navigation,
+  and not on a phone layout. The sidebar filter is `surface` in
+  {"", "orchestrator"} (0.6.0 also "crew"); there is no `mode` test.
+  0.7.0 changes none of the four routes' shapes. Tests: host
+  `test-share.sh` and the share page-script suite; 14 ShareTests in the
+  session suite. They found two bugs: a seeded item never came up on a
+  cold launch, and the fake answered a refused POST without reading its
+  body, so the next request on the connection came back 501.
+- 2026-09-24, stage 2 built (Olof: "I want F3 stage 2 as well please").
+  **Q2 decided by Olof: no notification** (R34/D6); additive later. The
+  `ShareExtension` target, the App Group `group.net.lixom.latchkey` on both
+  targets, the capture sheet. Additive except for two small changes:
+  `ShareInboxPolicy` no longer names `ShareOutcome` (the extension compiles
+  the inbox files alone), and the single-root store gained a two-location
+  view (`ShareInbox`) — §4.3 said the app reads both but stage 1 had no
+  code for a second root. The spec's 8 MB in-memory rule is moot: the
+  extension uses only `loadFileRepresentation`, so a file always arrives
+  on disk. The share-sheet test drove Safari → Share → Latchkey → Save →
+  the app on the iOS 27 simulator. It found a real bug: SwiftUI reports
+  `.active` before `UIApplication.applicationState` does, so an item the
+  extension saved was not brought up on return. The App Group was
+  **not** tried on a device: that is the owner's Xcode step (§8).
+- 2026-09-24: the session suite cannot run on this Mac. The venv moved to
+  KiroCrew 0.7.0 and the desktop app to 0.7.1 the same evening; no
+  pinned 0.6.0 remains, and none is on the package index. The fake must
+  be re-pinned to 0.7.x before the session suite (all of ShareTests
+  included) gives a verdict again.

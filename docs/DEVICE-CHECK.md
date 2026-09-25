@@ -140,6 +140,11 @@ Record each result in `docs/DECISIONS.md` under a new "M1 device check" entry.
 | Settings → Diagnostics → Web page restarts | `none` | |
 | Local Network permission **allowed** | dashboard loads | |
 | Local Network permission **denied** (Settings → Privacy & Security → Local Network → Latchkey off, then relaunch) | dashboard still loads, perhaps more slowly; note any `-1000` | |
+| F3: the Send to Latchkey Shortcut in Safari's and Files' share sheets | Latchkey opens with the picker, the page's title and URL | |
+| F3: Latchkey in the share sheet's app row (stage 2) | Save shows "Saved. Open Latchkey to send it."; the app then shows it | |
+| F3: a 50 MB PDF from Files through the extension | Settings → Share shows the byte count; no jetsam of the extension in Analytics | |
+| F3: a share made offline | sent the next time the app is open on the tailnet | |
+| F3: a real gateway's `[attached_file 1]` | the PDF shows in the transcript | |
 
 ## 7. If it goes wrong
 
