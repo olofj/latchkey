@@ -234,6 +234,35 @@ done
 [[ $F3_RC -eq 0 ]] && echo "    ok (D1: no XYZ in the unified log or the app's Logs, and shares were sent)"
 [[ $F3_RC -eq 0 ]] || TEST_RC=1
 
+# ----------------------------------------------------------------------- F6 --
+# The journal proves no connection to Google; the page proves the fonts did
+# not arrive by another way. LOADED-PAGE (-UITestLogResponses) carries the
+# Google Fonts preload's rel -- "stylesheet" once its onload has run -- and
+# the faces loaded, and whether the run installed a list at all, so the
+# control's lines are told apart. Validated by at least one line from a run
+# with the list that found the link: a selector that matched nothing would
+# otherwise pass.
+if [[ " ${CLASSES[*]} " == *" SessionTests "* ]]; then
+    say "F6: under the rule list the real bundle's fonts link stays preload, and no web font loads"
+    F6_RC=0
+    WITH_LIST=$(grep -F 'LOADED-PAGE: ' "$LOG_DIR/unified.log" | grep -F '"rules":"installed"' || true)
+    if ! grep -qF '"fontsLinkRel":"preload"' <<<"$WITH_LIST"; then
+        echo "error: no LOADED-PAGE line from a run with the list names the fonts link, so this check proved nothing" >&2
+        F6_RC=1
+    fi
+    if grep -qF '"fontsLinkRel":"stylesheet"' <<<"$WITH_LIST"; then
+        echo "error: with the list installed, the Google Fonts stylesheet loaded:" >&2
+        grep -F '"fontsLinkRel":"stylesheet"' <<<"$WITH_LIST" | head -3 | cut -c1-300 | sed 's/^/    /' >&2
+        F6_RC=1
+    fi
+    if grep -qE 'Space Grotesk|JetBrains Mono' <<<"$(grep -o '"webFonts":\[[^]]*\]' <<<"$WITH_LIST")"; then
+        echo "error: with the list installed, a Google web font loaded" >&2
+        F6_RC=1
+    fi
+    [[ $F6_RC -eq 0 ]] && echo "    ok ($(grep -cF '"fontsLinkRel":"preload"' <<<"$WITH_LIST") page loads under the list, fonts link still preload, no Google face)"
+    [[ $F6_RC -eq 0 ]] || TEST_RC=1
+fi
+
 # ------------------------------------------------------------------ summary --
 ELAPSED=$(( $(date +%s) - START ))
 curl -s http://127.0.0.1:8481/__state > "$LOG_DIR/gateway-state.json" 2>/dev/null || true

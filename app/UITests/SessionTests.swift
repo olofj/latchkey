@@ -93,6 +93,57 @@ final class SessionTests: XCTestCase {
         XCTAssertFalse(element(app, "token-sheet").exists, "no bridge, no native sheet")
     }
 
+    // MARK: - F6: the real bundle connects to nothing but the gateway
+
+    /// Every connection the app made this run, as `host:port`, from the stub
+    /// proxy's journal. Under `-ProxyEverything` that is every connection
+    /// the web view made, preconnects included: the complete log.
+    private func connectSet() async throws -> Set<String> {
+        let data = try await Self.get("\(Self.proxyControl)/journal")
+        let events = (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+        return Set(events.compactMap { e in
+            guard e["event"] as? String == "connect", let h = e["host"] as? String,
+                  let p = e["port"] as? Int else { return nil }
+            return "\(h):\(p)"
+        })
+    }
+
+    /// Signs in on the real 0.6.0 bundle with every connection proxied, and
+    /// lets the dashboard settle with its chat live.
+    private func signedInEverythingProxied(extra: [String] = []) async throws -> XCUIApplication {
+        _ = try await Self.post("\(Self.proxyControl)/reset")
+        let app = launch(extra: ["-ProxyEverything", "-UITestLogResponses"] + extra)
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+        try await Task.sleep(for: .seconds(5))
+        return app
+    }
+
+    /// F6 §6: the real bundle's `index.html` preconnects to Google twice and
+    /// preloads its fonts' CSS. With the rule list, the whole run — load,
+    /// sign-in, a live dashboard — connects to the gateway and nothing else.
+    /// test-session.sh reads the rest from the log: the fonts link stays
+    /// `preload` (its onload never ran) and no Space Grotesk or JetBrains
+    /// Mono face loaded.
+    func testTheRealDashboardConnectsToNothingButTheGateway() async throws {
+        let app = try await signedInEverythingProxied()
+        defer { app.terminate() }
+        let connects = try await connectSet()
+        XCTAssertEqual(connects, ["\(Self.gatewayHost):443"],
+                       "the real dashboard connects to its gateway and nothing else")
+    }
+
+    /// The positive control (R10's shape): without the list, the same run
+    /// reaches for both font hosts. The stub maps them to loopback, so the
+    /// attempt is journaled and never reaches Google.
+    func testWithoutTheRuleListTheRealDashboardReachesForGoogle() async throws {
+        let app = try await signedInEverythingProxied(extra: ["-UITestNoContentRules"])
+        defer { app.terminate() }
+        let connects = try await connectSet()
+        XCTAssertTrue(connects.contains("fonts.googleapis.com:443"), "the bundle reaches for Google's CSS; got \(connects)")
+        XCTAssertTrue(connects.contains("fonts.gstatic.com:443"), "and its font files; got \(connects)")
+    }
+
     // MARK: - M4.4 / R23: token entry
 
     /// `kirocrew token` prints several URLs; pasting all of them signs in to
