@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<!-- F18 mock: finishing a share inside the share sheet. Self-contained, no
+     external assets. A flow mock for judging options, not a rendering.
+     Spec: docs/features/F18-send-from-the-share-sheet.md -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>F18 — share-sheet options (mock)</title>
+<style>
+  :root { --a:#2f6fdf; --b:#b26a00; --c:#1d8a55; --ink:#1c1c1e; --dim:#8e8e93; --line:#e3e3e8; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px; font:14px/1.35 -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+         color:var(--ink); background:#f2f2f5; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .lede { color:#444; max-width:1100px; margin:0 0 20px; }
+  table { border-collapse:separate; border-spacing:18px 0; margin-left:-18px; }
+  th.col { text-align:left; vertical-align:top; padding:10px 12px 12px; border-radius:12px 12px 0 0; color:#fff; width:270px; }
+  th.col small { display:block; font-weight:400; opacity:.9; margin-top:4px; }
+  th.A { background:var(--a); } th.B { background:var(--b); } th.C { background:var(--c); }
+  td.row { vertical-align:top; width:150px; padding:18px 0; font-weight:600; color:#444; }
+  td.row span { display:block; font-weight:400; color:var(--dim); font-size:12px; margin-top:4px; }
+  td.cell { vertical-align:top; padding:18px 12px; background:#fff; border-left:4px solid; }
+  td.A { border-color:var(--a); } td.B { border-color:var(--b); } td.C { border-color:var(--c); }
+  .tag { display:inline-block; font-size:11px; font-weight:700; color:#fff; border-radius:6px; padding:1px 6px; margin-bottom:8px; }
+  .tA { background:var(--a); } .tB { background:var(--b); } .tC { background:var(--c); }
+  .caption { font-size:12px; color:#555; margin-top:8px; width:240px; }
+
+  /* phone */
+  .phone { width:240px; height:470px; border:9px solid #111; border-radius:34px; position:relative; overflow:hidden; background:#ddd; }
+  .island { position:absolute; top:7px; left:50%; width:74px; height:20px; margin-left:-37px; background:#111; border-radius:12px; z-index:5; }
+  .host { position:absolute; inset:0; padding:40px 12px; background:linear-gradient(#fafafa,#eee); color:#999; font-size:11px; }
+  .host .bar { height:22px; background:#e6e6ea; border-radius:8px; margin-bottom:10px; }
+  .host p { height:8px; background:#e1e1e6; border-radius:4px; margin:6px 0; }
+  .scrim { position:absolute; inset:0; background:rgba(0,0,0,.28); }
+  .sheet { position:absolute; left:0; right:0; bottom:0; top:70px; background:#f2f2f7; border-radius:14px 14px 0 0; padding:0; z-index:3; }
+  .sheet.short { top:170px; }
+  .nav { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; font-size:13px; border-bottom:1px solid var(--line); background:#f9f9fb; border-radius:14px 14px 0 0; }
+  .nav b { font-size:13px; }
+  .nav .l { color:#007aff; } .nav .r { color:#007aff; font-weight:600; }
+  .nav .r.off { color:#c7c7cc; }
+  .grp { background:#fff; margin:10px 10px 0; border-radius:10px; overflow:hidden; }
+  .grp .it { padding:8px 10px; border-bottom:1px solid var(--line); font-size:12px; }
+  .grp .it:last-child { border-bottom:0; }
+  .hdr { font-size:10px; text-transform:uppercase; color:var(--dim); margin:10px 20px -4px; letter-spacing:.03em; }
+  .sub { color:var(--dim); font-size:11px; }
+  .row2 { display:flex; justify-content:space-between; align-items:center; }
+  .chev { color:var(--dim); }
+  .sel { color:#007aff; font-weight:700; }
+  .pill { font-size:9px; border-radius:6px; padding:1px 5px; background:#ffe9b3; color:#7a5200; margin-left:4px; }
+  .foot { font-size:10px; color:var(--dim); margin:6px 20px; }
+  .warn { color:#b25b00; }
+  .menu { position:absolute; left:18px; right:18px; top:150px; background:rgba(255,255,255,.98); border-radius:12px;
+          box-shadow:0 8px 30px rgba(0,0,0,.35); z-index:6; overflow:hidden; font-size:12px; }
+  .menu .mh { font-size:10px; text-transform:uppercase; color:var(--dim); padding:6px 10px 2px; }
+  .menu .mi { padding:7px 10px; border-top:1px solid var(--line); display:flex; justify-content:space-between; }
+  .menu .mi .sub { font-size:10px; }
+  .menu .mf { padding:6px 10px; font-size:10px; color:var(--dim); border-top:1px solid var(--line); background:#f7f7f9; }
+  .center { text-align:center; padding:26px 16px; }
+  .big { font-size:28px; }
+  .h { font-weight:700; font-size:14px; margin:6px 0 4px; }
+  .btn { display:block; text-align:center; background:#007aff; color:#fff; border-radius:10px; padding:8px; margin:10px 10px 0; font-weight:600; font-size:12px; }
+  .btn.alt { background:#e5e5ea; color:#007aff; }
+  .scut { position:absolute; left:10px; right:10px; bottom:14px; background:#fff; border-radius:16px; z-index:4; box-shadow:0 6px 24px rgba(0,0,0,.3); overflow:hidden; }
+  .scut .st { padding:10px 12px 6px; font-size:11px; color:var(--dim); display:flex; gap:6px; align-items:center; }
+  .scut .st i { display:inline-block; width:16px; height:16px; border-radius:4px; background:linear-gradient(135deg,#ff4f7a,#6a5cff); }
+  .scut .q { padding:0 12px 6px; font-weight:700; font-size:13px; }
+  .scut .li { padding:7px 12px; border-top:1px solid var(--line); font-size:12px; display:flex; justify-content:space-between; }
+  .scut .done { padding:8px 12px; border-top:1px solid var(--line); text-align:right; color:#007aff; font-weight:600; font-size:12px; }
+  .app { position:absolute; inset:0; background:#101114; color:#ddd; padding:34px 0 0; font-size:11px; }
+  .app .chips { display:flex; gap:5px; padding:6px 8px; overflow:hidden; }
+  .app .chip { background:#2a2c33; border-radius:10px; padding:3px 8px; white-space:nowrap; }
+  .app .chip.on { background:#3c62c9; color:#fff; }
+  .app .msg { margin:8px; padding:8px; border-radius:8px; background:#1c1e24; }
+  .app .msg.me { background:#233a6b; margin-left:40px; }
+  .toast { position:absolute; left:10px; right:10px; top:40px; background:#1d8a55; color:#fff; border-radius:10px; padding:8px 10px; font-size:11px; z-index:5; }
+  .toast.q { background:#444; }
+  .na { width:240px; height:470px; border:2px dashed #ccc; border-radius:34px; display:flex; align-items:center; justify-content:center;
+        text-align:center; color:#888; padding:24px; font-size:12px; }
+  .note { max-width:1100px; background:#fff; border-radius:12px; padding:12px 16px; margin-top:22px; font-size:13px; }
+  .note b.a { color:var(--a); } .note b.b { color:var(--b); } .note b.c { color:var(--c); }
+</style>
+</head>
+<body>
+<h1>F18: finishing the share inside the share sheet (flow mock)</h1>
+<p class="lede">One column per option and one row per moment. <b>A</b> is the Latchkey icon in the share sheet's app row. <b>B</b> and <b>C</b> are the
+"Send to Latchkey" Shortcut in the share sheet's actions list: <b>only an App Intent runs where the tailnet is</b>, and the app-row extension can neither
+reach the gateway nor open Latchkey (spec §2). Example content: sharing a Safari article to the <i>obsidian</i> session on <i>chonk</i>.</p>
+
+<table>
+<tr>
+  <th></th>
+  <th class="col A">A: queued from the app-row sheet<small>Pick in the sheet. Sent when you next open Latchkey. No switch, no confirmation.</small></th>
+  <th class="col B">B: Shortcut, Latchkey comes forward<small>Pick in the Shortcut prompt. Latchkey opens and sends. Confirmed, with a switch.</small></th>
+  <th class="col C">C: Shortcut, sent in the background<small>Pick in the Shortcut prompt. Sent from the background. Confirmed, no switch, <u>if</u> it fits iOS's time budget.</small></th>
+</tr>
+
+<!-- ROW 1 -->
+<tr>
+  <td class="row">1. The sheet<span>Drop-down closed, last destination preselected</span></td>
+  <td class="cell A"><span class="tag tA">A</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p><p></p><p style="width:70%"></p></div><div class="scrim"></div>
+      <div class="sheet">
+        <div class="nav"><span class="l">Cancel</span><b>Latchkey</b><span class="r">Queue</span></div>
+        <div class="grp"><div class="it"><b>Why local-first software wins</b><div class="sub">example.com/local-first</div></div></div>
+        <div class="hdr">Send to</div>
+        <div class="grp"><div class="it row2"><span>obsidian <span class="sub">· chonk</span></span><span class="chev">▾</span></div></div>
+        <div class="foot">Sessions as of 14:02, when Latchkey was last open.</div>
+        <div class="hdr">Note</div>
+        <div class="grp"><div class="it sub">Optional</div></div>
+        <div class="foot">Queued here, sent when you next open Latchkey.</div>
+      </div>
+    </div>
+    <div class="caption">"Queue", not "Send". Nothing leaves the phone from this sheet.</div>
+  </td>
+  <td class="cell B"><span class="tag tB">B</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p><p></p><p style="width:70%"></p></div><div class="scrim"></div>
+      <div class="scut">
+        <div class="st"><i></i> Send to Latchkey</div>
+        <div class="q">Which session?</div>
+        <div class="li"><span>obsidian <span class="sub">· chonk</span></span><span class="sel">✓</span></div>
+        <div class="li"><span>notes <span class="sub">· chonk</span></span><span></span></div>
+        <div class="li"><span>plan <span class="sub">· chonk</span></span><span></span></div>
+        <div class="done">Done</div>
+      </div>
+    </div>
+    <div class="caption">This is the Shortcuts app's prompt, not Latchkey's sheet. It is reached from the actions list under the app row.</div>
+  </td>
+  <td class="cell C"><span class="tag tC">C</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p><p></p><p style="width:70%"></p></div><div class="scrim"></div>
+      <div class="scut">
+        <div class="st"><i></i> Send to Latchkey</div>
+        <div class="q">Which session?</div>
+        <div class="li"><span>obsidian <span class="sub">· chonk</span></span><span class="sel">✓</span></div>
+        <div class="li"><span>notes <span class="sub">· chonk</span></span><span></span></div>
+        <div class="li"><span>plan <span class="sub">· chonk</span></span><span></span></div>
+        <div class="done">Done</div>
+      </div>
+    </div>
+    <div class="caption">The same prompt as B. The difference is what happens after Done.</div>
+  </td>
+</tr>
+
+<!-- ROW 2 -->
+<tr>
+  <td class="row">2. Drop-down open<span>Newest activity first, grouped by gateway, with the list's age shown</span></td>
+  <td class="cell A"><span class="tag tA">A</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p><p></p></div><div class="scrim"></div>
+      <div class="sheet">
+        <div class="nav"><span class="l">Cancel</span><b>Latchkey</b><span class="r">Queue</span></div>
+        <div class="grp"><div class="it"><b>Why local-first software wins</b><div class="sub">example.com/local-first</div></div></div>
+        <div class="hdr">Send to</div>
+        <div class="grp"><div class="it row2"><span>obsidian <span class="sub">· chonk</span></span><span class="chev">▴</span></div></div>
+      </div>
+      <div class="menu">
+        <div class="mh">chonk</div>
+        <div class="mi"><span>obsidian <span class="sub">Notes</span></span><span class="sel">✓</span></div>
+        <div class="mi"><span>notes <span class="pill">running</span></span><span></span></div>
+        <div class="mi"><span>plan <span class="sub">Work</span></span><span></span></div>
+        <div class="mh">devbox</div>
+        <div class="mi"><span>scratch</span><span></span></div>
+        <div class="mi"><span class="sub">Pick in Latchkey instead</span><span></span></div>
+        <div class="mf">As of 14:02 (2 h ago). A session made since then isn't listed.</div>
+      </div>
+    </div>
+    <div class="caption">Read from a mirror the app writes into the App Group. That mirror does not exist today (spec §2.3).</div>
+  </td>
+  <td class="cell B"><span class="tag tB">B</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p></div><div class="scrim"></div>
+      <div class="scut" style="top:80px">
+        <div class="st"><i></i> Send to Latchkey</div>
+        <div class="q">Which session?</div>
+        <div class="li"><span class="sub">CHONK</span><span></span></div>
+        <div class="li"><span>obsidian <span class="sub">Notes</span></span><span class="sel">✓</span></div>
+        <div class="li"><span>notes <span class="pill">running</span></span><span></span></div>
+        <div class="li"><span>plan <span class="sub">Work</span></span><span></span></div>
+        <div class="li"><span class="sub">DEVBOX</span><span></span></div>
+        <div class="li"><span>scratch</span><span></span></div>
+        <div class="li"><span class="sub">As of 14:02</span><span></span></div>
+        <div class="done">Done</div>
+      </div>
+    </div>
+    <div class="caption">The options come from the same mirror, through the intent's options provider.</div>
+  </td>
+  <td class="cell C"><span class="tag tC">C</span>
+    <div class="na">The same list as B.<br><br>C could list <i>live</i> sessions here if the node is warm, because the query runs in the app process. That is not a promise: the node is usually cold.</div>
+  </td>
+</tr>
+
+<!-- ROW 3 -->
+<tr>
+  <td class="row">3. Empty list<span>No mirror yet, or a gateway with no sessions</span></td>
+  <td class="cell A"><span class="tag tA">A</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p><p></p></div><div class="scrim"></div>
+      <div class="sheet">
+        <div class="nav"><span class="l">Cancel</span><b>Latchkey</b><span class="r">Save for Latchkey</span></div>
+        <div class="grp"><div class="it"><b>Why local-first software wins</b><div class="sub">example.com/local-first</div></div></div>
+        <div class="hdr">Send to</div>
+        <div class="grp"><div class="it sub">No sessions to choose from yet</div></div>
+        <div class="foot">Open Latchkey once so it can list your sessions. Until then, save this and pick the session in Latchkey.</div>
+        <div class="hdr">Note</div>
+        <div class="grp"><div class="it sub">Optional</div></div>
+      </div>
+    </div>
+    <div class="caption">Falls back to today's flow. Nothing is refused for want of a list.</div>
+  </td>
+  <td class="cell B"><span class="tag tB">B</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p></div><div class="scrim"></div>
+      <div class="scut">
+        <div class="st"><i></i> Send to Latchkey</div>
+        <div class="q">No sessions to choose from</div>
+        <div class="li" style="display:block"><span class="sub">Open Latchkey once so it can list your sessions. chonk had none when it was last open.</span></div>
+        <div class="done">Open Latchkey</div>
+      </div>
+    </div>
+    <div class="caption">The intent can still bring Latchkey up and use the ordinary picker.</div>
+  </td>
+  <td class="cell C"><span class="tag tC">C</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p></div><div class="scrim"></div>
+      <div class="scut">
+        <div class="st"><i></i> Send to Latchkey</div>
+        <div class="q">No sessions to choose from</div>
+        <div class="li" style="display:block"><span class="sub">Latchkey needs to be opened once to list sessions on chonk.</span></div>
+        <div class="done">Open Latchkey</div>
+      </div>
+    </div>
+    <div class="caption">Same as B. A background run cannot pick for him.</div>
+  </td>
+</tr>
+
+<!-- ROW 4 -->
+<tr>
+  <td class="row">4. After tapping Queue / Done<span>What he is told, right away</span></td>
+  <td class="cell A"><span class="tag tA">A</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p><p></p></div><div class="scrim"></div>
+      <div class="sheet short">
+        <div class="nav"><span></span><b>Latchkey</b><span></span></div>
+        <div class="center"><div class="big">⏳</div>
+          <div class="h">Queued for obsidian on chonk</div>
+          <div class="sub">It will be sent when you next open Latchkey. Nothing has been sent yet.</div></div>
+      </div>
+    </div>
+    <div class="caption">The sheet closes after 1.5 s. Back in Safari, with no switch.</div>
+  </td>
+  <td class="cell B"><span class="tag tB">B</span>
+    <div class="phone"><div class="island"></div>
+      <div class="app">
+        <div class="chips"><span class="chip">plan</span><span class="chip on">obsidian</span><span class="chip">notes</span></div>
+        <div class="msg">…earlier conversation…</div>
+        <div class="msg me">Why local-first software wins<br>https://example.com/local-first</div>
+      </div>
+      <div class="toast">✓ Sent to obsidian</div>
+    </div>
+    <div class="caption"><b>The switch:</b> Latchkey is in front, and the dashboard has moved to the session. Confirmed by the gateway. If the node was cold, this took seconds to a minute.</div>
+  </td>
+  <td class="cell C"><span class="tag tC">C</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p><p></p></div><div class="scrim"></div>
+      <div class="scut">
+        <div class="st"><i></i> Send to Latchkey</div>
+        <div class="q">Sending to obsidian…</div>
+        <div class="li" style="display:block"><span class="sub">Connecting to chonk</span></div>
+        <div class="li" style="display:block; background:#eaf7ef"><b style="color:var(--c)">✓ Sent to obsidian</b><br><span class="sub">The gateway confirmed it.</span></div>
+        <div class="done">Done</div>
+      </div>
+    </div>
+    <div class="caption">Still in Safari, and confirmed. This is only what happens when the node and the page finish inside the background budget, which nobody has measured.</div>
+  </td>
+</tr>
+
+<!-- ROW 5 -->
+<tr>
+  <td class="row">5. Not delivered yet<span>What he sees while a queued share waits</span></td>
+  <td class="cell A"><span class="tag tA">A</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p><p></p></div><div class="scrim"></div>
+      <div class="sheet">
+        <div class="nav"><span class="l">Cancel</span><b>Latchkey</b><span class="r">Queue</span></div>
+        <div class="grp"><div class="it"><b>Another article</b><div class="sub">example.org/b</div></div></div>
+        <div class="hdr">Send to</div>
+        <div class="grp"><div class="it row2"><span>obsidian <span class="sub">· chonk</span></span><span class="chev">▾</span></div></div>
+        <div class="hdr warn">Still waiting in Latchkey</div>
+        <div class="grp">
+          <div class="it row2"><span>→ obsidian</span><span class="sub">3 h ago</span></div>
+          <div class="it row2"><span>→ notes</span><span class="sub">10 min ago</span></div>
+        </div>
+        <div class="foot warn">Not sent yet. Open Latchkey to send them.</div>
+      </div>
+    </div>
+    <div class="caption">The <b>next</b> share sheet is the only place, outside the app, that says so. There is no notification or badge (spec §9 Q5).</div>
+  </td>
+  <td class="cell B"><span class="tag tB">B</span>
+    <div class="na">Nothing waits unseen. He is in Latchkey when the outcome is known. A failure (unreachable, signed out, session gone) is F3's existing screen, in front of him.</div>
+  </td>
+  <td class="cell C"><span class="tag tC">C</span>
+    <div class="phone"><div class="island"></div>
+      <div class="host"><div class="bar"></div><p></p><p></p></div><div class="scrim"></div>
+      <div class="scut">
+        <div class="st"><i></i> Send to Latchkey</div>
+        <div class="q">Couldn't finish in the background</div>
+        <div class="li" style="display:block"><span class="sub">chonk didn't answer in time. Your share is kept, addressed to obsidian.</span></div>
+        <div class="done" style="display:flex; justify-content:space-between"><span style="color:var(--dim); font-weight:400">Keep it queued</span><span>Open Latchkey</span></div>
+      </div>
+    </div>
+    <div class="caption">C's fallback. "Open Latchkey" is <code>continueInForeground</code>, which is a switch. "Keep it queued" makes it A's waiting state. Which one is the default is spec §9 Q3.</div>
+  </td>
+</tr>
+
+<!-- ROW 6 -->
+<tr>
+  <td class="row">6. Later, in Latchkey<span>A's delivery when he next opens the app</span></td>
+  <td class="cell A"><span class="tag tA">A</span>
+    <div class="phone"><div class="island"></div>
+      <div class="app">
+        <div class="chips"><span class="chip">plan</span><span class="chip on">obsidian</span><span class="chip">notes</span></div>
+        <div class="msg">…</div>
+        <div class="msg me">Why local-first software wins<br>https://example.com/local-first</div>
+      </div>
+      <div class="toast">✓ Sent 2 queued shares: obsidian, notes</div>
+    </div>
+    <div class="caption">No picker. The app re-lists, finds each key and posts. If a session has gone, the picker comes up with "The session you queued for isn't there any more". It never posts a stale key.</div>
+  </td>
+  <td class="cell B"><div class="na">(same as row 4)</div></td>
+  <td class="cell C"><div class="na">Only when kept queued: as A.</div></td>
+</tr>
+</table>
+
+<div class="note">
+  <b>Reading the columns.</b>
+  <b class="a">A</b> is the only option that uses the Latchkey icon, and it can never say "Sent" in the sheet.
+  <b class="b">B</b> always confirms, at the cost of the switch.
+  <b class="c">C</b> is the only way to get both, and only from the Shortcut. It rests on two things nobody has measured: how long iOS lets a background intent run, and whether the dashboard page works while the app is backgrounded.
+  A can be built alongside B or C.
+</div>
+</body>
+</html>

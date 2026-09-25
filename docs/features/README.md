@@ -36,6 +36,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F15](F15-chrome-does-not-own-the-page.md) | Latchkey does not own the page's corners (bug report: the gear and the dashboard's bell collide) | **decided (B: auto-hiding bar), ready to build**. Eight overlays at six alignments are drawn over the page; the bar must *displace* rather than overlay, because F9 measured this gateway ignoring `env()` |
 | [F16](F16-loopback-stalls.md) | A stalled loopback costs seconds, not a minute (issue #3) | **stage 1 built** 2026-09-25 (bounded status, two-strike recovery): the picker leaves "Searching…" in 6.2 s, not about a minute. Stages 2-4 not built; fault 3 contradicted by measurement, staged as a measurement |
 | [F17](F17-hand-off-needs-a-tap.md) | Another app opens only from a tap (issue #2) | **built** 2026-09-25 (R42); L1 42/42. The issue's third citation was the wrong function, and `navigationType` cannot tell a tap from a script's `a.click()`: the signal is a trusted click from the app's own world |
+| [F18](F18-send-from-the-share-sheet.md) | Finish the share inside the share sheet: pick the session there, no switch into Latchkey | **options, not decided** (§9). From the app-row icon a drop-down is possible but a confirmed send is not: the extension has no route, no cookie and cannot open the app. Only a background App Intent (the Shortcut) can confirm without a switch, and its time budget is unmeasured. Mocks in `../mocks/` |
 
 ## Still open, not yet answered
 
