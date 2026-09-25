@@ -57,21 +57,51 @@ enum HarnessControl {
 }
 
 extension XCUIElement {
+    /// `waitForExistence`, polled every 100 ms. XCTest's own wait first looks
+    /// about a second after it starts and then once a second (F14 §4.1,
+    /// measured: 1.07 s for an element already on screen), so every wait for
+    /// something that is there cost a second, dozens of times per suite. Same
+    /// answer, same timeout; only the polling is finer.
+    @MainActor
+    func appears(within timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !exists {
+            if Date() >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return true
+    }
+
+    /// `waitForNonExistence`, polled the same way.
+    @MainActor
+    func disappears(within timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while exists {
+            if Date() >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return true
+    }
+
     /// Scrolls `container` until this element is on screen. Settings opens as
     /// a half sheet, and Forms and Lists build their rows lazily: a row below
     /// the fold is not in the tree until it is scrolled to. Slow swipes, and
     /// back down if one carried the row past the top.
+    ///
+    /// A row below the fold does not appear by waiting, only by swiping, so
+    /// each step waits half a second rather than the two it used to: that wait
+    /// was paid in full before every swipe (F14: ~8 s of Status's commit row).
     @MainActor
     func reveal(scrolling container: XCUIElement, swipes: Int = 8) -> Bool {
         for _ in 0..<swipes {
-            if waitForExistence(timeout: 2), isHittable { return true }
+            if appears(within: 0.5), isHittable { return true }
             if exists, frame.maxY < container.frame.midY {
                 container.swipeDown(velocity: .slow)
             } else {
                 container.swipeUp(velocity: .slow)
             }
         }
-        return exists && isHittable
+        return appears(within: 2) && isHittable
     }
 }
 
@@ -80,14 +110,14 @@ extension XCUIApplication {
     @MainActor
     func openStatus(file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
         buttons["settings-button"].firstMatch.tap()
-        XCTAssertTrue(navigationBars["Settings"].waitForExistence(timeout: 10), "the gear opens Settings",
+        XCTAssertTrue(navigationBars["Settings"].appears(within: 10), "the gear opens Settings",
                       file: file, line: line)
         let status = buttons["status-button"]
         XCTAssertTrue(status.reveal(scrolling: collectionViews.firstMatch), "Settings has a Status entry",
                       file: file, line: line)
         status.tap()
         let list = collectionViews["diagnostics-list"]
-        XCTAssertTrue(list.waitForExistence(timeout: 10), "Status opens", file: file, line: line)
+        XCTAssertTrue(list.appears(within: 10), "Status opens", file: file, line: line)
         return list
     }
 
@@ -98,10 +128,14 @@ extension XCUIApplication {
     func statusRow(_ id: String, in list: XCUIElement) -> String {
         let e = list.descendants(matching: .any).matching(identifier: id).firstMatch
         guard e.reveal(scrolling: list) else { return "<missing \(id)>" }
-        let settled = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "NOT (label CONTAINS 'reading…') AND NOT (label ENDSWITH 'checking')"),
-            object: e)
-        _ = XCTWaiter().wait(for: [settled], timeout: 10)
-        return e.label
+        // Polled rather than an XCTNSPredicateExpectation, which first looks
+        // after a second even when the row has long settled.
+        let deadline = Date().addingTimeInterval(10)
+        var label = e.label
+        while label.contains("reading…") || label.hasSuffix("checking"), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+            label = e.label
+        }
+        return label
     }
 }

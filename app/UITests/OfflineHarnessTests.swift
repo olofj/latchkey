@@ -192,7 +192,7 @@ final class OfflineHarnessTests: XCTestCase {
         // rebuilt page owns its wording in one place (§3.2).
         let stopped = app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS[c] %@", "restarting or stopped")).firstMatch
-        XCTAssertTrue(stopped.waitForExistence(timeout: 5),
+        XCTAssertTrue(stopped.appears(within: 5),
                       "the page should say Kiro Crew is not running behind the gateway")
         let reassurance = app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS[c] %@", "but Kiro Crew behind it didn't")).firstMatch
@@ -267,7 +267,7 @@ final class OfflineHarnessTests: XCTestCase {
 
         // The failure, when it comes, names the host, the port and the duration.
         let overlay = element(app, "nav-error-overlay")
-        XCTAssertTrue(overlay.waitForExistence(timeout: 20), "the stalled dial must end on the error page")
+        XCTAssertTrue(overlay.appears(within: 20), "the stalled dial must end on the error page")
         let cause = element(app, "nav-error-cause").label
         XCTAssertTrue(cause.contains("didn't answer on port 443"),
                       "the cause names what happened: \(cause)")
@@ -323,7 +323,7 @@ final class OfflineHarnessTests: XCTestCase {
         addTeardownBlock { try? await Self.post("\(Self.proxyControl)/mode?blackhole=0") }
         try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
         let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
-        XCTAssertTrue(element(app, "nav-error-overlay").waitForExistence(timeout: 40),
+        XCTAssertTrue(element(app, "nav-error-overlay").appears(within: 40),
                       "a refused connection fails onto the error page")
 
         // Try again, with the proxy working: the load must really be retried,
@@ -340,11 +340,11 @@ final class OfflineHarnessTests: XCTestCase {
         try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
         let again = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
         defer { again.terminate() }
-        XCTAssertTrue(element(again, "nav-error-overlay").waitForExistence(timeout: 40))
+        XCTAssertTrue(element(again, "nav-error-overlay").appears(within: 40))
         let choose = element(again, "nav-error-choose-gateway")
         XCTAssertTrue(choose.isHittable, "Choose another gateway must be tappable")
         choose.tap()
-        XCTAssertTrue(element(again, "gateway-picker").waitForExistence(timeout: 10),
+        XCTAssertTrue(element(again, "gateway-picker").appears(within: 10),
                       "and open the one picker presentation")
     }
 
@@ -366,7 +366,7 @@ final class OfflineHarnessTests: XCTestCase {
                       "the load must have reached the server through the proxy; got \(connects)")
         let certificateText = app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS[c] %@", "certificate")).firstMatch
-        XCTAssertTrue(certificateText.waitForExistence(timeout: 5),
+        XCTAssertTrue(certificateText.appears(within: 5),
                       "the error page should say the certificate is the problem")
     }
 
@@ -397,7 +397,7 @@ final class OfflineHarnessTests: XCTestCase {
         }
 
         let link = app.webViews.links["Redirect away"]
-        XCTAssertTrue(link.waitForExistence(timeout: 10), "the redirect link should render")
+        XCTAssertTrue(link.appears(within: 10), "the redirect link should render")
         link.tap()
 
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
@@ -449,7 +449,7 @@ final class OfflineHarnessTests: XCTestCase {
         let oldDoc = try XCTUnwrap(before["doc"] as? String, "the page reports a document id")
 
         let signIn = app.webViews.buttons["Sign in with token"]
-        XCTAssertTrue(signIn.waitForExistence(timeout: 10), "the sign-in button should render")
+        XCTAssertTrue(signIn.appears(within: 10), "the sign-in button should render")
         signIn.tap()
 
         // The server must see the token request: that is the sign-in.
@@ -517,9 +517,9 @@ final class OfflineHarnessTests: XCTestCase {
             let r = try await waitForInsets(probe, timeout: 40) { ($0["seq"] as? Int ?? 0) >= 3 }
 
             let webView = app.webViews.firstMatch
-            XCTAssertTrue(webView.waitForExistence(timeout: 10), "\(probe): the web view is on screen")
+            XCTAssertTrue(webView.appears(within: 10), "\(probe): the web view is on screen")
             let probeElement = app.descendants(matching: .any).matching(identifier: "window-safe-area").firstMatch
-            XCTAssertTrue(probeElement.waitForExistence(timeout: 10), "\(probe): the safe-area probe is installed")
+            XCTAssertTrue(probeElement.appears(within: 10), "\(probe): the safe-area probe is installed")
             let safeValue = probeElement.value as? String ?? ""
             let safeTop = Double(safeValue.replacingOccurrences(of: "top=", with: "")) ?? -1
             let minY = Double(webView.frame.minY)
@@ -587,7 +587,7 @@ final class OfflineHarnessTests: XCTestCase {
         defer { app.terminate() }
         _ = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 30) { $0["ws"] as? String == "ws:open" }
         let web = app.webViews.firstMatch
-        XCTAssertTrue(web.waitForExistence(timeout: 10), "the web view is on screen")
+        XCTAssertTrue(web.appears(within: 10), "the web view is on screen")
         let gear = app.buttons["settings-button"]
 
         for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
@@ -608,13 +608,13 @@ final class OfflineHarnessTests: XCTestCase {
                            "\(name): the page starts at the safe-area top plus the bar, and no lower: "
                            + "webViewMinY=\(webFrame.minY) windowSafeTop=\(safeTop) barHeight=\(Self.appBarHeight)")
 
-            XCTAssertTrue(gear.waitForExistence(timeout: 5) && gear.isHittable,
+            XCTAssertTrue(gear.appears(within: 5) && gear.isHittable,
                           "\(name): the gear is on screen and tappable")
             gear.tap()
             let settings = app.navigationBars["Settings"]
-            XCTAssertTrue(settings.waitForExistence(timeout: 10), "\(name): the gear opens Settings")
+            XCTAssertTrue(settings.appears(within: 10), "\(name): the gear opens Settings")
             settings.buttons["Done"].tap()
-            XCTAssertTrue(settings.waitForNonExistence(timeout: 10), "\(name): and Settings closes again")
+            XCTAssertTrue(settings.disappears(within: 10), "\(name): and Settings closes again")
         }
 
         XCUIDevice.shared.orientation = .portrait
@@ -647,7 +647,7 @@ final class OfflineHarnessTests: XCTestCase {
                              extra: ["-UITestReportSafeArea"] + (voiceOver ? ["-UITestAssumeVoiceOver"] : []))
             _ = try await waitForInsets("shell", timeout: 40) { ($0["seq"] as? Int ?? 0) >= 2 }
             let web = app.webViews.firstMatch
-            XCTAssertTrue(web.waitForExistence(timeout: 10), "\(who): the web view is on screen")
+            XCTAssertTrue(web.appears(within: 10), "\(who): the web view is on screen")
             let gear = app.buttons["settings-button"]
             let safeTop = windowSafeTop(app)
             let shown = safeTop + Self.appBarHeight
@@ -680,7 +680,7 @@ final class OfflineHarnessTests: XCTestCase {
                 drag(web, dy: 240)
                 let back = try await waitForMinY(web, shown, timeout: 5)
                 XCTAssertEqual(back, shown, accuracy: 0.5, "a deliberate drag down brings the bar back")
-                XCTAssertTrue(gear.waitForExistence(timeout: 5) && gear.isHittable, "and the gear with it")
+                XCTAssertTrue(gear.appears(within: 5) && gear.isHittable, "and the gear with it")
             }
             app.terminate()
         }
@@ -728,7 +728,7 @@ final class OfflineHarnessTests: XCTestCase {
 
     private func windowSafeTop(_ app: XCUIApplication) -> Double {
         let probe = app.descendants(matching: .any).matching(identifier: "window-safe-area").firstMatch
-        XCTAssertTrue(probe.waitForExistence(timeout: 10), "the safe-area probe is installed")
+        XCTAssertTrue(probe.appears(within: 10), "the safe-area probe is installed")
         let value = probe.value as? String ?? ""
         let top = Double(value.replacingOccurrences(of: "top=", with: ""))
         XCTAssertNotNil(top, "the safe-area probe reads a number: \(value)")
@@ -837,7 +837,7 @@ final class OfflineHarnessTests: XCTestCase {
     private func assertErrorPage(_ app: XCUIApplication, _ message: String,
                                  file: StaticString = #filePath, line: UInt = #line) throws {
         let errorPage = app.descendants(matching: .any).matching(identifier: "nav-error-overlay").firstMatch
-        XCTAssertTrue(errorPage.waitForExistence(timeout: 40), message, file: file, line: line)
+        XCTAssertTrue(errorPage.appears(within: 40), message, file: file, line: line)
     }
 
     /// The proxy-gone tests are the only end-to-end proof of `allowFailover ==
@@ -864,11 +864,11 @@ final class OfflineHarnessTests: XCTestCase {
         // assertion is the only end-to-end proof that `allowFailover` is false
         // and that the failure is the CONNECTION's, and it keeps that job.
         let details = app.descendants(matching: .any).matching(identifier: "nav-error-details").firstMatch
-        if details.waitForExistence(timeout: 5), details.isHittable {
+        if details.appears(within: 5), details.isHittable {
             details.tap()
         }
         let cause = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "NSURLErrorDomain ")).firstMatch
-        XCTAssertTrue(cause.waitForExistence(timeout: 5), "\(message): the error page names its NSURLError code",
+        XCTAssertTrue(cause.appears(within: 5), "\(message): the error page names its NSURLError code",
                       file: file, line: line)
         let label = cause.label
         let tail = label.components(separatedBy: "NSURLErrorDomain ").last ?? ""

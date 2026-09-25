@@ -146,3 +146,63 @@ matters more than its result:
 Opened 2026-09-24. L1 was 254 s against a 240 s budget that day, having grown
 from 248 s when F12 added a test, which is the sort of drift this spec exists to
 stop.
+
+**2026-09-24, L1 pass.** Asked for L1 under 120 s. Not reached: **321 s → 272 s**,
+17 tests before and after, names identical (diffed), all passing, one
+`test-offline.sh --build` each. (The 257 s quoted with the request was the
+15-test run; F15's two tests had since taken it to 321 s.)
+
+Where L1's time goes, from the xcresult activity timelines and the unified log:
+
+- **Launches are the floor.** 22 launches (three tests relaunch) at 6–9 s to
+  idle, plus ~1.1 s per terminate: ~165 s. Of each launch, ~1 s is XCUITest's
+  automation setup and **1.6 s passes between spawn and the first dyld
+  initializer** — simulator launch plumbing, before any code of ours runs
+  (`DYLD_PRINT_INITIALIZERS`); the rest is WebKit's three processes starting
+  and the first load.
+- **The app's own timers are not an L1 cost.** `showDelay` and
+  `connectingHintDelay` are waited out only by the two tests that pin them
+  (`testAFastLoad…` asserts a loopback load stays under the 300 ms show delay;
+  `testStalledLoad…` checkpoints the 8 s hint and needs a stall past the 20 s
+  startup-retry window). `holdingHintDelay`, the gate's stall hint and
+  discovery's probe/sweep timings are not reached by any L1 test. So nothing
+  was scaled and no override was added: in L1 there is no test that merely
+  gets past a delay. They matter to M4/M5, not measured here.
+- **XCTest's own polling was the waste.** `waitForExistence` first looks ~1 s
+  after it starts (measured 1.07 s for an element already on screen), and L1
+  had ~40 of them; `reveal` paid a 2 s wait before every swipe for rows that
+  only appear by scrolling; `statusRow`'s predicate expectation the same 1 s.
+  Now `appears(within:)`/`disappears(within:)` in `UITestSupport.swift` poll
+  every 100 ms with the same timeouts, and `reveal` waits 0.5 s per step. The
+  one deliberate absence window (the redirect test's 3 s) is unchanged.
+- Checked and not a cost: the simulator boots once per run; certs are not
+  regenerated (0.04 s); `make check` 1.5 s; `harness-up` 0.7 s; the second
+  `xcodebuild` pass for the sign-in test ~9 s, which R1's ordering needs.
+
+| Test | before s | after s |
+|---|---|---|
+| `testAFastLoadDoesNotLeaveTheConnectingStateOnScreen` | 9.0 | 9.0 |
+| `testAGatewayAnswering502ShowsTheErrorPageInsteadOfABlankScreen` | 10.4 | 9.4 |
+| `testBlackholedProxyFailsWithoutDirectFallback` | 8.0 | 7.7 |
+| `testCertificateNameMismatchShowsTheErrorPage` | 9.3 | 7.7 |
+| `testDashboardLoadsThroughTheProxy` | 9.1 | 9.0 |
+| `testInsetProbesReportWhatThePageIsTold` | 36.2 | 30.4 |
+| `testNonTailnetOriginLoadsDirectAndNeverTouchesTheProxy` | 7.8 | 8.1 |
+| `testNothingOfOursSitsOnThePageAndSettingsIsReachable` | 27.6 | 17.6 |
+| `testProxyGoneFailsWithoutDirectFallback` | 11.0 | 8.2 |
+| `testProxyGoneWithoutRelayFailsWithoutDirectFallback` | 11.0 | 8.4 |
+| `testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard` | 13.6 | 13.1 |
+| `testSignInTokenIsStrippedFromTheAddress` | 10.7 | 11.8 |
+| `testStalledLoadShowsTheConnectingStateForItsWholeDuration` | 38.6 | 38.0 |
+| `testStatusNamesTheCommitTheAppWasBuiltFrom` | 31.0 | 19.2 |
+| `testTheAppBarRetractsOnADeliberateScrollAndComesBack` | 32.3 | 27.1 |
+| `testTheErrorPageOffersRetryAndAnotherGateway` | 18.7 | 17.2 |
+| `testUnreachableGatewayShowsTheErrorPage` | 8.4 | 7.9 |
+| **sum of tests** | **293** | **250** |
+
+What 120 s would take: with ~165 s of launch alone serial, only running tests
+concurrently (§3's parallel harness: per-simulator ports plumbed into the launch
+arguments and the certificate SANs) or fewer launches (the inset probe's three,
+the app bar's two) gets there, and the second is the test-merging §3 rules out
+unless the owner decides otherwise. The 240 s budget in `test-offline.sh` is
+left as it was; 272 s is still over it.
