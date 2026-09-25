@@ -3334,3 +3334,45 @@ touch. It did not recur in 12 runs of its shard order, and its cause is
 not found. Opening a tapped custom scheme without asking (`.open` for
 `userStarted`) still fails the test on all four shards, with the log
 showing Maps opened unasked.
+
+## 2026-09-25 — F5 built: the chip row scrolls, and Settings switches gateways (R43)
+
+**What:** B, a gated `<style>` that makes the header's instance bar a
+scrolling strip inside the bundle's `(width <= 767px)` band (`9b90224`).
+D, a remembered gateway list in Settings → Gateway, one tap to switch
+(`63789dd`). Supporting: `ONLY_TESTS` in the session and discovery
+scripts (`a638709`), and a second fake gateway in the harness
+(`1a176cd`). Departures from the spec and every failure demonstration are
+in F5 §13. A (the upstream report) is not filed.
+
+**Findings that change the spec:**
+- The rule applies in landscape too. Since F9 the web view stops at the
+  side safe areas, so at 874 pt the page is inside the phone band. The
+  bar measured 185 pt wide.
+- On 0.7.1 the overlap is real: the chevron at x 127 over the list-failed
+  text at x 124, which wraps to 17 × 146 pt. The pinned-remote clipping
+  could not be made to fail before the fix, so that test was dropped.
+- Every chosen gateway goes through `manualGateway`, which drops ports.
+  The known list is therefore `https://host` only until F1 is built.
+
+**Evidence:** `scripts/test-all.sh --full --build` at `63789dd`:
+- **Passed:** host tests (chip-row style 15/15, workspace store 43/43),
+  vendored Go (8/8, 1/1, 2/2 with `TMPDIR=/private/tmp`), L1 **42/42 in
+  193 s** (budget 240 s; no L1 test added, the check rides on
+  `testDashboardLoadsThroughTheProxy`), L2 in 216 s, session **39/39** in
+  1039 s, lifecycle 6/6, inherited 3/3.
+- **Failed: discovery 14/15.** `testTheSwitcherListsTheCurrentGatewayAndSwitchesToAnother`
+  failed at "Settings opens" after the relaunch, when the token sheet had
+  been closed and the gear tapped. The same code passed 15/15, R26 timing
+  included, in the run before (340 s). The cause is not found. Suspects:
+  the gear tapped while the sheet was still dismissing, or the real
+  bundle's page keeping the F15 bar hidden where the test's pull does not
+  summon it. Not yet fixed. The tier's record of a full pass was therefore
+  not written.
+- **The session suite's 1039 s is not an F5 regression.** Its tests sum to
+  1002 s. F5's four take 81 s (switch-back 32.7, sessions panel 18.0,
+  landscape 16.0, portrait 14.5). The other 35 sum to 921 s, the same as
+  today's earlier full runs of those 35 (918–922 s at 08:31, 12:05 and
+  12:46). The "about 6 min" (341 s) figure is from an earlier tier
+  measurement and is stale. Where the growth since then came from was not
+  investigated.

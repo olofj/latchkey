@@ -145,6 +145,9 @@ Record each result in `docs/DECISIONS.md` under a new "M1 device check" entry.
 | F3: a 50 MB PDF from Files through the extension | Settings → Share shows the byte count; no jetsam of the extension in Analytics | |
 | F3: a share made offline | sent the next time the app is open on the tailnet | |
 | F3: a real gateway's `[attached_file 1]` | the PDF shows in the transcript | |
+| F5: the header's instance chips in portrait | `Local` and the chevron legible, nothing drawn over them; the rest of the row one swipe away | |
+| F5: Settings → Gateway after using two gateways | both listed, the other one labelled `answering` or `not answering` | |
+| F5: switch to the other gateway and back | no second token asked for | |
 
 ## 7. If it goes wrong
 

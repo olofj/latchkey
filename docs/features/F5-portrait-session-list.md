@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | **designed 2026-09-23 — two independent halves: legible chips (A + B) and a native gateway switcher (D)** |
+| **Status** | **built 2026-09-25** (`9b90224` B, `63789dd` D; §13). A is still not filed |
 | **Requested** | 2026-09-23, by Olof (bug report): "the list of remotes on the top left isn't really visible on portrait mode phone. Works well on landscape. Not sure if it's fixable since it comes from the dashboard but it affects user experience." |
-| **Revision** | one entry when built (numbered then; none is reserved here): the app injects a second stylesheet into the page (B, alongside R2/R22's scripts), and the gateway picker gains a remembered list (D, changes M5's picker) |
+| **Revision** | **R43** (`../PLAN-REVISIONS.md`): the app injects a second stylesheet into the page (B, alongside R2/R22's scripts), and Settings gains a remembered gateway list (D, beside M5's picker) |
 | **Touches** | B: `App/Browser` (`PageScriptSources`, `PageScripts`, `BrowserViewModel.loadResolved`), `scripts/test-page-scripts.sh`, the session suite and `testing/harness/fake_gateway.py`. D: `App/Settings`, `App/Workspace/WorkspaceStore.swift`, `App/Discovery`, the discovery suite and `testing/tsnet-harness` |
 | **Tracker** | would be issue #1 once the private repos exist; this document is the record until then |
 | **Upstream** | `../upstream/kirocrew-portrait-chip-overlap.md` — drafted, **not filed**; Olof authorises filing |
@@ -647,3 +647,103 @@ The two names are placeholders (`crew-a`, `crew-b`), never real machine names.
   on this; near misses #8175 (same bar, desktop, collapses when a remote pane is
   focused), #7698 (the same mobile top-bar degrade ladder, a different rung —
   a useful precedent), #9581 (topbar error surfaces). Report drafted, not filed.
+- 2026-09-25: **built**, B and D both; §13 records what the build found and
+  where it departs from this design.
+
+## 13. Build (2026-09-25)
+
+Commits: `a638709` (`ONLY_TESTS` in the session and discovery scripts),
+`1a176cd` (a second fake gateway in the harness), `9b90224` (B), `63789dd`
+(D). §4's assumptions were checked against the code first. The ones the
+build had to change are below.
+
+**The bundle moved to 0.7.1.** §1a was read from 0.6.0. In 0.7.1 the
+selector's three parts are unchanged: `.tb-left`, a direct child
+`div.instance-tab-bar-inline` with `role="group"`, and one wrapper child.
+The error chip is now `line-clamp-1`, not `truncate`, and the cell has a
+third rung (`tb-drop-navhistory`, 208 px). Measured through the session
+suite in portrait, on the build before B: `Local dashboard` at x 56 (68
+wide), `Switch instance` at x 127 (25 wide), the list-failed `not found` at
+x 124, **17 × 146 pt** (its text wraps into a column down the page), and
+`Ask the agent` at x 130. The chevron is typed `Other`, not `Button`, so
+the tests match every chip by label.
+
+**B.**
+- **The rule is not inert in landscape.** Since F9 the web view stops at
+  the side safe areas, so at 874 pt the page is inside the bundle's
+  `(width <= 767px)` band too. The bar measured 185 pt wide in landscape.
+  §6's "landscape unchanged by construction" does not hold in this app. The
+  landscape test was renamed `testTheInstanceChipsStayInOneRowInLandscape`
+  and asserts one row, disjoint and on screen with the rule applied.
+- **Installed per origin, not once per web view.** `chipRowStyleOrigins`
+  holds the origins a web view has the style for. A second origin loaded in
+  the same view gets its own gated script instead of silently none. It is
+  cleared with the controller in `unloadWebView`. Still only added, never
+  removed.
+- **Its own content world** (`latchkey-chip-row`), like every other script
+  here, rather than `.defaultClient`.
+- **The pinned-remotes row is dropped**, as §9 said it would be if it did
+  not fail on today's build. With two disconnected remotes pinned through
+  the page's own menu, both chips were hittable on the build before B.
+  Either 0.7.1 does not clip them at 402 pt, or `isHittable` cannot see
+  WebKit's overflow clip. The `/api/instances` stub it needed was dropped
+  with it.
+- **The gateway-switch L1 row moved** to the session and discovery suites.
+  L1 has no second live gateway, and adding one means a new certificate SAN.
+  A switch reopens the tab with a new web view whose `loadResolved` adds the
+  style again, and D's tests switch between real pages. The anti-leak row
+  (nothing over plain HTTP across a switch) is covered by the list keeping
+  https origins only (host test) and by the switcher's tailnet gate
+  (discovery). No L1 test was added.
+- **L1 cost: nothing.** The DOM check is one more field in the fake
+  dashboard's existing report (`chip_style`), asserted in
+  `testDashboardLoadsThroughTheProxy`. L1 stays at 42 tests.
+
+**D.**
+- **A sweep only when there is a row to label.** §7 starts a sweep whenever
+  Settings appears. That would probe the tailnet on every visit to
+  Settings, add journal entries to L1's proxy assertions and sweep lines to
+  the discovery script's exact counts. The switcher sweeps only when the
+  list holds a gateway other than the current one.
+- **The sweep counts as shown** (`shownAt: .now`). Without it the discovery
+  script's R26 check failed: three sweeps found a gateway with no "shown to
+  first" time. With it, the switcher is held to the picker's 5 s
+  first-result budget, which is §10's own criterion.
+- **No ports.** `GatewayCandidates.manualGateway`, the one gate every chosen
+  gateway goes through, drops ports, and F1 is not built. So every known
+  gateway is `https://host`. The switch-back test uses a second fake gateway
+  answering as `dash.tail-scale.ts.net`, which the certificate already
+  carries and the session suite never loads, rather than `gw:8443`.
+- **Status as the row's accessibility value** (`gateway-switch-<host>` reads
+  `answering`, `not answering`, `checking…`, `not on this tailnet`) rather
+  than a separate `-status-` element. A wrapping accessibility element had
+  dropped the disabled trait, so the off-tailnet row read as enabled.
+- **A refused switch keeps Settings up.** `choose` still goes through
+  `commitGateway`'s gate, a second line behind the disabled row. If it
+  refuses, the section's error shows and Settings stays.
+- `-UITestKnownGateways a,b` seeds the list for the tests.
+
+**Tests, each shown to fail:**
+
+| Test | Suite | Failed under |
+|---|---|---|
+| `testTheInstanceChipsDoNotOverlapInPortrait` | session | the style not installed: "Switch instance" and "not found" overlap (frames above) |
+| `testTheInstanceChipsStayInOneRowInLandscape` | session | the wrapper `display: block` at every width: `Local dashboard` 11.5 pt out of the row |
+| `testTheSessionsPanelStillOpensInPortrait` | session | the panel's search field hidden: "the panel opens with its search field" |
+| chip-row style checks (15) | host | no origin compare: 4 failures (every foreign origin appends); no id check: 1 (two elements) |
+| `testDashboardLoadsThroughTheProxy` (`chip_style`) | L1 | the style not installed: `false` |
+| known-gateway rows (5) | host | `knownGateways` never decoded: 3 failures, round trip included |
+| `testTheSwitcherListsTheCurrentGatewayAndSwitchesToAnother` | discovery | no switcher rows: `gateway-current` not found |
+| `testAKnownGatewayThatDoesNotAnswerIsLabelledAndF4ShowsIt` | discovery | "not answering" made unselectable: "and still tappable" |
+| `testAKnownGatewayOffTheTailnetCannotBeChosen` | discovery | no tailnet check: the row reads "checking…" |
+| `testSwitchingBackToAGatewayNeedsNoNewSignIn` | session | web data cleared on a switch: gw's session never answers again |
+
+A first try at the landscape and panel mutations, a `(width > 767px)` rule
+and `[role="dialog"]{display:none}`, failed nothing. Both missed: landscape
+is under 767 px here, and 0.7.1's panel is not a dialog. That is how the
+landscape finding above was made.
+
+**Not done:** C was not tried on the phone. The device rows in
+`../DEVICE-CHECK.md` are open. A (the upstream report) is still Olof's to
+file, and the draft is updated for 0.7.1.
+

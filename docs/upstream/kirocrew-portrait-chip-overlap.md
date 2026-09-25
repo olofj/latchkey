@@ -3,7 +3,8 @@
 **Not filed.** Prepared 2026-09-23 for [kirodotdev/KiroCrew](https://github.com/kirodotdev/KiroCrew),
 to be filed with their **Bug report** form once Olof authorises it, as he did
 for the fonts report (KiroCrew#13161). Found while working on F5
-(`../features/F5-portrait-session-list.md`). Version 0.6.0, stable, pip/venv
+(`../features/F5-portrait-session-list.md`). Drafted on 0.6.0, re-measured
+on **0.7.1** on 2026-09-25 (F5 §13). Stable, pip/venv
 service install, observed from an iOS client; the layout facts below are read
 from the shipped bundle and are not platform-specific.
 
@@ -24,16 +25,18 @@ that the search works). Nothing on this. The near misses, all different:
   (Crew Members, Schedule). Not the header.
 
 Fields to fill in before posting: **KiroCrew version** (take
-`kirocrew --version` on the gateway; the bundle here is the 0.6.0 pin),
+`kirocrew --version` on the gateway; the bundle here is the 0.7.1 pin),
 **release channel**, **how it is installed**, **platform** (not
 platform-specific; observed in WebKit on iOS at a 402 px viewport). Attach the
 two screenshots from `../features/f5-measurement/` (`portrait-chips-overlap.png`,
 `landscape-chips-ok.png`), and the phone's own header screenshot if Olof
-supplies one (see F5 §11). **Also before posting:** the two "stop-gap"
-sentences (end of *Suggested fix*, end of *Context*) describe the client-side
-CSS injection F5 §6 *plans*; as of 2026-09-23 nothing in `app/App/` injects
-it (`chipRowStyle` is design only). They are written in the future tense to
-be true now — switch them to the present only once F5's half B has shipped.
+supplies one (see F5 §11). The screenshots are 0.6.0's. 0.7.1 shows the
+same overlap, measured rather than photographed (below). The client-side
+stop-gap has shipped (F5 B, `9b90224`), so the two "stop-gap" sentences are
+in the present tense. **Before posting, decide on face 2**: the clipping of
+pinned remotes could not be shown failing in 0.7.1 at 402 pt (F5 §13), so
+it is reasoned from the markup, not observed. Either keep it marked as such
+or cut it.
 
 ---
 
@@ -53,8 +56,11 @@ remote crews — is not usable. Two faces of it, same cause:
    next to the chips squeezes the chip group, and the `Local` chip, the
    chevron and the error text (`not found` / *Ask the agent* in the attached
    screenshot) are painted **on top of one another**. Nothing in the row is
-   readable or reliably tappable.
-2. **When the list loads**, `Local` and the chevron take the ≈100 px they need
+   readable or reliably tappable. Measured on 0.7.1 at 402 px: `Local` at
+   x 56–124, the chevron at x 127–152, and the error's `not found` at x 124,
+   17 px wide and 146 px tall, its text wrapped into a column.
+2. **When the list loads** (reasoned from the markup; not reproduced in
+   0.7.1), `Local` and the chevron take the ≈100 px they need
    and the pinned remote chips (`crew-chip-row`) are clipped to what remains —
    about 30 px — with the 1 px `data-cut` mark. The remotes are effectively
    invisible; the only way to them is the 24 px chevron's dropdown.
@@ -85,7 +91,8 @@ that keeps every chip legible and reachable — the same intent the existing
 
 ## Cause, from the shipped bundle
 
-Header grid (`static/dist/assets/src-DcpTXSeK.css`):
+Header grid (0.6.0 `static/dist/assets/src-DcpTXSeK.css`; unchanged in
+0.7.1's `src-BB9Pem3r.css`, which adds a 208 px `tb-drop-navhistory` rung):
 
 ```css
 .topbar{grid-template-columns:minmax(0,1fr) clamp(240px,22vw,480px) minmax(0,1fr);align-items:center;gap:12px;display:grid}
@@ -102,7 +109,8 @@ the cell must hold is already ≈150 px before any remote chip: the mobile
 *Open menu* button (`shrink-0`, 40 px) + the `Local` chip (≈75 px) + the
 chevron (24 px) + gaps.
 
-Markup (`static/dist/assets/App-GOBYv73C.js`, the `InstanceTabBar` component
+Markup (0.6.0 `static/dist/assets/App-GOBYv73C.js`; the same structure in
+0.7.1's `App-e17PGpKz.js`, where the error chip is `line-clamp-1`; the `InstanceTabBar` component
 `E8` with `T8`/`nCe`/`w8`/`QSe`, mounted by the header at
 `<div class="tb-left relative h-full">`):
 
@@ -138,8 +146,8 @@ actually is, while the content it must show is wider than that cell.
 
 ## Suggested fix
 
-Any one of these keeps the chips legible; the first is the one we intend to
-carry client-side as a stop-gap, and is the least invasive:
+Any one of these keeps the chips legible; the first is the one we carry
+client-side as a stop-gap, and is the least invasive:
 
 1. **Make the inline bar a horizontal strip on phones** — at `(width<=767px)`,
    `.tb-left > .instance-tab-bar-inline { overflow-x: auto }` and
@@ -158,6 +166,6 @@ carry client-side as a stop-gap, and is the least invasive:
 Found while building an iOS client for a self-hosted gateway over Tailscale,
 where the dashboard is used in portrait most of the time. The rest of the
 dashboard is fine at 402 px — the sessions panel, the composer, the chat all
-work — which is what made this one row stand out. The client will carry
-fix (1) as an injected stylesheet gated to the gateway's origin until a
-release includes a fix, and drop it when one does.
+work — which is what made this one row stand out. The client carries fix
+(1) as an injected stylesheet gated to the gateway's origin until a release
+includes a fix, and will drop it when one does.
