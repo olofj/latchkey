@@ -34,6 +34,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F13](F13-bottom-safe-area.md) | The bottom safe area: the code's comment and the measurement disagree | designed; low priority. Likely a one-line comment fix — F9 §0's reasoning says the page should not be under the home indicator either, which is what the layout already does |
 | [F14](F14-fast-suites.md) | The suites are too slow to iterate against (L1 254s, session 482s, full tier ~17min) | designed; **measure before optimising** (§4.1). The acceptance criterion forbids the obvious wrong answer: a run that is faster because it does less is a failure |
 | [F15](F15-chrome-does-not-own-the-page.md) | Latchkey does not own the page's corners (bug report: the gear and the dashboard's bell collide) | **decided (B: auto-hiding bar), ready to build**. Eight overlays at six alignments are drawn over the page; the bar must *displace* rather than overlay, because F9 measured this gateway ignoring `env()` |
+| [F16](F16-loopback-stalls.md) | A stalled loopback costs seconds, not a minute (issue #3) | designed; four stages, stage 1 (bounded status) first; fault 3 contradicted by measurement, staged as a measurement |
 
 ## Still open, not yet answered
 
