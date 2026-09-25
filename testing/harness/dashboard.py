@@ -263,7 +263,9 @@ def inset_probe(probe):
 # never moves -- only an element inside the page does. A fake that scrolled
 # the document would pass a bar that never retracts on the real dashboard.
 # The header carries a control in its top-trailing corner, where the real
-# dashboard's notification bell is (F15 §1). Reports the inner scroller's
+# dashboard's notification bell is (F15 §1), and a text field, so the bar can
+# be shown and hidden with the keyboard up (KiroCrew's composer is on the same
+# page as its scroller). Reports the inner scroller's
 # position to POST /__inset-report as probe "shell", so a test can prove the
 # page really scrolled -- the bar observes the gesture, it never consumes it.
 SHELL_PROBE = """<!doctype html><meta charset=utf-8>
@@ -275,10 +277,11 @@ body { margin: 0; overflow: hidden; }
 #shell { height: 100dvh; display: flex; flex-direction: column; }
 header { flex: none; height: 44px; display: flex; align-items: center; padding: 0 8px; }
 #bell { margin-left: auto; font-size: 17px; }
+#field { font-size: 17px; width: 40%; }
 main { flex: 1; min-height: 0; overflow: hidden auto; }
 .row { height: 60px; line-height: 60px; padding: 0 8px; border-bottom: 1px solid rgba(255, 255, 255, .2); }
 </style>
-<div id=shell><header><b>SHELL PROBE</b><button id=bell>Bell</button></header><main id=main></main></div>
+<div id=shell><header><b>SHELL PROBE</b><input id=field aria-label="Message" placeholder="Message"><button id=bell>Bell</button></header><main id=main></main></div>
 <script>
 var main = document.getElementById('main');
 for (var i = 0; i < 80; i++) {

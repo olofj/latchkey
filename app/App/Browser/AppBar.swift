@@ -14,10 +14,12 @@
 //  overlay: an overlaying bar relies on the page insetting itself, and F9
 //  measured this gateway ignoring the inset outside an installed web app.
 //
-//  The bar retracts on a deliberate scroll down and returns on one up,
-//  Safari's model; `AppBarRetraction` is the policy and `AppBarController`
-//  the reasons it must stay. Retracting resizes the web view, which is why
-//  the policy is strict and why Reduce Motion gets no animation at all.
+//  The bar is absent in the steady state. A deliberate scroll up brings it
+//  in and one down takes it away, Safari's model; a page that cannot scroll
+//  always has it. `AppBarRetraction` is the policy and `AppBarController`
+//  the reasons it must be on screen. Every change resizes the web view,
+//  which is why the policy is strict and why Reduce Motion gets no
+//  animation at all.
 //
 
 import SwiftUI

@@ -5,7 +5,13 @@
 //  AppBarRetraction.swift
 //  Latchkey
 //
-//  When the app bar retracts and when it comes back (F15 §4a).
+//  When the app bar is on screen and when it is not (F15 §4a).
+//
+//  The bar is ABSENT in the steady state: the page fills the screen as it did
+//  before F15. A deliberate scroll up (the finger moving down) brings it in;
+//  a deliberate scroll down takes it away again. Safari's model, with the
+//  default inverted, because a permanent 44 pt band for one gear was a bad
+//  trade (Olof, 2026-09-24).
 //
 //  The bar DISPLACES the page rather than overlaying it: the web view's top
 //  edge is the bar's bottom edge, because no gateway can be trusted to inset
@@ -18,12 +24,16 @@
 //    scrolls itself (a chat following new messages) changes nothing either.
 //  - One drag, one direction, `threshold` points. Travel restarts at each
 //    touch and whenever the finger reverses, so reading nudges never add up.
-//  - Retracting needs something that really scrolled, with more range than the
-//    bar is tall: a page too short to scroll keeps the bar (F15 §4b), and so
-//    does one that would stop scrolling the moment the bar gave it room.
-//  - Returning needs only the finger. A downward drag of `threshold` brings
-//    the bar back on any page, scrollable or not, so a retracted bar can
-//    always be recovered by a gesture every page can perform.
+//  - Hiding needs something that really scrolled, with more range than the
+//    bar is tall. Showing needs only the finger, on any page.
+//  - A page that cannot scroll has the bar, whatever the finger did: on it no
+//    scroll up exists to bring the bar in, so hidden would mean gone (F15
+//    §4b). The page script reports its largest scroll range (`extent`) as the
+//    page changes, and until a new document has reported one it counts as not
+//    scrolling. The hysteresis is the bar's height: shown, the page must have
+//    more range than the bar to lose it; hidden, it keeps the page until the
+//    page has no range left, so the room the bar gives back can never make it
+//    come straight back.
 //
 //  Pure Foundation, so `scripts/test-app-bar-retraction.sh` compiles it alone.
 //
@@ -49,22 +59,49 @@ struct AppBarRetraction: Sendable, Equatable {
         /// scrolled during this touch, 0 if nothing did.
         case moved(dx: Double, dy: Double, scrollRange: Double)
         case ended
+        /// The page's largest vertical scroll range, measured as the page
+        /// loads and changes, touch or no touch. See `extent(_:)`.
+        case extent(Double)
     }
 
-    private(set) var retracted = false
+    /// Whether the bar is off screen: the owner's choice, and the default,
+    /// unless something requires it.
+    var retracted: Bool { away && scrolls && mayRetract }
+
+    /// False whenever something requires the bar on screen (assistive
+    /// technology, a state page, a pinned control). Travel is then discarded,
+    /// and the owner's choice is left as it was for when the reason clears.
+    var mayRetract = true {
+        didSet { if !mayRetract { run = 0 } }
+    }
+
+    /// While true, `extent` reports are held and the last one applies when it
+    /// turns false. Set while the software keyboard is up: it shrinks the
+    /// viewport and so changes what scrolls, and the bar must not move under
+    /// a field being typed into. The finger still works.
+    var extentHeld = false {
+        didSet { if !extentHeld, let r = heldExtent { heldExtent = nil; extent(r) } }
+    }
+
+    /// The owner's choice: true (the steady state) until a scroll up asks for
+    /// the bar.
+    private var away = true
+    /// Whether the page scrolls enough to do without the bar.
+    private var scrolls = false
+    private var heldExtent: Double?
     /// Signed travel of the current drag since it last changed direction:
-    /// positive is the finger moving up, toward retracting.
+    /// positive is the finger moving up, toward hiding.
     private var run: Double = 0
     private var touching = false
 
-    /// Feeds one sample. `mayRetract` is false whenever something requires the
-    /// bar on screen (assistive technology, a state page, a pinned control);
-    /// the bar is then shown at once and travel is discarded. Returns whether
-    /// `retracted` changed.
+    /// Feeds one sample. Returns whether `retracted` changed.
     @discardableResult
-    mutating func observe(_ sample: Sample, mayRetract: Bool) -> Bool {
+    mutating func observe(_ sample: Sample) -> Bool {
+        if case .extent(let range) = sample { return extent(range) }
         let before = retracted
         switch sample {
+        case .extent:
+            break
         case .began:
             touching = true
             run = 0
@@ -75,26 +112,40 @@ struct AppBarRetraction: Sendable, Equatable {
             // A move with no touch-down seen (a lost message, a document that
             // started mid-touch) proves nothing. Horizontal moves are a
             // carousel or a text selection, not a scroll.
-            guard touching, abs(dy) > abs(dx) else { break }
+            guard touching, mayRetract, abs(dy) > abs(dx) else { break }
             let travel = -dy
             if run != 0, (travel > 0) != (run > 0) { run = 0 }
             run += travel
-            if !retracted, run >= Self.threshold, scrollRange > Self.barHeight, mayRetract {
-                retracted = true
+            if run >= Self.threshold, scrollRange > Self.barHeight {
+                // Something scrolled with more range than the bar: proof the
+                // page scrolls, whatever the last report said.
+                scrolls = true
+                away = true
                 run = 0
-            } else if retracted, run <= -Self.threshold {
-                retracted = false
+            } else if run <= -Self.threshold {
+                away = false
                 run = 0
             }
         }
-        if !mayRetract { retracted = false }
         return retracted != before
     }
 
-    /// Back to shown, with no travel carried over: a new document, or a
-    /// reason to be on screen.
-    mutating func reset() {
-        retracted = false
+    /// The page's largest vertical scroll range, in points, as the page script
+    /// measures it. Returns whether `retracted` changed.
+    @discardableResult
+    mutating func extent(_ range: Double) -> Bool {
+        if extentHeld { heldExtent = range; return false }
+        let before = retracted
+        scrolls = before ? range >= 1 : range > Self.barHeight
+        return retracted != before
+    }
+
+    /// A new document: the steady state, no travel carried over, and shown
+    /// until the page reports that it scrolls.
+    mutating func documentChanged() {
+        away = true
+        scrolls = false
+        heldExtent = nil
         run = 0
     }
 }

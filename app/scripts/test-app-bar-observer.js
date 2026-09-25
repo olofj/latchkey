@@ -23,11 +23,18 @@ function expect(cond, what, detail) {
   if (!cond) { failures++; console.log(`  FAIL: ${what}${detail ? '\n        ' + detail : ''}`); }
 }
 
-function setup({ scale = 1, handler = true } = {}) {
+function setup({ scale = 1, handler = true, elements = [], docStyle = 'visible' } = {}) {
   const listeners = {};
   const posts = [];
   const frames = [];
-  const document = { scrollingElement: { scrollHeight: 800, clientHeight: 800 } };
+  const timers = [];
+  const mutations = [];
+  const html = { tagName: 'HTML', style: docStyle };
+  const document = {
+    scrollingElement: { scrollHeight: 800, clientHeight: 800 },
+    documentElement: html, body: { tagName: 'BODY', style: 'visible' },
+    querySelectorAll: () => elements,
+  };
   const win = {
     innerWidth: 402, innerHeight: 778,
     visualViewport: { scale },
@@ -45,21 +52,67 @@ function setup({ scale = 1, handler = true } = {}) {
   }
   const touch = (x, y) => ({ touches: [{ clientX: x, clientY: y }] });
   const flush = () => { while (frames.length) frames.shift()(); };
-  vm.runInNewContext(observer, { window: win, document, requestAnimationFrame: (f) => frames.push(f) });
-  return { listeners, posts, fire, touch, flush, win, document, tampered };
+  const tick = () => { while (timers.length) timers.shift()(); };
+  vm.runInNewContext(observer, {
+    window: win, document, requestAnimationFrame: (f) => frames.push(f),
+    setTimeout: (f) => { timers.push(f); return timers.length; },
+    getComputedStyle: (el) => ({ overflowY: el.style }),
+    MutationObserver: function (fn) { this.observe = (target, o) => mutations.push({ fn, target, o }); },
+  });
+  return { listeners, posts, fire, touch, flush, tick, win, document, tampered, timers, mutations };
 }
 
 console.log('\n== appBarObserver: observes, never takes part');
 let s = setup();
 const types = Object.keys(s.listeners).sort();
-expect(JSON.stringify(types) === JSON.stringify(['scroll', 'touchcancel', 'touchend', 'touchmove', 'touchstart']),
-       'listens to touches and scroll, nothing else', JSON.stringify(types));
+expect(JSON.stringify(types) === JSON.stringify(['DOMContentLoaded', 'load', 'resize', 'scroll', 'touchcancel',
+                                                 'touchend', 'touchmove', 'touchstart']),
+       'listens to touches, scroll and the document\'s load and size, nothing else', JSON.stringify(types));
 for (const [type, ls] of Object.entries(s.listeners)) {
   for (const l of ls) {
     expect(l.opts && l.opts.passive === true, `${type}: passive, so it can never cancel a scroll`);
     expect(l.opts && l.opts.capture === true, `${type}: capture phase on window, so it sees every element's scroll`);
   }
 }
+
+console.log('\n== the page\'s extent: what could scroll, before anything is touched');
+const scroller = (h, style, tagName = 'DIV') => ({ tagName, scrollHeight: h, clientHeight: 700, style });
+s = setup({ elements: [scroller(4800, 'auto'), scroller(900, 'visible'), scroller(9000, 'auto', 'TEXTAREA')] });
+s.fire('load', {});
+expect(JSON.stringify(s.posts) === JSON.stringify([{ p: 'x', r: 4100 }]),
+       'at load: the inner scroller\'s range, not an overflowing visible box\'s nor a text area\'s', JSON.stringify(s.posts));
+s = setup({ elements: [scroller(700, 'auto')] });
+s.fire('load', {});
+expect(s.posts.length === 1 && s.posts[0].r === 0, 'a page with nothing to scroll reports 0', JSON.stringify(s.posts));
+s = setup({ elements: [scroller(4800, 'hidden')], scale: 2 });
+s.document.scrollingElement.scrollHeight = 1000;
+s.fire('load', {});
+expect(s.posts[0] && s.posts[0].r === 400, 'the document\'s own range, in screen points; a hidden box does not scroll',
+       JSON.stringify(s.posts));
+s = setup({ docStyle: 'hidden' });
+s.document.scrollingElement.scrollHeight = 1000;
+s.fire('load', {});
+expect(s.posts[0] && s.posts[0].r === 0, 'a document whose root is overflow: hidden does not scroll (KiroCrew\'s shell)',
+       JSON.stringify(s.posts));
+
+s = setup({ elements: [scroller(700, 'auto')] });
+expect(s.mutations.length === 1 && s.mutations[0].target === s.document && s.mutations[0].o.subtree,
+       'watches the whole document for changes');
+s.fire('DOMContentLoaded', {});
+s.mutations[0].fn(); s.fire('resize', {});
+expect(s.timers.length === 1 && s.posts.length === 0, 'measures later, once, however many changes come in');
+s.tick();
+expect(s.posts.length === 1 && s.posts[0].r === 0, 'then posts what it measured', JSON.stringify(s.posts));
+s.mutations[0].fn(); s.tick();
+expect(s.posts.length === 1, 'an unchanged extent is not posted again');
+s.fire('load', {});
+expect(s.posts.length === 2, 'except at load, which always posts: the app may have reset it for this document');
+s.document.querySelectorAll = () => [scroller(800, 'auto')];
+s.fire('scroll', { target: s.document });
+s.tick();
+expect(s.posts.length === 3 && s.posts[2].r === 100, 'a change is posted, and a scroll prompts a measure',
+       JSON.stringify(s.posts));
+expect(s.tampered.length === 0, 'no handler touched the events', s.tampered.join(', '));
 
 console.log('\n== a drag up over an inner scroller');
 s = setup();

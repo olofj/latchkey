@@ -118,7 +118,8 @@ and about the app's own health — but each must be argued, not assumed.
 ## 5. State and migration
 
 Nothing persisted, unless B's bar keeps a hidden/shown state across launches —
-it should not; it starts shown.
+it should not. ~~It starts shown.~~ Since the 2026-09-24 revision (§9) it
+starts absent on a page that scrolls, and shown on one that cannot.
 
 ## 6. End-to-end tests
 
@@ -344,3 +345,84 @@ The whole design rests on that, and it was an assumption until then.
 - `make test-policy`: green.
 
 Both runs used the working tree before two comment-only edits.
+
+### 2026-09-24 — revised: the bar is absent in the steady state
+
+Olof, on the first build of B: a permanent full-width band for one cogwheel is
+a bad trade. The bar is now **absent** until asked for. The page fills the
+screen as it did before F15; a deliberate scroll up (the finger moving down
+64 pt) brings the bar in, and a deliberate scroll down takes it away. Same
+displacement, same 64 pt hysteresis, same finger-only input; only the default
+is inverted.
+
+**What that costs, and how it is paid.** With the bar hidden by default, a
+page that cannot scroll would have no scroll up to bring it in: the gear would
+be gone (§4b). The touch-time scroll range the policy used before is no longer
+enough, because the answer is needed before anyone touches the page. So the
+page script now also reports the page's **extent**: the largest scroll range of
+the document or of any element whose `overflow-y` lets it scroll (form controls
+aside), measured at most every 500 ms after the document loads, resizes,
+mutates or scrolls, posted when it changes and always at `load`. It reads
+layout, never markup or text. The rules (`AppBarRetraction.extent`):
+
+- A new document counts as not scrolling until it reports, so the bar is shown
+  first and a page whose script never runs keeps it.
+- Shown, the page must have more range than the bar (44 pt) to lose it.
+  Hidden, it keeps the page until it has no range left. So the 44 pt the bar
+  gives back can never bring it straight back.
+- A drag that scrolled something with more range than the bar is proof as
+  well, whatever the last report said.
+
+VoiceOver, Switch Control, a state page and the sign-in capsule still force the
+bar on. What changed there: a drag made while one of them holds is discarded
+rather than remembered, and when it clears the bar returns to the steady state.
+
+**The keyboard.** It resizes the web view (F13, and `42af25d` shipped a black
+screen from a keyboard inset taken twice). With the bar default-hidden it could
+also move the bar: the shrunken viewport can make a short page scroll, and the
+bar would hide under the field being typed into. So `AppBarController` holds
+extent reports from `keyboardWillShow` to `keyboardDidHide`, and applies the
+last one when the keyboard goes. The finger still shows and hides the bar with
+the keyboard up. The bar changes only the web view's top edge, and F13's bottom
+padding keys on the stack's bottom inset, which the bar does not touch.
+
+**Tests.** Updated, not added:
+
+- `testTheAppBarRetractsOnADeliberateScrollAndComesBack` (shell probe): the
+  "starts shown" expectation is **inverted**, not weakened. The bar starts
+  absent (`minY` = safe-area top) and the gear is not hittable. A 30 pt nudge
+  down changes nothing; a 240 pt drag up scrolls the page and leaves the bar
+  away; 240 pt down brings it in with the gear, and the page reports it
+  scrolled back (not consumed); 240 pt up takes it away again. VoiceOver: shown
+  from the start and through the drag, as before.
+- `testNothingOfOursSitsOnThePageAndSettingsIsReachable`: first, untouched,
+  the fake (too short to scroll) must have the bar and a hittable gear. Then in
+  each orientation one drag down brings the bar in before the sweep, the
+  `minY` check and the Settings round trip: the gear is at most one gesture
+  away.
+- `testTypingInThePageKeepsItOnScreen` runs twice. On the fake, as before, the
+  bar is shown and must stay with the keyboard up. On the shell probe, which
+  now has a text field in its header, the keyboard comes up with the bar
+  absent, then a scroll up shows it and a scroll down hides it; at each step
+  the keyboard is still up, the page starts at the right edge, ends within
+  120 pt of the keys, is drawn, and the field is hittable.
+- Host: `scripts/test-app-bar-retraction.sh` rewritten for the new default
+  (43 checks, including the extent hysteresis, the keyboard hold and a new
+  document), and `scripts/test-app-bar-observer.js` covers the extent
+  measurement (39 checks).
+
+
+Measured (`scripts/test-offline.sh --build`): the shell starts at `minY=62`,
+the safe-area top, and the VoiceOver launch at 106. With the keyboard up the
+web view ends at 478 in every state, 112 pt above the keys (590) as in
+`42af25d`: shell `(0, 62, 402, 416)` hidden, `(0, 106, 402, 372)` after the
+scroll up, `(0, 62, 402, 416)` after the scroll down, keyboard still up and the
+page's blue drawn. The fake keeps its bar with the keyboard up,
+`(0, 106, 402, 372)`.
+
+Mutations of the policy, host-only: treating an unreported page as scrolling
+fails 3 of 43 checks; dropping the extent hysteresis fails 2 of 43.
+
+**Suites.** `scripts/test-offline.sh --build`: 18 of 18 passed and the R1 scan
+passed, in **311 s** against the 240 s budget (272 s before; the typing test's
+shell pass adds a launch). `make test-policy`: green.

@@ -6,8 +6,8 @@
 //  Latchkey
 //
 //  Holds the app bar's shown/retracted state for one web view (F15). The
-//  policy is `AppBarRetraction`; this adds the reasons the bar must stay on
-//  screen whatever the finger does:
+//  policy is `AppBarRetraction`, whose steady state is retracted; this adds
+//  the reasons the bar must be on screen whatever the finger does:
 //
 //  - VoiceOver or Switch Control is running. A retracted bar is off screen,
 //    and an element that is off screen is not one those users can reach
@@ -16,6 +16,11 @@
 //  - A state page (connecting, failed) covers the web view.
 //  - A control that must not be scrolled away is in the bar (the sign-in
 //    button, the only one there is).
+//
+//  And one reason the bar must NOT move: the software keyboard. It resizes
+//  the web view (F13), which can make a page start or stop scrolling; while
+//  it is up the page's extent reports are held, so the bar stays as it was
+//  when typing began and moves only for the finger.
 //
 //  Owned by `BrowserViewModel`, which feeds it the page script's samples and
 //  its page state; `AppBar` reads it.
@@ -28,7 +33,7 @@ import UIKit
 #endif
 
 final class AppBarController: ObservableObject {
-    @Published private(set) var retracted = false
+    @Published private(set) var retracted = AppBarRetraction().retracted
 
     private var policy = AppBarRetraction()
     private var pageCovered = false
@@ -44,6 +49,17 @@ final class AppBarController: ObservableObject {
                 .sink { [weak self] _ in self?.reconsider() }
                 .store(in: &observers)
         }
+        NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.policy.extentHeld = true }
+            .store(in: &observers)
+        NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.policy.extentHeld = false
+                self?.publish()
+            }
+            .store(in: &observers)
 #endif
     }
 
@@ -59,7 +75,8 @@ final class AppBarController: ObservableObject {
     var mayRetract: Bool { !pageCovered && !pinned && !Self.assistiveTechnologyRunning }
 
     func observe(_ sample: AppBarRetraction.Sample) {
-        policy.observe(sample, mayRetract: mayRetract)
+        policy.mayRetract = mayRetract
+        policy.observe(sample)
         publish()
     }
 
@@ -73,14 +90,15 @@ final class AppBarController: ObservableObject {
         reconsider()
     }
 
-    /// A new document starts with the bar shown (F15 §5).
+    /// A new document starts in the steady state, retracted, once it has
+    /// shown that it scrolls (F15 §5).
     func documentChanged() {
-        policy.reset()
+        policy.documentChanged()
         publish()
     }
 
     private func reconsider() {
-        if !mayRetract { policy.reset() }
+        policy.mayRetract = mayRetract
         publish()
     }
 

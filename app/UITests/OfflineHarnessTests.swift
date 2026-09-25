@@ -576,14 +576,15 @@ final class OfflineHarnessTests: XCTestCase {
     ///    gear back as an overlay on the web view's top-trailing corner: the
     ///    sweep names it and both rectangles.
     /// 2. **Settings is reachable**: the gear is hittable and opens Settings,
-    ///    portrait and landscape. Shown to fail by starting the bar retracted,
-    ///    i.e. Settings behind a gesture.
-    /// 3. **The top strip is no taller than it must be**: the web view's `minY`
-    ///    is the window's safe-area top plus the bar, and no more. Shown to fail
-    ///    by padding the bar: both numbers are printed.
+    ///    portrait and landscape, at most one scroll up away (the bar is absent
+    ///    in the steady state).
+    /// 3. **The top strip is no taller than it must be**: with the bar shown,
+    ///    the web view's `minY` is the window's safe-area top plus the bar, and
+    ///    no more. Shown to fail by padding the bar: both numbers are printed.
     ///
-    /// Then the fake dashboard, which is too short to scroll, is dragged up
-    /// deliberately: the bar must stay (F15 §4b), or it could never come back.
+    /// First, untouched: the fake dashboard is too short to scroll, so it must
+    /// have the bar without any gesture (F15 §4b), or the gear is unreachable
+    /// on it. Last, it is dragged up deliberately and the bar must stay.
     func testNothingOfOursSitsOnThePageAndSettingsIsReachable() async throws {
         addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
         let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
@@ -593,12 +594,25 @@ final class OfflineHarnessTests: XCTestCase {
         let web = app.webViews.firstMatch
         XCTAssertTrue(web.appears(within: 10), "the web view is on screen")
         let gear = app.buttons["settings-button"]
+        try await settle(app, web: web, landscape: false)
+        // Longer than the page script's 500 ms measure: a report of a page
+        // that scrolls would have hidden the bar by now.
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(Double(web.frame.minY), windowSafeTop(app) + Self.appBarHeight, accuracy: 0.5,
+                       "a page too short to scroll has the bar untouched, or nothing could bring it in")
+        XCTAssertTrue(gear.isHittable, "and the gear with it, no gesture needed")
 
         for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
             let name = orientation.isLandscape ? "landscape" : "portrait"
             XCUIDevice.shared.orientation = orientation
             try await settle(app, web: web, landscape: orientation.isLandscape)
             let safeTop = windowSafeTop(app)
+            // One scroll up brings the bar in on any page. Whether the fake
+            // scrolls in landscape is its font metrics' business; either way
+            // the gear is this one gesture away, and no further.
+            drag(web, dy: 240)
+            _ = try await waitForMinY(web, safeTop + Self.appBarHeight, timeout: 5)
+            try await settle(app, web: web, landscape: orientation.isLandscape)
             let webFrame = web.frame
 
             let line = "APP-BAR \(name): webViewFrame=\(webFrame) windowSafeTop=\(safeTop) barHeight=\(Self.appBarHeight)"
@@ -632,15 +646,18 @@ final class OfflineHarnessTests: XCTestCase {
     }
 
     /// F15 §4a/§4b on a page shaped like KiroCrew 0.7.0 — a full-height shell
-    /// that never scrolls, with an inner scroller that does (`root=shell`). A
-    /// drag up of 240 pt retracts the bar and the page starts at the safe-area
-    /// top; a drag back down returns it. A 30 pt nudge changes nothing. The page
-    /// reports its own scroll position, which proves the drag reached it: the
-    /// bar observes the gesture and never consumes it.
+    /// that never scrolls, with an inner scroller that does (`root=shell`). The
+    /// page scrolls, so the bar is absent from the start and the page starts
+    /// at the safe-area top. A 30 pt nudge changes nothing; a drag up of
+    /// 240 pt scrolls the page and still changes nothing; a drag down of 240 pt
+    /// brings the bar in, and another drag up takes it away. The page reports
+    /// its own scroll position, which proves the drags reached it: the bar
+    /// observes the gesture and never consumes it.
     ///
     /// Then again with `-UITestAssumeVoiceOver`, L1's stand-in for VoiceOver:
-    /// the same drag scrolls the page and the bar stays, with the gear hittable.
-    /// Retracted must not mean gone for VoiceOver.
+    /// the bar is there from the start, the same drag scrolls the page and the
+    /// bar stays, with the gear hittable. Hidden must not mean gone for
+    /// VoiceOver.
     func testTheAppBarRetractsOnADeliberateScrollAndComesBack() async throws {
         addTeardownBlock { try? await Self.post("\(Self.dashboardControl)/__mode?root=page") }
         try await Self.post("\(Self.dashboardControl)/__mode?root=shell")
@@ -655,12 +672,19 @@ final class OfflineHarnessTests: XCTestCase {
             let gear = app.buttons["settings-button"]
             let safeTop = windowSafeTop(app)
             let shown = safeTop + Self.appBarHeight
-            XCTAssertEqual(Double(web.frame.minY), shown, accuracy: 0.5, "\(who): the bar starts shown")
-
-            if !voiceOver {
-                drag(web, dy: -30)
+            if voiceOver {
+                XCTAssertEqual(Double(web.frame.minY), shown, accuracy: 0.5,
+                               "VoiceOver: the bar is on screen from the start")
+            } else {
+                // Inverted by the steady-state change: the page scrolls, so
+                // the bar is not there until a scroll up asks for it.
+                let start = try await waitForMinY(web, safeTop, timeout: 5)
+                XCTAssertEqual(start, safeTop, accuracy: 0.5,
+                               "the bar starts absent on a page that scrolls: the page starts at the safe-area top")
+                XCTAssertFalse(gear.exists && gear.isHittable, "absent, the gear is not offered where it is not")
+                drag(web, dy: 30)
                 try await Task.sleep(for: .seconds(1))
-                XCTAssertEqual(Double(web.frame.minY), shown, accuracy: 0.5, "a 30 pt nudge leaves the bar alone")
+                XCTAssertEqual(Double(web.frame.minY), safeTop, accuracy: 0.5, "a 30 pt nudge leaves the bar away")
             }
 
             drag(web, dy: -240)
@@ -677,14 +701,21 @@ final class OfflineHarnessTests: XCTestCase {
                                "VoiceOver: the bar never retracts, so Settings is never off screen")
                 XCTAssertTrue(gear.isHittable, "VoiceOver: the gear stays hittable after a scroll")
             } else {
-                let retracted = try await waitForMinY(web, safeTop, timeout: 5)
-                XCTAssertEqual(retracted, safeTop, accuracy: 0.5,
-                               "a deliberate drag up retracts the bar: the page starts at the safe-area top")
-                XCTAssertFalse(gear.exists && gear.isHittable, "retracted, the gear is not offered where it is not")
+                try await Task.sleep(for: .seconds(1))
+                XCTAssertEqual(Double(web.frame.minY), safeTop, accuracy: 0.5, "scrolling down keeps the bar away")
                 drag(web, dy: 240)
                 let back = try await waitForMinY(web, shown, timeout: 5)
-                XCTAssertEqual(back, shown, accuracy: 0.5, "a deliberate drag down brings the bar back")
+                XCTAssertEqual(back, shown, accuracy: 0.5, "a deliberate scroll up brings the bar in")
                 XCTAssertTrue(gear.appears(within: 5) && gear.isHittable, "and the gear with it")
+                let up = try await waitForInsets("shell", timeout: 10) {
+                    Self.number($0["scrollTop"]) < Self.number(r["scrollTop"]) - 100
+                }
+                XCTAssertLessThan(Self.number(up["scrollTop"]), Self.number(r["scrollTop"]) - 100,
+                                  "and that drag scrolled the page back up: it was not consumed either")
+                drag(web, dy: -240)
+                let away = try await waitForMinY(web, safeTop, timeout: 5)
+                XCTAssertEqual(away, safeTop, accuracy: 0.5, "a deliberate scroll down takes it away again")
+                XCTAssertFalse(gear.exists && gear.isHittable, "and the gear with it")
             }
             app.terminate()
         }
@@ -701,44 +732,83 @@ final class OfflineHarnessTests: XCTestCase {
     /// start below the bar and end at the keyboard's top edge. Shown to fail
     /// on 377c539 by the gap check; the simulator's screenshot still read
     /// white there, so the pixel check is a backstop, not the instrument.
+    /// The fake is too short to scroll, so it has the bar, and the keyboard
+    /// must not take it away: the extent reports that the shrunken viewport
+    /// now scrolls are held while the keyboard is up.
+    ///
+    /// Then the same on the shell probe, which scrolls, so the bar starts
+    /// absent: the keyboard up, a scroll up brings the bar in and a scroll
+    /// down takes it away, and each time the page still ends at the
+    /// keyboard's bars, the keyboard stays up and the field stays on screen.
+    /// Showing the bar resizes the web view as the keyboard does, and a
+    /// keyboard inset taken twice is what went black in 42af25d.
     func testTypingInThePageKeepsItOnScreen() async throws {
-        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
-                         extra: ["-UITestReportSafeArea"])
-        defer { app.terminate() }
-        _ = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 30) { $0["ws"] as? String == "ws:open" }
-        let web = app.webViews.firstMatch
-        XCTAssertTrue(web.appears(within: 10), "the web view is on screen")
-        let safeTop = windowSafeTop(app)
-        let field = web.textFields["Message"]
-        XCTAssertTrue(field.appears(within: 10), "the fake dashboard has a text field")
-        field.tap()
-        let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 10), "tapping the field brings up the keyboard")
-        try await settle(app, web: web, landscape: false)
+        addTeardownBlock { try? await Self.post("\(Self.dashboardControl)/__mode?root=page") }
+        for root in ["page", "shell"] {
+            try await Self.post("\(Self.dashboardControl)/__mode?root=\(root)")
+            let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                             extra: ["-UITestReportSafeArea"])
+            let web = app.webViews.firstMatch
+            XCTAssertTrue(web.appears(within: 30), "\(root): the web view is on screen")
+            let safeTop = windowSafeTop(app)
+            let field = web.textFields["Message"]
+            XCTAssertTrue(field.appears(within: 30), "\(root): the page has a text field")
+            if root == "shell" {
+                let start = try await waitForMinY(web, safeTop, timeout: 5)
+                XCTAssertEqual(start, safeTop, accuracy: 0.5, "shell: a page that scrolls starts without the bar")
+            }
+            field.tap()
+            let keyboard = app.keyboards.firstMatch
+            XCTAssertTrue(keyboard.appears(within: 10), "\(root): tapping the field brings up the keyboard")
+            try await settle(app, web: web, landscape: false)
+            // Longer than the page script's 500 ms measure of the new viewport.
+            try await Task.sleep(for: .seconds(1))
 
-        let webFrame = web.frame, keyboardTop = Double(keyboard.frame.minY)
-        let midY = Double(webFrame.midY)
-        // Right of the page's text, which is left-aligned and short.
-        let colour = pixel(app, x: Double(app.frame.width) - 24, y: midY)
-        let line = "KEYBOARD: webViewFrame=\(webFrame) keyboardTop=\(keyboardTop) windowSafeTop=\(safeTop)"
-            + " pixelAt(\(midY))=\(colour.map { "\($0)" } ?? "-")"
-        print(line)
-        add(XCTAttachment(string: line))
-        add(XCTAttachment(screenshot: XCUIScreen.main.screenshot()))
+            func check(_ step: String, barShown: Bool) {
+                let webFrame = web.frame, keyboardTop = Double(keyboard.frame.minY)
+                let midY = Double(webFrame.midY)
+                // Right of the page's text, which is left-aligned and short.
+                // The fake is white; the shell is its own blue, rgb(32, 96,
+                // 160), under rows ruled in 20% white.
+                let colour = pixel(app, x: Double(app.frame.width) - 24, y: midY)
+                let line = "KEYBOARD \(root) \(step): webViewFrame=\(webFrame) keyboardTop=\(keyboardTop)"
+                    + " windowSafeTop=\(safeTop) pixelAt(\(midY))=\(colour.map { "\($0)" } ?? "-")"
+                print(line)
+                add(XCTAttachment(string: line))
+                add(XCTAttachment(screenshot: XCUIScreen.main.screenshot()))
 
-        XCTAssertEqual(Double(webFrame.minY), safeTop + Self.appBarHeight, accuracy: 0.5,
-                       "the page still starts below the bar")
-        // XCUITest's keyboard is the keys alone. Above them sit the prediction
-        // row and WebKit's form bar (^ v ✓), 112 pt on the iPhone 17, and the
-        // page ends on top of those. 377c539 left 484 pt; the home-indicator
-        // padding kept with the keyboard up would leave 136.
-        let gap = keyboardTop - Double(webFrame.maxY)
-        XCTAssertTrue((0...120).contains(gap),
-                      "the page ends just above the keyboard's bars, not \(gap) pt above the keys: \(line)")
-        let (r, g, b) = colour ?? (0, 0, 0)
-        XCTAssertTrue(r > 200 && g > 200 && b > 200,
-                      "the page is drawn between the bar and the keyboard, not black: \(line)")
-        XCTAssertTrue(field.isHittable, "and the field being typed into is on screen")
+                XCTAssertTrue(keyboard.exists, "\(root) \(step): the keyboard is still up")
+                XCTAssertEqual(Double(webFrame.minY), safeTop + (barShown ? Self.appBarHeight : 0), accuracy: 0.5,
+                               "\(root) \(step): the page starts " + (barShown ? "below the bar" : "at the safe-area top"))
+                // XCUITest's keyboard is the keys alone. Above them sit the
+                // prediction row and WebKit's form bar (^ v ✓), 112 pt on the
+                // iPhone 17, and the page ends on top of those. 377c539 left
+                // 484 pt; the home-indicator padding kept with the keyboard up
+                // would leave 136.
+                let gap = keyboardTop - Double(webFrame.maxY)
+                XCTAssertTrue((0...120).contains(gap),
+                              "\(root) \(step): the page ends just above the keyboard's bars, not \(gap) pt above the keys: \(line)")
+                let (r, g, b) = colour ?? (0, 0, 0)
+                XCTAssertTrue(root == "page" ? r > 200 && g > 200 && b > 200 : b > 120 && b > r + 60,
+                              "\(root) \(step): the page is drawn between the top and the keyboard, not black: \(line)")
+                XCTAssertTrue(field.isHittable, "\(root) \(step): and the field being typed into is on screen")
+            }
+
+            if root == "page" {
+                check("keyboard up", barShown: true)
+            } else {
+                check("keyboard up", barShown: false)
+                drag(web, dy: 150)
+                _ = try await waitForMinY(web, safeTop + Self.appBarHeight, timeout: 5)
+                try await settle(app, web: web, landscape: false)
+                check("scrolled up", barShown: true)
+                drag(web, dy: -150)
+                _ = try await waitForMinY(web, safeTop, timeout: 5)
+                try await settle(app, web: web, landscape: false)
+                check("scrolled down", barShown: false)
+            }
+            app.terminate()
+        }
     }
 
     /// Every hittable element outside the web view's subtree whose frame

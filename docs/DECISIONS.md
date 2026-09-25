@@ -3088,3 +3088,38 @@ Rejected:
 **Evidence:** `docs/features/F15-chrome-does-not-own-the-page.md` §9, which
 holds the overlay audit, the banners' case, the threshold's reasoning and five
 L1 mutations with the assertion each one tripped.
+
+## 2026-09-24 — F15 revised: the app bar is absent until a scroll up asks for it
+
+**Decision:** the app bar's steady state is hidden. The page fills the screen
+as before F15; a deliberate scroll up (64 pt of finger travel down, in one
+drag) brings the bar in and a deliberate scroll down takes it away. A page
+that cannot scroll always has the bar, and so does anyone running VoiceOver or
+Switch Control. While the software keyboard is up, only the finger moves the
+bar. Amends the previous entry's default; the mechanism is unchanged.
+
+**Why:**
+
+- **A permanent 44 pt band for one gear is a bad trade** (Olof, on the first
+  build of B). Settings is rare; the page is the product.
+- **A hidden default needs to know, untouched, whether the page scrolls**, or
+  a short page loses the gear with no gesture to recover it. The page script
+  therefore reports the page's scroll extent as it loads and changes, and a
+  new document counts as not scrolling until it has reported. The hysteresis
+  is the bar's own height, so the room the bar gives back cannot bring it
+  straight back.
+- **The keyboard holds the extent.** It shrinks the viewport, which can make a
+  short page scroll; the bar hiding under a field being typed into would be a
+  second resize on top of the keyboard's (`42af25d` was a keyboard inset taken
+  twice).
+
+Rejected:
+
+- **Keeping the last page's answer across documents:** no flicker on reload,
+  but a document whose script never runs would inherit "scrolls" and hide the
+  gear for good.
+- **Freezing nothing while the keyboard is up:** the bar would hide or show as
+  the keyboard came and went, on top of its own resize.
+
+**Evidence:** `docs/features/F15-chrome-does-not-own-the-page.md` §9,
+"revised: the bar is absent in the steady state".

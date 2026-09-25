@@ -50,7 +50,8 @@ enum PageScripts {
     static let appBarWorld = WKContentWorld.world(name: "latchkey-app-bar")
 
     /// Installs the app bar's finger observer (F15 §4a). `onSample` gets each
-    /// touch-down, move and lift, main frame only. Called once per web view,
+    /// touch-down, move and lift, and each change of the page's scroll
+    /// range, main frame only. Called once per web view,
     /// before its first navigation.
     static func installAppBarObserver(into controller: WKUserContentController,
                                       onSample: @escaping (AppBarRetraction.Sample) -> Void) {
@@ -81,6 +82,9 @@ private final class AppBarHandler: NSObject, WKScriptMessageHandler {
                   let range = (body["r"] as? NSNumber)?.doubleValue,
                   dx.isFinite, dy.isFinite, range.isFinite else { return }
             onSample(.moved(dx: dx, dy: dy, scrollRange: range))
+        case "x":
+            guard let range = (body["r"] as? NSNumber)?.doubleValue, range.isFinite else { return }
+            onSample(.extent(range))
         default: return
         }
     }

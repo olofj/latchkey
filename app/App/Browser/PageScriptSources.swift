@@ -216,6 +216,15 @@ enum PageScriptSources {
     /// when nothing did, which is how a page too short to scroll is told
     /// apart from one that scrolls. A change of viewport size (the bar itself
     /// retracting) re-bases the finger instead of counting as travel.
+    ///
+    /// And `{p: 'x', r}`, the page's extent: the largest vertical scroll range
+    /// of the document or of any element whose `overflow-y` lets it scroll
+    /// (form controls aside), in screen points, touch or no touch. The bar is
+    /// hidden by default, and a page with no range must keep it (F15 §4b), so
+    /// the app has to know before the owner touches anything. Measured at most
+    /// every 500 ms, after the document loads, resizes, mutates or scrolls, and
+    /// posted when it changes and always at `load`. It reads layout, never
+    /// the page's markup or text.
     static let appBarObserver = #"""
     (function () {
       var handlers = window.webkit && window.webkit.messageHandlers;
@@ -223,9 +232,11 @@ enum PageScriptSources {
       if (!handler) { return; }
       var opts = {capture: true, passive: true};
       var active = false, pending = false, x = 0, y = 0, w = 0, h = 0, dx = 0, dy = 0, range = 0;
+      var extent = -1, due = 0;
       function scale() { return window.visualViewport ? window.visualViewport.scale : 1; }
+      function post(m) { try { handler.postMessage(m); } catch (e) {} }
       function send(p) {
-        try { handler.postMessage({p: p, dx: dx, dy: dy, r: range}); } catch (e) {}
+        post({p: p, dx: dx, dy: dy, r: range});
         dx = 0; dy = 0;
       }
       function flush() { pending = false; if (active && (dx || dy)) { send('m'); } }
@@ -236,6 +247,30 @@ enum PageScriptSources {
         active = false;
         send('e');
       }
+      function overflowY(el) {
+        return (el && typeof getComputedStyle === 'function') ? getComputedStyle(el).overflowY : 'visible';
+      }
+      function measure(always) {
+        due = 0;
+        var r = 0;
+        try {
+          var se = document.scrollingElement;
+          if (se) {
+            var clip = /^(hidden|clip)$/;
+            var d = se.scrollHeight - se.clientHeight;
+            if (d > 0 && !clip.test(overflowY(document.documentElement)) && !clip.test(overflowY(document.body))) { r = d; }
+          }
+          var all = document.querySelectorAll ? document.querySelectorAll('*') : [];
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i], e = el.scrollHeight - el.clientHeight;
+            if (e > r && el !== se && !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)
+                && /^(auto|scroll|overlay)$/.test(overflowY(el))) { r = e; }
+          }
+        } catch (err) { return; }
+        r = Math.round(r * scale());
+        if (always || r !== extent) { extent = r; post({p: 'x', r: r}); }
+      }
+      function soon() { if (!due && typeof setTimeout === 'function') { due = setTimeout(measure, 500); } }
       window.addEventListener('touchstart', function (e) {
         if (e.touches.length !== 1) { end(); return; }
         active = true; dx = 0; dy = 0; range = 0;
@@ -255,12 +290,19 @@ enum PageScriptSources {
       window.addEventListener('touchend', end, opts);
       window.addEventListener('touchcancel', end, opts);
       window.addEventListener('scroll', function (e) {
+        soon();
         if (!active) { return; }
         var el = (e.target === document || e.target === window) ? document.scrollingElement : e.target;
         if (!el || typeof el.scrollHeight !== 'number') { return; }
         var r = (el.scrollHeight - el.clientHeight) * scale();
         if (r > range) { range = r; }
       }, opts);
+      window.addEventListener('DOMContentLoaded', soon, opts);
+      window.addEventListener('resize', soon, opts);
+      window.addEventListener('load', function () { measure(true); }, opts);
+      if (typeof MutationObserver === 'function') {
+        new MutationObserver(soon).observe(document, {childList: true, subtree: true, attributes: true, characterData: true});
+      }
     })();
     """#
 
