@@ -94,6 +94,14 @@ struct ShareDestinationView: View {
                 }
             case .done(let outcome):
                 Section { result(outcome) }
+#if LATCHKEY_TEST_HOOKS
+                // The inbox as the sheet sees it: the dashboard's own
+                // instrument is hidden behind a sheet.
+                Text("\(delivery.waiting.count)")
+                    .font(.system(size: 1)).opacity(0.01)
+                    .accessibilityIdentifier("share-sheet-inbox-count")
+                    .listRowBackground(Color.clear)
+#endif
             case .idle:
                 EmptyView()
             }

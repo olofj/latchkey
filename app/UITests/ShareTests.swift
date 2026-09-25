@@ -295,6 +295,7 @@ final class ShareTests: XCTestCase {
         let result = element(app, "share-result")
         XCTAssertTrue(result.waitForExistence(timeout: 40))
         XCTAssertEqual(result.label, "failed:unreachable")
+        XCTAssertEqual(element(app, "share-sheet-inbox-count").label, "1", "a failed share is kept")
         let awaited16 = try await gatewayState()
         XCTAssertEqual(counter(awaited16, "share_posts"), 0)
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")

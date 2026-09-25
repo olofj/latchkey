@@ -26,3 +26,5 @@ TODO.workspaces.md
 # App Store Connect API key IDs for TestFlight uploads (ASC_KEY_ID,
 # ASC_ISSUER_ID, optional ASC_KEY_PATH). The .p8 itself never lives here.
 /.asc-key
+# gh CLI state when run with HOME under app/ (not ours)
+/.local/
