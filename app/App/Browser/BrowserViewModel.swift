@@ -395,8 +395,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
         webViewObservations.removeAll()
         self.webView = nil
         // The next makeWebView brings a new configuration and controller; the
-        // compiled list stays cached in the installer.
+        // compiled list stays cached in the installer. A compile in flight
+        // must not load into the next view.
         installedRulesIdentifier = nil
+        loadGeneration += 1
         isLoading = false
         estimatedProgress = 0
         canGoBack = false
@@ -568,13 +570,19 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // about:blank fallback leaves the previous origin in place, so the
         // gateway stays loadable after it; an empty document fetches nothing,
         // so it needs no list.
+        // Any load supersedes a compile in flight: sign-out's about:blank
+        // must not be followed by the gateway when that compile lands.
+        loadGeneration += 1
+        guard webView != nil else {
+            logger.log("CONTENT-RULES: no web view for an app load; nothing started")
+            return
+        }
         guard let origin = GatewayAddress.origin(of: url.absoluteString) else {
             enterConnecting(url)
             webView?.load(URLRequest(url: url, timeoutInterval: 120))
             return
         }
         allowedOrigin = origin
-        loadGeneration += 1
         let generation = loadGeneration
         let allowCDNs = allowWidgetCDNs()
         let identifier = ContentRules.identifier(forOrigin: origin, allowCDNs: allowCDNs)
