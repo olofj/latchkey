@@ -107,7 +107,10 @@ from urllib.parse import parse_qs, urlsplit
 # from THESE files, and drift would make every test answer the wrong question.
 # After a KiroCrew upgrade: re-read the auth code, update the fake, re-pin
 # (--print-pins), and have Olof re-run O7.
-DEFAULT_DIST = os.path.expanduser(
+# KIROCREW_DIST names another copy of the pinned bundle -- the desktop app
+# carries its own, and it outlives an upgrade of the venv. It moves where the
+# files are read from, never what they must be: the pin below still decides.
+DEFAULT_DIST = os.environ.get("KIROCREW_DIST") or os.path.expanduser(
     "~/.kiro/crew-venv/lib/python3.12/site-packages/kiro_crew/static/dist")
 PINNED_VERSION = "0.6.0"
 PINNED_FILES = {

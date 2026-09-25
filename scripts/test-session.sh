@@ -47,7 +47,19 @@ teardown() {
 }
 trap teardown EXIT
 say "bundle pin and smoke test (R19)"
-python3 "$HARNESS/fake_gateway.py" --check-bundle | sed 's/^/    /'
+# The venv follows KiroCrew upgrades (0.7.0 since 2026-09-24); the desktop app
+# keeps a copy of its own backend. Either may serve, but only if it passes the
+# pin byte for byte -- the fallback relaxes where the bundle is, not what it is.
+DESKTOP_DIST=/Applications/KiroCrew.app/Contents/Resources/backend-dist/kirocrew-backend-arm64/lib/python3.12/site-packages/kiro_crew/static/dist
+if [[ -z "${KIROCREW_DIST:-}" ]] && ! python3 "$HARNESS/fake_gateway.py" --check-bundle >/dev/null 2>&1 \
+        && [[ -d "$DESKTOP_DIST" ]] \
+        && python3 "$HARNESS/fake_gateway.py" --check-bundle --dist "$DESKTOP_DIST" >/dev/null 2>&1; then
+    export KIROCREW_DIST="$DESKTOP_DIST"
+    echo "    the venv's KiroCrew is not the pinned one; serving the desktop app's copy"
+fi
+if ! python3 "$HARNESS/fake_gateway.py" --check-bundle | sed 's/^/    /'; then
+    echo "error: no pinned KiroCrew bundle to serve (neither the venv nor the desktop app)" >&2; exit 1
+fi
 say "fake gateway contract self-test"
 make -C "$HARNESS" --no-print-directory gateway-check > "$LOG_DIR/gateway-check.log" 2>&1 \
     || { cat "$LOG_DIR/gateway-check.log" >&2; echo "error: the fake gateway's self-test failed" >&2; exit 1; }
