@@ -422,6 +422,334 @@ final class OfflineHarnessTests: XCTestCase {
         XCTAssertTrue(inApp.isEmpty, "the other origin must never load in the app; saw \(inApp)")
     }
 
+    // MARK: - F6: the page loads the gateway, four named CDNs, and nothing else
+
+    /// The away origin's host, as the dashboard counts it (no port).
+    static let awayHost = "dash.localtest.me"
+    /// Lookalikes of the allowlisted esm.sh (F6 §4.1a(2)): each is mapped to
+    /// the fake by the stub, so it WOULD be served and counted if allowed.
+    static let cdnLookalikes = ["esm.sh.away.example", "esm.shady.example"]
+    static let fontHosts = ["fonts.googleapis.com", "fonts.gstatic.com"]
+
+    /// Launches the app on F6's page (`dashboard.py`'s SINGLE, at /).
+    /// `-ProxyEverything` always: in L1 a non-tailnet host loads direct, and
+    /// the page names esm.sh and Google's font hosts. Proxied, every one of
+    /// them reaches the stub, which maps it to the fake on loopback — so no
+    /// run of this page can reach the real internet, and the journal sees
+    /// every connection, preconnects included.
+    private func launchSingleOrigin(extra: [String] = []) async throws -> XCUIApplication {
+        try await Self.post("\(Self.dashboardControl)/__mode?root=single")
+        return launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                      extra: ["-ProxyEverything"] + extra)
+    }
+
+    /// The F6 page's report once everything it does at load has been done:
+    /// its WebSocket open, the runtime widening attempt made (2 s) and the
+    /// synthetic click tried (4 s). Every off-origin load it makes has been
+    /// asked for by then. `notDoc` skips a report from a document replaced.
+    private func waitForSingleOriginSettled(notDoc: String? = nil,
+                                            timeout: TimeInterval = 40) async throws -> [String: Any] {
+        let report = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: timeout) {
+            $0["page"] as? String == "single" && $0["ws"] as? String == "ws:open"
+                && $0["widened"] as? String == "done"
+                && ($0["synthetic_click"] as? String)?.hasPrefix("done") == true
+                && (notDoc == nil || $0["doc"] as? String != notDoc)
+        }
+        // The last of them (the widening fetches) had a second to fail or land.
+        try await Task.sleep(for: .seconds(1))
+        return report
+    }
+
+    private func handshakes() async throws -> [String: Int] {
+        try await dashboardState()["handshakes"] as? [String: Int] ?? [:]
+    }
+
+    private func requestCounts() async throws -> [String: Int] {
+        try await dashboardState()["requests"] as? [String: Int] ?? [:]
+    }
+
+    /// `paths` lines for `host` that did not come from Mobile Safari (whose
+    /// User-Agent carries a `Safari/` token; a WKWebView's does not).
+    private func inAppPaths(host: String) async throws -> [String] {
+        let paths = try await dashboardState()["paths"] as? [String] ?? []
+        return paths.filter { $0.hasPrefix(host + " ") && !$0.contains("Safari/") }
+    }
+
+    /// Every single-origin assertion, shared by the strict-mode test: zero
+    /// requests, zero CONNECTs and zero TLS handshakes for the away origin,
+    /// and nothing for the gateway's host on another port.
+    private func assertNothingReachedTheAwayOrigin(_ context: String,
+                                                   file: StaticString = #filePath, line: UInt = #line) async throws {
+        let requests = try await requestCounts()
+        XCTAssertEqual(requests[Self.awayHost] ?? 0, 0,
+                       "\(context): the away origin must receive ZERO requests; saw \(requests)", file: file, line: line)
+        let leaked = try await inAppPaths(host: Self.awayHost)
+        XCTAssertTrue(leaked.isEmpty, "\(context): no /f6/ path from the app; saw \(leaked)", file: file, line: line)
+        let connects = try await journalConnects()
+        XCTAssertFalse(connects.contains { $0.host == Self.awayHost },
+                       "\(context): no CONNECT to the away origin; got \(connects)", file: file, line: line)
+        XCTAssertFalse(connects.contains { $0.host == "dash.tail-scale.ts.net" && $0.port == 8444 },
+                       "\(context): the gateway's host on another port is another origin; got \(connects)",
+                       file: file, line: line)
+        let tls = try await handshakes()
+        XCTAssertEqual(tls[Self.awayHost] ?? 0, 0,
+                       "\(context): no TLS handshake with the away origin, so no preconnect either; saw \(tls)",
+                       file: file, line: line)
+    }
+
+    /// F6 §6, the negative. A page referencing the away origin a dozen ways —
+    /// img, alt="" img, an img in a same-origin frame, script, stylesheet,
+    /// preload, preconnect, iframe, video, ping, fetch, EventSource,
+    /// WebSocket, sendBeacon, a Worker's and a SharedWorker's fetch, a
+    /// same-origin image that redirects away — and the gateway's host on port
+    /// 8444. Three instruments, each at zero: the fake's per-Host count, the
+    /// proxy's CONNECT journal, and the fake's TLS handshakes by SNI, the only
+    /// one that can see a preconnect.
+    func testOffOriginLoadsNeverReachTheAwayOrigin() async throws {
+        let app = try await launchSingleOrigin()
+        defer { app.terminate() }
+        _ = try await waitForSingleOriginSettled()
+        try await assertNothingReachedTheAwayOrigin("with the rule list")
+    }
+
+    /// F6 §6, the positive control (R10's shape): the same page without the
+    /// rule list reaches the away origin by every instrument, so the zeros
+    /// above mean something. It also shows the lookalike CDN hosts and the
+    /// font hosts would be served and counted, which the tests below need
+    /// for their own zeros.
+    func testWithoutTheRuleListTheAwayOriginIsReached() async throws {
+        let app = try await launchSingleOrigin(extra: ["-UITestNoContentRules"])
+        defer { app.terminate() }
+        _ = try await waitForSingleOriginSettled()
+        let requests = try await requestCounts()
+        XCTAssertGreaterThan(requests[Self.awayHost] ?? 0, 0, "the away origin is reached; saw \(requests)")
+        let paths = try await inAppPaths(host: Self.awayHost)
+        for path in ["/f6/img.png", "/f6/fetch", "/f6/frame"] {
+            XCTAssertTrue(paths.contains { $0.contains(" \(path) ") }, "\(path) was served in-app; saw \(paths)")
+        }
+        let connects = try await journalConnects()
+        XCTAssertTrue(connects.contains { $0.host == Self.awayHost },
+                      "the journal sees the away origin; got \(connects)")
+        XCTAssertTrue(connects.contains { $0.host == "dash.tail-scale.ts.net" && $0.port == 8444 },
+                      "the journal sees the port probe; got \(connects)")
+        let tls = try await handshakes()
+        XCTAssertGreaterThanOrEqual(tls[Self.awayHost] ?? 0, 1,
+                                    "the handshake counter sees the away origin, or its zero above is vacuous; saw \(tls)")
+        for host in Self.cdnLookalikes + Self.fontHosts {
+            XCTAssertGreaterThan(requests[host] ?? 0, 0,
+                                 "\(host) would be served if allowed, or its zero below is vacuous; saw \(requests)")
+        }
+    }
+
+    /// F6 §4.1a: the allowlisted esm.sh is fetched and its script runs, and
+    /// in the SAME run nothing adjacent to it is: not a longer host that
+    /// starts with it, not a host sharing its prefix, not esm.sh on another
+    /// port. One test, because the allowance and the anchoring must hold at
+    /// once or the allowlist is not what it claims. (Counts are by Host
+    /// without port, so the port is read from the paths and the journal.)
+    func testAnAllowlistedCDNIsFetchedAndItsLookalikesAreNot() async throws {
+        let app = try await launchSingleOrigin()
+        defer { app.terminate() }
+        let report = try await waitForSingleOriginSettled()
+        XCTAssertEqual(report["cdn"] as? String, "ok", "esm.sh's script ran: \(report)")
+        let requests = try await requestCounts()
+        XCTAssertGreaterThan(requests["esm.sh"] ?? 0, 0, "esm.sh was fetched; saw \(requests)")
+        for host in Self.cdnLookalikes {
+            XCTAssertEqual(requests[host] ?? 0, 0, "\(host) must not be fetched; saw \(requests)")
+        }
+        let cdnPort = try await inAppPaths(host: "esm.sh").filter { $0.contains("/f6/cdn-port") }
+        XCTAssertTrue(cdnPort.isEmpty, "esm.sh on port 8444 must not be fetched; saw \(cdnPort)")
+        let connects = try await journalConnects()
+        XCTAssertFalse(connects.contains { $0.host == "esm.sh" && $0.port == 8444 },
+                       "no CONNECT to esm.sh:8444; got \(connects)")
+        XCTAssertFalse(connects.contains { Self.cdnLookalikes.contains($0.host) },
+                       "no CONNECT to a lookalike; got \(connects)")
+    }
+
+    /// F6 §2: the font hosts stay blocked while the CDNs are allowed — by
+    /// request count and by TLS handshake (the bundle's two preconnects are
+    /// to exactly these), while esm.sh in the same run is fetched.
+    func testTheFontHostsStayBlockedWhileTheCDNsAreAllowed() async throws {
+        let app = try await launchSingleOrigin()
+        defer { app.terminate() }
+        _ = try await waitForSingleOriginSettled()
+        let requests = try await requestCounts()
+        let tls = try await handshakes()
+        XCTAssertGreaterThan(requests["esm.sh"] ?? 0, 0, "the allowlist is on in this run; saw \(requests)")
+        for host in Self.fontHosts {
+            XCTAssertEqual(requests[host] ?? 0, 0, "\(host) must not be fetched; saw \(requests)")
+            XCTAssertEqual(tls[host] ?? 0, 0, "\(host) must not even be handshaken with; saw \(tls)")
+        }
+    }
+
+    /// F6 §6: a page cannot add to a compiled list. The page appends a
+    /// script and a fetch for the away origin and for a lookalike at runtime,
+    /// 2 s after load; neither reaches anything.
+    func testThePageCannotWidenTheAllowlist() async throws {
+        let app = try await launchSingleOrigin()
+        defer { app.terminate() }
+        let report = try await waitForSingleOriginSettled()
+        XCTAssertEqual(report["widened"] as? String, "done")
+        for host in [Self.awayHost, "esm.sh.away.example"] {
+            let widened = try await dashboardState()["paths"] as? [String] ?? []
+            let hits = widened.filter { $0.hasPrefix(host + " ") && $0.contains("/f6/widen") }
+            XCTAssertTrue(hits.isEmpty, "\(host): the page's runtime additions must not load; saw \(hits)")
+        }
+        let requests = try await requestCounts()
+        XCTAssertEqual(requests[Self.awayHost] ?? 0, 0, "saw \(requests)")
+        XCTAssertEqual(requests["esm.sh.away.example"] ?? 0, 0, "saw \(requests)")
+    }
+
+    /// F6 §4.1's rules 3–6 and the service-worker row of §4.2: under the list
+    /// the gateway's own machinery works — its WebSocket, its SSE, a data:
+    /// image, a blob: image, a blob: worker, a srcdoc frame — and a service
+    /// worker cannot exist. The report arriving at all proves same-origin
+    /// fetch.
+    func testTheGatewaysOwnMachineryStillWorks() async throws {
+        let app = try await launchSingleOrigin()
+        defer { app.terminate() }
+        let report = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 40) {
+            $0["page"] as? String == "single" && $0["ws"] as? String == "ws:open"
+                && ($0["sse"] as? String)?.hasPrefix("sse:tick-") == true
+                && $0["data_img"] as? String == "ok" && $0["blob_img"] as? String == "ok"
+                && $0["blob_worker"] as? String == "ok" && $0["srcdoc"] as? String == "ok"
+        }
+        XCTAssertEqual(report["sw"] as? String, "undefined", "no service workers without app-bound domains")
+        XCTAssertEqual(report["sw_reg"] as? String, "unavailable")
+        // Recorded, not asserted: a future bundle's use of either is noticed here.
+        print("F6 capability probes: rtc=\(report["rtc"] ?? "?") wt=\(report["wt"] ?? "?")")
+    }
+
+    /// F6 §2: a filter that cannot be built loads nothing — WebKit's own
+    /// compile failure (an unknown action), F4's error page naming the
+    /// filter, zero requests and zero CONNECTs for the gateway, and Try
+    /// again fails the same way rather than loading unprotected.
+    func testFailedRuleCompileLoadsNothing() async throws {
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         extra: ["-UITestBreakContentRules"])
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "nav-error-overlay").appears(within: 10),
+                      "a compile failure shows the error page")
+        let filter = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "filter")).firstMatch
+        XCTAssertTrue(filter.appears(within: 5), "the error page says the filter is why")
+        try await Task.sleep(for: .seconds(2))
+        try await assertZeroRequests(host: "dash.tail-scale.ts.net")
+        var connects = try await journalConnects()
+        XCTAssertFalse(connects.contains { $0.host == "dash.tail-scale.ts.net" },
+                       "nothing may even dial the gateway; got \(connects)")
+
+        let retry = element(app, "nav-error-retry")
+        XCTAssertTrue(retry.isHittable, "Try again is offered")
+        retry.tap()
+        XCTAssertTrue(element(app, "nav-error-overlay").appears(within: 10), "and fails the same way")
+        try await Task.sleep(for: .seconds(2))
+        try await assertZeroRequests(host: "dash.tail-scale.ts.net")
+        connects = try await journalConnects()
+        XCTAssertFalse(connects.contains { $0.host == "dash.tail-scale.ts.net" },
+                       "Try again must not load unprotected; got \(connects)")
+    }
+
+    /// F6 §4.1 rule 2: `window.open` is consulted as `popup` before the UI
+    /// delegate is asked; blocked there, it returns null and nothing happens.
+    /// Exempt, it reaches the navigation policy, which hands it to Safari.
+    func testWindowOpenToAnotherOriginStillOpensSafari() async throws {
+        let app = try await launchSingleOrigin()
+        defer { app.terminate() }
+        _ = try await waitForSingleOriginSettled()
+        try await Self.post("\(Self.dashboardControl)/__reset")
+        let link = app.webViews.links["Open away window"]
+        XCTAssertTrue(link.appears(within: 10), "the window.open link renders")
+        link.tap()
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 15), "window.open to another origin opens Safari")
+        safari.terminate()
+        app.activate()
+        let inApp = try await inAppPaths(host: Self.awayHost).filter { $0.contains("/away-target") }
+        XCTAssertTrue(inApp.isEmpty, "the other origin must never load in the app; saw \(inApp)")
+    }
+
+    /// F6 §4a: a blocked image gets a marker — the alt-less one, the alt=""
+    /// one and the one in the same-origin frame — that VoiceOver reads and a
+    /// finger can hit (44 pt). The page's own `el.click()` and its own post
+    /// to the handler do nothing (the handler is not in its world); a real
+    /// tap opens the image in Safari, which fetches it with Safari's UA.
+    func testBlockedImageShowsAMarkerThatOpensSafari() async throws {
+        let app = try await launchSingleOrigin()
+        defer { app.terminate() }
+        let report = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 40) {
+            $0["page"] as? String == "single" && ($0["blocked_marks"] as? Int ?? 0) >= 3
+                && ($0["blocked_marks_inner"] as? Int ?? 0) >= 1
+                && ($0["synthetic_click"] as? String)?.hasPrefix("done") == true
+        }
+        XCTAssertGreaterThanOrEqual(report["blocked_marks"] as? Int ?? 0, 3,
+                                    "no-alt, alt=\"\" and the inner frame's image are all marked: \(report)")
+        XCTAssertGreaterThanOrEqual(report["blocked_marks_inner"] as? Int ?? 0, 1,
+                                    "the image inside the same-origin frame is marked too: \(report)")
+        XCTAssertEqual(report["synthetic_click"] as? String, "done", "the page did click a marker itself")
+        XCTAssertEqual(report["page_handler"] as? String, "absent", "the app's handler is invisible to the page")
+
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        // The page's synthetic click happened at 4 s; give it every chance.
+        try await Task.sleep(for: .seconds(3))
+        XCTAssertNotEqual(safari.state, .runningForeground, "a script's click must not open Safari")
+        var paths = try await dashboardState()["paths"] as? [String] ?? []
+        XCTAssertFalse(paths.contains { $0.contains("/f6/img.png") && $0.contains("Safari/") },
+                       "nothing fetched the image in Safari yet")
+
+        let marker = app.webViews.images.matching(
+            NSPredicate(format: "label == %@", "Image not loaded. Tap to open in Safari.")).firstMatch
+        XCTAssertTrue(marker.appears(within: 10), "VoiceOver reads the marker")
+        XCTAssertGreaterThanOrEqual(marker.frame.width, 44, "a 44 pt target: \(marker.frame)")
+        XCTAssertGreaterThanOrEqual(marker.frame.height, 44, "a 44 pt target: \(marker.frame)")
+        marker.tap()
+        XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 15), "a real tap opens Safari")
+        let deadline = Date().addingTimeInterval(15)
+        var opened = false
+        while Date() < deadline, !opened {
+            paths = try await dashboardState()["paths"] as? [String] ?? []
+            opened = paths.contains { $0.hasPrefix(Self.awayHost + " ") && $0.contains("/f6/img") && $0.contains("Safari/") }
+            if !opened { try await Task.sleep(for: .milliseconds(500)) }
+        }
+        safari.terminate()
+        app.activate()
+        XCTAssertTrue(opened, "Safari fetched the blocked image; paths: \(paths.filter { $0.contains("/f6/img") })")
+        let inApp = try await inAppPaths(host: Self.awayHost)
+        XCTAssertTrue(inApp.isEmpty, "and the app never did; saw \(inApp)")
+    }
+
+    /// F6 §4.1a: *Allow widget CDNs* off is the original one-origin promise,
+    /// intact. Flipped in Settings in the same process that compiled the
+    /// allowlisted list, so a list cached under an identifier without the
+    /// CDN setting would be reused here and esm.sh fetched again.
+    func testStrictModeBlocksTheAllowlistedCDNs() async throws {
+        let app = try await launchSingleOrigin()
+        defer { app.terminate() }
+        let before = try await waitForSingleOriginSettled()
+        XCTAssertEqual(before["cdn"] as? String, "ok", "the allowlist is on to begin with")
+
+        let web = app.webViews.firstMatch
+        let gear = app.buttons["settings-button"]
+        if !gear.isHittable { drag(web, dy: 240) }
+        XCTAssertTrue(gear.appears(within: 5) && gear.isHittable, "the gear is reachable")
+        gear.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].appears(within: 10))
+        let toggle = app.switches["allow-widget-cdns-toggle"]
+        for _ in 0..<6 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.isHittable, "Settings → Privacy → Allow widget CDNs")
+        XCTAssertEqual(toggle.value as? String, "1", "on by default")
+        _ = try await Self.post("\(Self.dashboardControl)/__reset")
+        _ = try await Self.post("\(Self.proxyControl)/reset")
+        toggle.switches.firstMatch.tap()
+        XCTAssertEqual(toggle.value as? String, "0", "switched off")
+        app.navigationBars["Settings"].buttons["Done"].tap()
+
+        let after = try await waitForSingleOriginSettled(notDoc: before["doc"] as? String)
+        XCTAssertNotEqual(after["cdn"] as? String, "ok", "esm.sh's script must not run in strict mode")
+        let requests = try await requestCounts()
+        XCTAssertEqual(requests["esm.sh"] ?? 0, 0, "strict mode fetches nothing from esm.sh; saw \(requests)")
+        try await assertNothingReachedTheAwayOrigin("strict mode")
+    }
+
     // MARK: - R2: the sign-in token leaves the address
 
     /// The page navigates to /?token=… the way the dashboard's own paste
