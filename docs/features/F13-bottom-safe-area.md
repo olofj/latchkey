@@ -106,3 +106,5 @@ machinery.
 Opened 2026-09-24 from a measurement taken while diagnosing F9.
 
 2026-09-24: the consumer is the `NavigationStack`, which re-applies the window's bottom safe area to its content regardless of the root's `.ignoresSafeArea`; at Olof's request the page now takes 10pt of the 34pt back (`DashboardContent.bottomReclaim`), ending 24pt above the edge, clear of the home indicator, asserted in `testInsetProbesReportWhatThePageIsTold`.
+
+2026-09-24, regression in that build: with the keyboard up the page went black. The stack's bottom inset is then the keyboard's (396pt, bars included), which the stack already keeps the page above, and the padding took it a second time: the web view was 0pt tall. F15's app bar was not involved; it stayed shown. The padding now applies only when the inset is no larger than the keyboard-free one, which a background reader ignoring `.keyboard` measures. `testTypingInThePageKeepsItOnScreen` taps a field in the fake dashboard and fails on 377c539 (web view `(0, 106, 402, 0)`).

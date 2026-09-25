@@ -113,6 +113,7 @@ body { margin: 0; padding: calc(8px + env(safe-area-inset-top)) calc(8px + env(s
 <p><a id=away href="/redirect-away" style="font-size:22px">Redirect away</a></p>
 <p><a id=again href="/?again" style="font-size:22px">Open again</a></p>
 <p><button id=signin style="font-size:22px" onclick="signIn()">Sign in with token</button></p>
+<p><input id=field aria-label="Message" placeholder="Message" style="font-size:22px"></p>
 <script>
 // A random id per document, so a test can tell a report from THIS page load
 // from a stale one left by the previous page (M2 review: without it the

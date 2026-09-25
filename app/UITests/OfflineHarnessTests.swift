@@ -690,6 +690,57 @@ final class OfflineHarnessTests: XCTestCase {
         }
     }
 
+    /// Olof, on the build of 2026-09-24: "when i tap the box to start typing,
+    /// the keyboard comes up and everything else goes black on the dashboard."
+    /// F13 padded the page by the stack's bottom safe area, and with the
+    /// keyboard up that inset is the keyboard's height: the page was pushed up
+    /// by the keyboard and then padded by it a second time, to a web view
+    /// 0 pt tall (measured: frame (0, 106, 402, 0), keyboard top 590).
+    ///
+    /// Tap the fake's text field. With the keyboard up the page must still
+    /// start below the bar and end at the keyboard's top edge. Shown to fail
+    /// on 377c539 by the gap check; the simulator's screenshot still read
+    /// white there, so the pixel check is a backstop, not the instrument.
+    func testTypingInThePageKeepsItOnScreen() async throws {
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         extra: ["-UITestReportSafeArea"])
+        defer { app.terminate() }
+        _ = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 30) { $0["ws"] as? String == "ws:open" }
+        let web = app.webViews.firstMatch
+        XCTAssertTrue(web.appears(within: 10), "the web view is on screen")
+        let safeTop = windowSafeTop(app)
+        let field = web.textFields["Message"]
+        XCTAssertTrue(field.appears(within: 10), "the fake dashboard has a text field")
+        field.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 10), "tapping the field brings up the keyboard")
+        try await settle(app, web: web, landscape: false)
+
+        let webFrame = web.frame, keyboardTop = Double(keyboard.frame.minY)
+        let midY = Double(webFrame.midY)
+        // Right of the page's text, which is left-aligned and short.
+        let colour = pixel(app, x: Double(app.frame.width) - 24, y: midY)
+        let line = "KEYBOARD: webViewFrame=\(webFrame) keyboardTop=\(keyboardTop) windowSafeTop=\(safeTop)"
+            + " pixelAt(\(midY))=\(colour.map { "\($0)" } ?? "-")"
+        print(line)
+        add(XCTAttachment(string: line))
+        add(XCTAttachment(screenshot: XCUIScreen.main.screenshot()))
+
+        XCTAssertEqual(Double(webFrame.minY), safeTop + Self.appBarHeight, accuracy: 0.5,
+                       "the page still starts below the bar")
+        // XCUITest's keyboard is the keys alone. Above them sit the prediction
+        // row and WebKit's form bar (^ v ✓), 112 pt on the iPhone 17, and the
+        // page ends on top of those. 377c539 left 484 pt; the home-indicator
+        // padding kept with the keyboard up would leave 136.
+        let gap = keyboardTop - Double(webFrame.maxY)
+        XCTAssertTrue((0...120).contains(gap),
+                      "the page ends just above the keyboard's bars, not \(gap) pt above the keys: \(line)")
+        let (r, g, b) = colour ?? (0, 0, 0)
+        XCTAssertTrue(r > 200 && g > 200 && b > 200,
+                      "the page is drawn between the bar and the keyboard, not black: \(line)")
+        XCTAssertTrue(field.isHittable, "and the field being typed into is on screen")
+    }
+
     /// Every hittable element outside the web view's subtree whose frame
     /// overlaps `webFrame` by more than a hairline, as "id-or-label frame".
     /// One snapshot for the tree; hittability is asked only of the overlaps.
@@ -763,9 +814,14 @@ final class OfflineHarnessTests: XCTestCase {
     /// the island and above the web view when `y` is just short of the
     /// safe-area top. sRGB, 0–255.
     private func stripPixel(_ app: XCUIApplication, y: Double) -> (Int, Int, Int)? {
+        pixel(app, x: Double(app.frame.width) / 2, y: y)
+    }
+
+    /// The screen's colour at (`x`, `y`) points. sRGB, 0–255.
+    private func pixel(_ app: XCUIApplication, x: Double, y: Double) -> (Int, Int, Int)? {
         guard y > 0, let cg = XCUIScreen.main.screenshot().image.cgImage else { return nil }
         let scale = Double(cg.width) / Double(app.frame.width)
-        let px = Int(Double(cg.width) / 2), py = Int(y * scale)
+        let px = Int(x * scale), py = Int(y * scale)
         var rgba = [UInt8](repeating: 0, count: 4)
         let drawn: Bool = rgba.withUnsafeMutableBytes { buf in
             guard let space = CGColorSpace(name: CGColorSpace.sRGB),

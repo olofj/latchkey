@@ -196,6 +196,9 @@ private struct DashboardContent: View {
     /// How much of the bottom safe area the page takes (Olof, F13): 34pt on
     /// an iPhone 17 leaves 24, still clear of the home indicator.
     static let bottomReclaim: CGFloat = 10
+    /// The bottom safe area without the keyboard's, measured by a reader that
+    /// ignores the keyboard. Unmeasured, it is taken as "no keyboard".
+    @State private var containerBottom = CGFloat.infinity
 
     var body: some View {
         Group {
@@ -205,10 +208,22 @@ private struct DashboardContent: View {
                     // again, whatever is ignored outside it (F13): that is what
                     // ended the page 34pt above the screen edge. The page takes
                     // 10pt of it back and stays clear of the home indicator.
+                    // With the keyboard up the inset is the keyboard's, which
+                    // the stack already keeps the page above: padding by it
+                    // again left the page no height at all, a black screen.
                     GeometryReader { geo in
+                        let inset = geo.safeAreaInsets.bottom
+                        let keyboardUp = inset > containerBottom + 0.5
                         gatewayContent
-                            .padding(.bottom, max(0, geo.safeAreaInsets.bottom - Self.bottomReclaim))
-                            .ignoresSafeArea(.container, edges: .bottom)
+                            .padding(.bottom, keyboardUp ? 0 : max(0, inset - Self.bottomReclaim))
+                            .ignoresSafeArea(.container, edges: .bottom)                    }
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.onChange(of: geo.safeAreaInsets.bottom, initial: true) {
+                                containerBottom = $1
+                            }
+                        }
+                        .ignoresSafeArea(.keyboard)
                     }
 #if canImport(UIKit)
                     .toolbar(.hidden, for: .navigationBar)
