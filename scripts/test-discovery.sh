@@ -140,7 +140,8 @@ fi
 say "R26 sweeps, from the app's own log"
 xcrun simctl spawn "$UDID" log show --start "$LOG_START" \
     --predicate 'subsystem == "net.lixom.latchkey"' --style compact 2>/dev/null \
-    | grep -E "Discovery: (probing|[0-9]+ gateway|probed=|continuing at)" > "$LOG_DIR/sweeps.log" || true
+    | grep -E "Discovery: (probing|[0-9]+ gateway|probed=|continuing at)|Status request abandoned after|LocalAPI loopback (failure|recovered)" \
+    > "$LOG_DIR/sweeps.log" || true
 if ! python3 - "$LOG_DIR/sweeps.log" <<'PY'
 import re, sys
 lines = open(sys.argv[1]).read().splitlines()
@@ -149,6 +150,16 @@ purgatory_sig = (4, 4, 0, 0, 4)
 # skipped-peer tests: four peers, gw declined for its OS or its owner, so three
 # probed -- dash answers, plain and slow do not.
 expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2), (3, 4, 0, 1, 2), purgatory_sig}
+# F16's stalled loopback (testAStalledLoopbackEndsTheSearchWithinSeconds and
+# testAStalledLoopbackIsReplacedAndTheSearchThenFindsTheGateway): the node's own
+# listener accepts and never answers, so every probe fails and none answers --
+# the same signature as purgatory. It is told apart by what only a silent
+# loopback logs inside the sweep's window, the bounded status request being
+# abandoned, and counted on its own: exactly one per F16 test. The purgatory
+# count stays exactly one.
+stalled_sig = purgatory_sig
+STALLED_SWEEPS = 2
+abandoned_re = re.compile(r"Status request abandoned after 3 s \(([12]) of 2 before loopback recovery\)$")
 # F7's large-tailnet tests present 40+ synthetic peers, and how many of those a
 # 12 s sweep reaches varies by a dozen from run to run. Enumerating those
 # signatures would be enumerating the scheduler. Above this many peers the
@@ -157,6 +168,7 @@ expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2), (3, 4, 0, 1, 2), purgatory_sig}
 # have probed is what it reports.
 SMALL_TAILNET = 5
 bad, found, probing, purgatory, continuing = [], 0, None, 0, False
+stalled, abandoned_in_sweep, abandoned_lines, recoveries = 0, False, 0, 0
 pending = None   # a summary awaiting its `probed=` line
 def close(p):
     """Check a summary once its probed= line is in (or turned out to be absent).
@@ -193,11 +205,24 @@ def close(p):
         bad.append("sweep %s says it was not truncated but probed %d of %d: %s"
                    % (sig, probed, candidates, l))
 for l in lines:
+    if "Status request abandoned after" in l:
+        if not abandoned_re.search(l):
+            bad.append("an abandoned status request logged in an unexpected form: %s" % l)
+        abandoned_lines += 1
+        if probing is not None:
+            abandoned_in_sweep = True
+        continue
+    if re.search(r"LocalAPI loopback recovered", l):
+        recoveries += 1
+        continue
+    if "LocalAPI loopback failure" in l:
+        continue
     m = re.search(r"Discovery: probing (\d+) of (\d+) peer", l)
     if m:
         close(pending); pending = None
         probing = (int(m.group(1)), int(m.group(2)))
         continuing = False
+        abandoned_in_sweep = False
         continue
     if re.search(r"Discovery: continuing at candidate \d+ of \d+", l):
         continuing = True
@@ -217,6 +242,9 @@ for l in lines:
     n, sweep, answered, failed = int(m.group(1)), int(m.group(3)), int(m.group(4)), int(m.group(5))
     shown = m.group(6)
     sig = (probing or (0, 0)) + (n, answered, failed)
+    is_stalled = abandoned_in_sweep and sig == stalled_sig
+    if abandoned_in_sweep and not is_stalled:
+        bad.append("a status request was abandoned during a sweep that is not F16's stalled one %s: %s" % (sig, l))
     print("    probed %s of %s: %d gateway(s), %d answered, %d failed; sweep %d ms; picker to first %s"
           % (sig[0], sig[1], n, answered, failed, sweep, shown + (" ms" if shown != "—" else "")))
     if sweep < 4000 or sweep > 15000:
@@ -224,7 +252,8 @@ for l in lines:
     if n and (shown == "—" or int(shown) > 5000):
         bad.append("first gateway %s after the picker appeared (budget 5 s): %s" % (shown, l))
     found += n > 0
-    purgatory += sig == purgatory_sig
+    stalled += is_stalled
+    purgatory += sig == purgatory_sig and not is_stalled
     pending = (sig, sweep, answered, failed, None, continuing, l)
     probing = None
 close(pending)
@@ -234,6 +263,17 @@ if not found:
 if purgatory != 1:
     print("error: %d sweeps in which every peer failed; the rehearsal's purgatory sweep is exactly one" % purgatory)
     sys.exit(1)
+# F16 §4.1's instrument, by the app's own words: each stalled sweep ended on an
+# abandoned status request, and the two-strike trigger replaced the loopback.
+if stalled != STALLED_SWEEPS:
+    print("error: %d stalled-loopback sweeps (every probe failed, a status request abandoned); expected %d, one per F16 test"
+          % (stalled, STALLED_SWEEPS))
+    sys.exit(1)
+if recoveries < 1:
+    print("error: the stalled loopback was never replaced: no 'LocalAPI loopback recovered' line")
+    sys.exit(1)
+print("    F16: %d stalled sweep(s), %d abandoned status request(s), %d loopback recovery(ies)"
+      % (stalled, abandoned_lines, recoveries))
 if bad:
     print("error:")
     for b in bad:

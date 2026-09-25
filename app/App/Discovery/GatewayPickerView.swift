@@ -290,6 +290,16 @@ struct GatewayPickerView: View {
                         .accessibilityIdentifier("gateway-sweep-done")
                         .opacity(0.01)
                 }
+#if LATCHKEY_TEST_HOOKS
+                // F16: the chaos hook's progress ("damaged", then "recovered"
+                // once the loopback is replaced), which the dashboard's own
+                // copy of this element cannot show while the picker is up.
+                if TSNetManager.tcpChaosTestRequested(), let status = model.tcpChaosTestStatus {
+                    Text(status)
+                        .accessibilityIdentifier("tcp-chaos-test-status")
+                        .opacity(0.01)
+                }
+#endif
             }
         }
         .onAppear {

@@ -220,7 +220,7 @@ fi
 # tests hold the budgets.
 say "timings"
 grep -h "^LIFECYCLE " "$LOG_DIR/test.log" | sed 's/^/    /' || true
-grep -E "LocalAPI loopback (failure|recovered|replacement)|TCP chaos test|sockslog: restarting|sockslog: relay listener|proxyConfig: endpoint replaced|Proxy endpoint republished" "$UNIFIED" \
+grep -E "LocalAPI loopback (failure|recovered|replacement)|Status request abandoned|TCP chaos test|sockslog: restarting|sockslog: relay listener|proxyConfig: endpoint replaced|Proxy endpoint republished" "$UNIFIED" \
     | sed -E 's/^([^ ]+ [^ ]+) .*\] /    \1  /' || true
 sed 's/^/    freezer: /' "$FREEZER_LOG" || true
 # R30's instrument: the relay test must have made the app restart its relay
@@ -231,6 +231,18 @@ if [[ $TEST_RC -eq 0 ]] && { ! grep -q "sockslog: restarting the relay listener"
         || ! grep -q "proxyConfig: endpoint replaced" "$UNIFIED" \
         || ! grep -q "retrying the failed page" "$UNIFIED"; }; then
     echo "error: the app's log shows no relay listener restart, endpoint republication and page retry (R30)" >&2
+    TEST_RC=1
+fi
+
+# F16's instrument: the stalled-loopback test must have been repaired by the
+# two-strike trigger, by the app's own log -- two status requests abandoned at
+# 3 s in a row, then a recovery whose cause is the abandoned request. Without
+# those lines it passed on something else (a -1004 from the bus, say). The
+# exact abandoned line is F16 §4.1's.
+if [[ $TEST_RC -eq 0 ]] && { ! grep -q "Status request abandoned after 3 s (1 of 2 before loopback recovery)" "$UNIFIED" \
+        || ! grep -q "Status request abandoned after 3 s (2 of 2 before loopback recovery)" "$UNIFIED" \
+        || ! grep -q "LocalAPI loopback failure: LoopbackStatusTimeout" "$UNIFIED"; }; then
+    echo "error: the app's log shows no two-strike loopback recovery after abandoned status requests (F16)" >&2
     TEST_RC=1
 fi
 

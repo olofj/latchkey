@@ -102,7 +102,8 @@ go_tests() {  # dir, -run pattern, package
 }
 vendored_go_tests() {
     go_tests "$APP/ThirdParty/libtailscale" 'LocalLog|OSLog' . \
-        && go_tests "$APP/ThirdParty/libtailscale/tailscale-patched" Latchkey ./logtail/
+        && go_tests "$APP/ThirdParty/libtailscale/tailscale-patched" Latchkey ./logtail/ \
+        && go_tests "$APP/ThirdParty/libtailscale/tailscale-patched" Latchkey ./tsnet/
 }
 run "vendored Go tests" vendored_go_tests
 run "L1 offline" "$ROOT/scripts/test-offline.sh" $(build_flag)

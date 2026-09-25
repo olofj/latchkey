@@ -526,11 +526,82 @@ final class DiscoveryTests: XCTestCase {
                       "probed anyway, a colleague's gateway answers like any other")
     }
 
+    // MARK: - F16: a loopback that accepts and never answers
+
+    /// The node's own loopback goes silent before the first sweep starts
+    /// (`-UITestStallLoopback`, with delay 0 so it lands before the status that
+    /// starts the sweep). Every probe rides that listener, so none answers; the
+    /// sweep then asks the loopback itself, and that question is bounded at 3 s
+    /// (F16 §4.1). So the picker leaves "Searching…" for P6 within seconds.
+    /// Before F16 the question waited out TailscaleKit's 60 s timeout, and the
+    /// picker read "Searching…" for about 64-72 s: the owner's "scan didn't
+    /// work" of 2026-09-24. The exact "Status request abandoned after 3 s" log
+    /// line is checked by scripts/test-discovery.sh from the unified log.
+    func testAStalledLoopbackEndsTheSearchWithinSeconds() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestStallLoopback", "-UITestTCPChaosDelay", "0"])
+        defer { app.terminate() }
+
+        XCTAssertTrue(element(app, "gateway-searching").waitForExistence(timeout: 60), "the sweep starts")
+        let searchingAt = Date()
+        XCTAssertTrue(element(app, "gateway-proxy-unhealthy").waitForExistence(timeout: 30),
+                      "the sweep ends in P6: nothing answered, and neither did the node's own proxy")
+        let took = Date().timeIntervalSince(searchingAt)
+        XCTAssertLessThanOrEqual(took, 16, "P6 within 16 s of the search starting, not about a minute (\(took) s)")
+        XCTAssertNotEqual(element(app, "gateway-refresh").label, "Searching…", "and the button no longer says so")
+        // Not vacuous: the stall came before the sweep, so no probe got an
+        // answer. A probe that got through would make this a different test.
+        let done = try sweepDone(app)
+        XCTAssertEqual(done.answered, 0, "no probe crossed a silent loopback: \(done)")
+        XCTAssertEqual(done.unanswered, 4, "all four peers were tried: \(done)")
+        print("F16 DISCOVERY: searching -> P6 \(String(format: "%.1f", took)) s")
+    }
+
+    /// The same silent loopback, then what repairs it: two abandoned status
+    /// requests in a row (the sweep's own and the 5 s poll's) replace the
+    /// loopback as a refused one is replaced, with nothing tapped. The hook's
+    /// stall belongs to the listener it marked, and the replacement is
+    /// unmarked, so it is the recovery that makes the next search work, and
+    /// the gateway is found, chosen by itself and loaded.
+    func testAStalledLoopbackIsReplacedAndTheSearchThenFindsTheGateway() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestStallLoopback", "-UITestTCPChaosDelay", "0"])
+        defer { app.terminate() }
+
+        XCTAssertTrue(element(app, "gateway-searching").waitForExistence(timeout: 60), "the sweep starts")
+        let searchingAt = Date()
+        XCTAssertTrue(element(app, "gateway-proxy-unhealthy").waitForExistence(timeout: 30), "the stalled sweep ends in P6")
+
+        // "recovered" is set by the loopback recovery and nothing else.
+        let chaos = element(app, "tcp-chaos-test-status")
+        var recoveredAfter: TimeInterval?
+        while Date().timeIntervalSince(searchingAt) < 30 {
+            if chaos.exists, chaos.label == "recovered" {
+                recoveredAfter = Date().timeIntervalSince(searchingAt)
+                break
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        let recovered = try XCTUnwrap(recoveredAfter,
+            "the loopback is replaced with nothing tapped (status: \(chaos.exists ? chaos.label : "absent"))")
+        XCTAssertLessThanOrEqual(recovered, 25, "within 25 s of the search starting (\(recovered) s)")
+
+        try await resetFakes()
+        element(app, "gateway-refresh").tap()
+        let sheet = element(app, "token-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 75),
+                      "the search over the replaced loopback finds the gateway, chooses it and loads it")
+        XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.gatewayHost))
+        let requests = try await gatewayState()["requests"] as? [String] ?? []
+        XCTAssertEqual(requests.first, "GET /manifest.json", "the gateway was probed after the recovery: \(requests.prefix(3))")
+        print("F16 DISCOVERY: searching -> loopback recovered \(String(format: "%.1f", recovered)) s")
+    }
+
     // MARK: - Helpers
 
-    private func launch() -> XCUIApplication {
+    private func launch(extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-UITestResetWorkspaces", "-TestControlURL", Self.controlURL]
+        app.launchArguments = ["-UITestResetWorkspaces", "-TestControlURL", Self.controlURL] + extra
         app.launch()
         return app
     }

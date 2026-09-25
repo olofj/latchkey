@@ -100,6 +100,19 @@ final class LifecycleHarnessTests: XCTestCase {
         try await runTCPChaos(hook: "-UITestDefunctLoopback", expectsLoopbackRecovery: true)
     }
 
+    /// The tsnet loopback listener goes silent under a live page
+    /// (`-UITestStallLoopback`, F16): it accepts every new connection and
+    /// never answers, while the ones already accepted carry on. Nothing is
+    /// refused, so no -1004 or -1005 ever arrives. What notices is the bounded
+    /// status poll: two requests abandoned at 3 s in a row, and the listener is
+    /// replaced ("recovered"). Before F16 each poll waited out TailscaleKit's
+    /// 60 s timeout and ended in a -1001 that started nothing, so the status
+    /// stayed "damaged" for good. Then, as for the closed listener, a NEW
+    /// connection must get through the replacement.
+    func testAStalledLoopbackUnderALivePageIsRecovered() async throws {
+        try await runTCPChaos(hook: "-UITestStallLoopback", expectsLoopbackRecovery: true)
+    }
+
     /// Both hooks, up to the cut: the dashboard is up over the tailnet, the
     /// hook fires, and after the cut the page reconnects through whatever
     /// WebKit has then, the dash peer journals it, and no error page shows.
@@ -138,8 +151,9 @@ final class LifecycleHarnessTests: XCTestCase {
         let cutAt: Date
         var recoverySeconds = 0.0
         if expectsLoopbackRecovery {
-            // The listener was CLOSED: the app notices from a LocalAPI failure
-            // (the IPN stream or the 5-s poll) and replaces it. The page's
+            // The listener was CLOSED, or went silent (F16): the app notices
+            // from a LocalAPI failure (the IPN stream or the 5-s poll; for a
+            // silent one, two bounded polls abandoned) and replaces it. The page's
             // accepted socket survived, so drop it as a gateway restart does;
             // the reconnect then has to reach the REPLACEMENT listener.
             let recoveredAt = try await waitForChaosStatus(app, chaos, oneOf: ["recovered"], timeout: 45)
