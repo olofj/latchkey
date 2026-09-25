@@ -11,11 +11,28 @@
 # Ports: the control plane on 127.0.0.1:8490 (the app's -TestControlURL) and
 # the test API on 127.0.0.1:8491. The dash peer forwards to the fake dashboard
 # on 127.0.0.1:8443, which `up` starts through ../harness.
+#
+# INSTANCE=k (0-9, F14) runs this harness and its fake dashboard beside
+# another instance: ports move up by 100*k, as ../harness's do, and state,
+# pidfile, log and binary live in .run/i<k>. INSTANCE=0 is the old layout.
 
-CONTROL_PORT ?= 8490
-API_PORT     ?= 8491
-DASH_PORT    ?= 8443
-RUN_DIR      ?= .run
+INSTANCE     ?= 0
+ifeq ($(filter $(INSTANCE),0 1 2 3 4 5 6 7 8 9),)
+  $(error INSTANCE must be one of 0-9, not '$(INSTANCE)')
+endif
+port = $(shell echo $$(( $(1) + 100 * $(INSTANCE) )))
+CONTROL_PORT ?= $(call port,8490)
+API_PORT     ?= $(call port,8491)
+DASH_PORT    ?= $(call port,8443)
+PORT_VARS    := CONTROL_PORT API_PORT DASH_PORT
+$(foreach v,$(PORT_VARS),$(eval $(v) := $($(v))))
+ifeq ($(INSTANCE),0)
+  RUN_DIR    ?= .run
+else
+  RUN_DIR    ?= .run/i$(INSTANCE)
+endif
+# The fake dashboard of the same instance, on the port the dash peer forwards to.
+DASH_MAKE    = $(MAKE) -C ../harness --no-print-directory INSTANCE=$(INSTANCE) DASH_PORT=$(DASH_PORT)
 # Extra harness flags, e.g. HARNESS_ARGS="-gateway 127.0.0.1:8444 -slow-peer"
 # for the discovery suite (M5). Plain `=`: only the make command line can set
 # it, never an exported environment variable (M5 review).
@@ -26,6 +43,12 @@ LOG          := $(RUN_DIR)/tsnet-harness.log
 STATE        := $(CURDIR)/$(RUN_DIR)/state
 CHECK_STATE  := $(CURDIR)/$(RUN_DIR)/check-state
 
+.PHONY: ports
+ports:  ## Print this INSTANCE's ports and run dir, one NAME=value per line
+	@echo INSTANCE=$(INSTANCE)
+	@$(foreach v,$(PORT_VARS),echo $(v)=$($(v));)
+	@echo RUN_DIR=$(CURDIR)/$(RUN_DIR)
+
 .PHONY: build
 build:  ## Build the harness
 	@mkdir -p $(RUN_DIR)
@@ -33,7 +56,7 @@ build:  ## Build the harness
 
 .PHONY: up
 up: build down  ## Start the fake dashboard and the harness
-	@$(MAKE) -C ../harness --no-print-directory harness-up
+	@$(DASH_MAKE) harness-up
 	@for port in $(CONTROL_PORT) $(API_PORT); do \
 	    pids=$$(lsof -nP -iTCP:$$port -sTCP:LISTEN -t 2>/dev/null || true); \
 	    if [ -n "$$pids" ]; then \
@@ -57,7 +80,7 @@ up: build down  ## Start the fake dashboard and the harness
 	    sleep 0.1; \
 	done; \
 	if [ $$ok -ne 1 ]; then echo "error: tsnet-harness not ready after 30s" >&2; cat $(LOG); exit 1; fi
-	@echo "::: tsnet harness up — control http://127.0.0.1:$(CONTROL_PORT), api :$(API_PORT) :::"
+	@echo "::: tsnet harness$(if $(filter-out 0,$(INSTANCE)), $(INSTANCE),) up — control http://127.0.0.1:$(CONTROL_PORT), api :$(API_PORT) :::"
 
 .PHONY: down
 down:  ## Stop the harness and the fake dashboard
@@ -73,7 +96,7 @@ down:  ## Stop the harness and the fake dashboard
 	    fi; \
 	    rm -f $(PID); \
 	fi
-	@$(MAKE) -C ../harness --no-print-directory harness-down >/dev/null
+	@$(DASH_MAKE) harness-down >/dev/null
 	@echo "::: tsnet harness down :::"
 
 .PHONY: reap
@@ -89,7 +112,7 @@ reap:  ## Stop strays on the harness ports (only processes run from here)
 	    done; \
 	done
 	@rm -f $(PID)
-	@$(MAKE) -C ../harness --no-print-directory harness-reap
+	@$(DASH_MAKE) harness-reap
 
 .PHONY: check
 check: build  ## Host-side self-test (needs the fake dashboard; starts and stops it)
@@ -103,12 +126,12 @@ check: build  ## Host-side self-test (needs the fake dashboard; starts and stops
 	        echo "error: 127.0.0.1:$$port is in use; a stray? make reap" >&2; exit 1; \
 	    fi; \
 	done
-	@$(MAKE) -C ../harness --no-print-directory harness-up
+	@$(DASH_MAKE) harness-up
 	@status=0; \
 	$(BIN) -selftest -ca ../harness/ca.pem -control 127.0.0.1:$(CONTROL_PORT) \
 	    -api 127.0.0.1:$(API_PORT) -dashboard 127.0.0.1:$(DASH_PORT) -state $(CHECK_STATE) \
 	    -gateway 127.0.0.1:$(DASH_PORT) -slow-peer || status=$$?; \
-	$(MAKE) -C ../harness --no-print-directory harness-down >/dev/null; \
+	$(DASH_MAKE) harness-down >/dev/null; \
 	rm -rf $(CHECK_STATE); \
 	exit $$status
 

@@ -21,6 +21,10 @@
 #
 # On failure: a screenshot, the harness logs and the xcresult are left under
 # app/build/tailnet-logs/<timestamp>/.
+#
+# LATCHKEY_INSTANCE=k (0-9, default 0) runs against harness instance k, on
+# its own ports (testing/tsnet-harness/Makefile, F14); as in test-offline.sh,
+# give each run its own SIM_NAME and build once beforehand.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,12 +32,29 @@ APP="$ROOT/app"
 HARNESS="$ROOT/testing/harness"
 TSNET="$ROOT/testing/tsnet-harness"
 SIM_NAME="${SIM_NAME:-iPhone 17}"
+INSTANCE="${LATCHKEY_INSTANCE:-0}"
+[[ "$INSTANCE" =~ ^[0-9]$ ]] || { echo "error: LATCHKEY_INSTANCE must be 0-9, not '$INSTANCE'" >&2; exit 1; }
+TMAKE=(make -C "$TSNET" --no-print-directory INSTANCE="$INSTANCE")
+# This instance's ports and run dirs, for the tests (xcodebuild hands
+# TEST_RUNNER_<NAME> to the test runner as <NAME>: UITestSupport.swift,
+# HarnessInstance) and for this script. The fake dashboard's come from
+# ../harness, the same instance `make up` starts.
+TSNET_RUN_DIR= HARNESS_RUN_DIR=
+while IFS='=' read -r name value; do
+    case "$name" in
+        RUN_DIR) if [[ -z "$TSNET_RUN_DIR" ]]; then TSNET_RUN_DIR=$value; else HARNESS_RUN_DIR=$value; fi ;;
+        INSTANCE) export "TEST_RUNNER_LATCHKEY_HARNESS_INSTANCE=$value" ;;
+        *) export "TEST_RUNNER_LATCHKEY_$name=$value" ;;
+    esac
+done < <("${TMAKE[@]}" -s ports; make -C "$HARNESS" -s --no-print-directory INSTANCE="$INSTANCE" ports)
+[[ -n "$HARNESS_RUN_DIR" ]] || { echo "error: make ports named no RUN_DIR" >&2; exit 1; }
 # The tsnet harness's plain-HTTP test API (testing/tsnet-harness/main.go, -api).
-HARNESS_API="${HARNESS_API:-http://127.0.0.1:8491}"
+HARNESS_API="${HARNESS_API:-http://127.0.0.1:$TEST_RUNNER_LATCHKEY_API_PORT}"
 BUILD=0
 [[ "${1:-}" == "--build" ]] && BUILD=1
 
 LOG_DIR="$APP/build/tailnet-logs/$(date +%Y%m%d-%H%M%S)"
+[[ "$INSTANCE" == 0 ]] || LOG_DIR+="-i$INSTANCE"
 mkdir -p "$LOG_DIR"
 START=$(date +%s)
 say() { printf '::: %s\n' "$*"; }
@@ -65,7 +86,7 @@ EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/TailnetHarnessT
 
 # ------------------------------------------------------------------ harness --
 teardown() {
-    make -C "$TSNET" --no-print-directory down >/dev/null 2>&1 || true
+    "${TMAKE[@]}" down >/dev/null 2>&1 || true
 }
 trap teardown EXIT
 # The self-test proves the harness, not the app: it reruns only when the
@@ -89,13 +110,13 @@ if [[ "${SELFTEST:-auto}" != always && -z "$(git -C "$APP" status --porcelain --
     say "tsnet harness self-test: skipped (unchanged since it last passed; SELFTEST=always forces it)"
 else
     say "tsnet harness self-test"
-    make -C "$TSNET" --no-print-directory check > "$LOG_DIR/selftest.log" 2>&1 \
+    "${TMAKE[@]}" check > "$LOG_DIR/selftest.log" 2>&1 \
         || { cat "$LOG_DIR/selftest.log" >&2; echo "error: the harness self-test failed" >&2; exit 1; }
     grep -E "^(==>|selftest)" "$LOG_DIR/selftest.log" | sed 's/^/    /'
     mkdir -p "$TSNET/.run" && echo "$SELFTEST_HASH" > "$SELFTEST_STAMP"
 fi
 say "harness up"
-make -C "$TSNET" --no-print-directory up
+"${TMAKE[@]}" up
 
 # ---------------------------------------------------------------- simulator --
 say "simulator: $SIM_NAME"
@@ -222,7 +243,7 @@ fi
 ELAPSED=$(( $(date +%s) - START ))
 if [[ $TEST_RC -ne 0 ]]; then
     xcrun simctl io "$UDID" screenshot "$LOG_DIR/failure.png" >/dev/null 2>&1 || true
-    cp "$TSNET/.run/"*.log "$HARNESS/.run/"*.log "$LOG_DIR/" 2>/dev/null || true
+    cp "$TSNET_RUN_DIR/"*.log "$HARNESS_RUN_DIR/"*.log "$LOG_DIR/" 2>/dev/null || true
     curl -s "$HARNESS_API/state" > "$LOG_DIR/harness-state.json" 2>/dev/null || true
     say "FAILED in ${ELAPSED}s — logs, screenshot and xcresult in $LOG_DIR"
     exit 1

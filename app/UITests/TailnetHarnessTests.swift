@@ -22,7 +22,8 @@
 //  in public DNS, so there is no other way for it to load.
 //
 //  Needs both harnesses up and the test CA trusted: `scripts/test-tailnet.sh`
-//  (parent repo). Endpoints must match testing/tsnet-harness/Makefile.
+//  (parent repo). Endpoints are testing/tsnet-harness/Makefile's, for the
+//  instance the script names (HarnessInstance).
 //
 
 import XCTest
@@ -30,9 +31,9 @@ import XCTest
 @MainActor
 final class TailnetHarnessTests: XCTestCase {
 
-    static let controlURL = "http://127.0.0.1:8490"
-    static let harnessAPI = "http://127.0.0.1:8491"
-    static let dashboardControl = "http://127.0.0.1:8480"
+    static let controlURL = "http://127.0.0.1:\(HarnessInstance.port("CONTROL_PORT", default: 8490))"
+    static let harnessAPI = "http://127.0.0.1:\(HarnessInstance.port("API_PORT", default: 8491))"
+    static let dashboardControl = "http://127.0.0.1:\(HarnessInstance.port("DASH_CONTROL_PORT", default: 8480))"
     static let gateway = "https://dash.tail-scale.ts.net"
     static let gatewayHost = "dash.tail-scale.ts.net"
 
@@ -48,6 +49,9 @@ final class TailnetHarnessTests: XCTestCase {
             XCTFail("The L2 harness is not running. Use scripts/test-tailnet.sh (parent repo).")
             return
         }
+        // The fake dashboard is started by the same `make up` as the tsnet
+        // harness, with the same instance, so checking it checks both.
+        try await HarnessInstance.assertIsOurs("\(Self.dashboardControl)/__state")
         _ = try await Self.post("\(Self.dashboardControl)/__reset")
     }
 
