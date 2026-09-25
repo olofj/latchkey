@@ -3207,3 +3207,44 @@ the review's fixes (budget 240 s, unchanged; the ten F6 tests are about
 host suites. **Not yet:** the session suite, whose pinned 0.6.0 bundle is
 no longer on this Mac, so the real-bundle connection test, its control and
 the session regression net are committed unrun.
+
+## 2026-09-25 — F17 built: another app opens only from a tap (issue #2, R42)
+
+**Decision:** every URL that `NavigationPolicy` sends out of the app now
+goes through `BrowserViewModel.handOff`, which applies `HandOffPolicy`.
+Web, `mailto:` and `tel:` open silently only when a tap started them.
+When no tap did, the app asks first. Any other scheme asks when tapped
+and is refused when not. After the owner cancels an untapped ask,
+untapped requests are refused until the next tap. Recorded as revision
+**R42**: the same invariant as R41 (content the dashboard renders stays
+inside its origin), applied to handing URLs to other apps.
+
+**Why:** a page script setting `location` to `shortcuts://…` ran the
+shortcut with no tap, and a tapped link to any scheme opened that scheme's
+app with no prompt.
+
+Two findings changed the design:
+
+- **The issue named the wrong function for the untapped path.**
+  `BrowserViewModel.swift:987-992` is `acceptSameDocumentURL`, which only
+  handles URL KVO. The untapped path is `decidePolicyFor navigationAction`,
+  plus `routeNewWindow` for `window.open`.
+- **`navigationType` cannot tell a tap from a script.** A script's
+  `a.click()` reports `.linkActivated`, and a real tap on a button whose
+  handler sets `location` reports `.other`. So the tap signal is a trusted
+  `click`, which a new user script posts from its own content world. It
+  counts only from a frame on the gateway's origin, only within 1 s, and
+  only once. A script can still navigate from inside the owner's own click;
+  every browser has that limit. This is why a tap alone never makes an
+  unknown scheme silent.
+
+**Evidence:** F17 §9. Four new L1 tests. Mutating the code three ways
+(restoring R3's behaviour, silencing the click reporter, removing the mute)
+made each of them fail. The same mutations also showed that the click
+message reaches the app before the navigation decision does: with the
+reporter silenced, R3's tapped-redirect test and F6's `window.open` test
+fail. `scripts/test-offline.sh --build` passed 42/42 in 219 s; the budget
+is 240 s. `make test-policy` is green, with 76 new checks and the 25 R3
+checks unchanged. **Not yet:** device testing. A universal link to an
+installed app should still open without a prompt, but the simulator has
+no such app.

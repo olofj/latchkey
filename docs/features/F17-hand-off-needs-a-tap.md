@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | spec, 2026-09-25 |
+| **Status** | **built 2026-09-25** (`f55b89b`, §9). L1 42/42; `make test-policy` green |
 | **Requested** | [issue #2](https://github.com/olofj/latchkey/issues/2), by Olof: "open known-safe schemes (`mailto`, `tel`, `https` universal links) as today, and confirm or refuse everything else. Never open another app from a navigation the user did not start." |
 | **Revision** | **R42** (`../PLAN-REVISIONS.md`). R3 said a main-frame navigation off the gateway "leaves the app". F6 (R41) tightened the same invariant for subresources. This is the other half: what leaves, and when, is now decided rather than assumed |
 | **Touches** | `App/Browser/NavigationPolicy.swift` (a pure `HandOffPolicy` and `TransientActivation`), `BrowserViewModel` (every hand-off goes through one function, plus the prompt), `PageScripts`/`PageScriptSources` (a trusted-click reporter in its own world), `BrowserView` (the alert), `TabManager` (comment and a result log), the fake dashboard (`handoff` page), L1, the host policy test. `NavigationPolicy.decide`, the rule list, `TSNet/`, and the split tunnel are not changed |
@@ -115,3 +115,14 @@ Host (`make test-policy`): the 25 existing checks stay unchanged. New checks cov
 - On the device: whether a universal link to an installed app still opens with no prompt. It should, because the scheme is `https`. The simulator has no universal-link apps to show it.
 
 ## 9. Log
+
+- 2026-09-25: built in `f55b89b`. The build departs from the text above in these ways:
+  - **`openExternally` has two callers, not one:** `handOff`, and `answerHandOff` when the owner taps Open. §7's grep finds both.
+  - **Cancel is the button with the cancel role, not a keyboard default.** The alert has no other default.
+  - **`window.open` consumes the click when the window is requested**, even if the window turns out to be the gateway's own page. That can cost at most one pending click, and it never prompts.
+- Shown able to fail. Each mutation was built and run against the tests it targets, and the source was restored byte for byte afterwards:
+  - **R3's behaviour restored** (`handOff` always opens): `testATappedLinkToAnotherAppAsksFirst` ("asks before opening Maps"), `testAScriptCannotOpenAnotherAppWithoutATap` (Maps came to the front), and `testAnUntappedLinkAwayAsksOnlyOnce` ("an untapped link away asks") fail. `testATapThatNavigatesByScript…` passes, as it should, because tapped web links were already silent.
+  - **Click reporter silenced** (`recordActivation` returns early): the tapped maps: test, `testATapThatNavigatesByScript…` ("alert: true"), `testRedirectToAnotherOrigin…` and `testWindowOpenToAnotherOrigin…` fail, each because the owner is now asked instead. This is also the measurement §6 asked for: **the trusted click's message reaches the app before the navigation decision**, including a server redirect and a `window.open` from the click handler. If it did not, those two tests would fail on the real build. The untapped tests and the marker test pass.
+  - **No mute:** `testAnUntappedLinkAwayAsksOnlyOnce` fails with "a page that was told no does not get to ask again".
+  - **Host:** 76 new checks. The mutations failed as follows: untapped web opens, 10 checks; any scheme opens, 14; no mute, 5; no expiry, 1; not consumed, 1. The 25 R3 checks are untouched.
+- Verified: `scripts/test-offline.sh --build` passed 42 of 42 (4 new) on 4 simulators in 219 s, against the 240 s budget. The build was stamped `f55b89b13c8d` from a clean tree. `make test-policy` passed.
