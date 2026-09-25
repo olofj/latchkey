@@ -23,6 +23,11 @@
 #
 # On failure: a screenshot and the harness logs are left under
 # app/build/offline-logs/<timestamp>/.
+#
+# LATCHKEY_INSTANCE=k (0-9, default 0) runs against harness instance k, on
+# its own ports (testing/harness/Makefile, F14), so two runs can share the
+# host. Give each its own simulator with SIM_NAME, and build once beforehand:
+# two --build runs at once would race in one DerivedData.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,10 +35,14 @@ APP="$ROOT/app"
 HARNESS="$ROOT/testing/harness"
 SIM_NAME="${SIM_NAME:-iPhone 17}"
 BUNDLE="net.lixom.latchkey"
+INSTANCE="${LATCHKEY_INSTANCE:-0}"
+[[ "$INSTANCE" =~ ^[0-9]$ ]] || { echo "error: LATCHKEY_INSTANCE must be 0-9, not '$INSTANCE'" >&2; exit 1; }
+HMAKE=(make -C "$HARNESS" --no-print-directory INSTANCE="$INSTANCE")
 BUILD=0
 [[ "${1:-}" == "--build" ]] && BUILD=1
 
 LOG_DIR="$APP/build/offline-logs/$(date +%Y%m%d-%H%M%S)"
+[[ "$INSTANCE" == 0 ]] || LOG_DIR+="-i$INSTANCE"
 mkdir -p "$LOG_DIR"
 START=$(date +%s)
 say() { printf '::: %s\n' "$*"; }
@@ -55,7 +64,7 @@ fi
 
 # -------------------------------------------------------------------- certs --
 say "certs"
-make -C "$HARNESS" --no-print-directory certs >/dev/null
+"${HMAKE[@]}" certs >/dev/null
 
 # ---------------------------------------------------------------- simulator --
 say "simulator: $SIM_NAME"
@@ -76,7 +85,7 @@ xcrun simctl uninstall "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------ harness --
 teardown() {
-    make -C "$HARNESS" --no-print-directory harness-down >/dev/null 2>&1 || true
+    "${HMAKE[@]}" harness-down >/dev/null 2>&1 || true
 }
 trap teardown EXIT
 # The harness's own self-test first. It proves the fixtures the tests below
@@ -89,7 +98,7 @@ trap teardown EXIT
 # test-tailnet.sh is minutes, which is why that one is stamped and skipped.)
 say "harness self-test (make check)"
 T0=$(date +%s)
-make -C "$HARNESS" --no-print-directory check > "$LOG_DIR/harness-check.log" 2>&1 \
+"${HMAKE[@]}" check > "$LOG_DIR/harness-check.log" 2>&1 \
     || { cat "$LOG_DIR/harness-check.log" >&2; echo "error: the offline harness's self-test failed" >&2; exit 1; }
 CHECKS=$(grep -c '^==>' "$LOG_DIR/harness-check.log" || true)
 if [[ "$CHECKS" -lt 1 ]]; then
@@ -97,7 +106,17 @@ if [[ "$CHECKS" -lt 1 ]]; then
 fi
 echo "    ok ($CHECKS checks in $(( $(date +%s) - T0 ))s; log: harness-check.log)"
 say "harness"
-make -C "$HARNESS" --no-print-directory harness-up
+"${HMAKE[@]}" harness-up
+# The tests find this instance's ports in their environment: xcodebuild hands
+# TEST_RUNNER_<NAME> to the test runner as <NAME> (UITestSupport.swift,
+# HarnessInstance).
+HARNESS_RUN_DIR=
+while IFS='=' read -r name value; do
+    [[ "$name" == RUN_DIR ]] && { HARNESS_RUN_DIR=$value; continue; }
+    [[ "$name" == INSTANCE ]] && name=HARNESS_INSTANCE
+    export "TEST_RUNNER_LATCHKEY_$name=$value"
+done < <("${HMAKE[@]}" -s ports)
+[[ -n "$HARNESS_RUN_DIR" ]] || { echo "error: make ports named no RUN_DIR" >&2; exit 1; }
 
 # -------------------------------------------------------------------- build --
 SANDBOX_FLAGS=()
@@ -152,6 +171,19 @@ PASSED=$(grep -cE "Test Case .*OfflineHarnessTests.* passed" "$LOG_DIR/test.log"
 if [[ $TEST_RC -eq 0 && "$PASSED" -ne "$EXPECTED" ]]; then
     echo "error: $PASSED of $EXPECTED OfflineHarnessTests passed (a stale build? try --build)" >&2
     TEST_RC=1
+fi
+# A test build from before F14 ignores the ports above and talks to instance
+# 0, whatever this run started. So beside another run, show that this
+# instance's own fake dashboard is the one that served the suite.
+if [[ "$INSTANCE" != 0 ]]; then
+    SERVED=$(grep -c '^\[dash\] ' "$HARNESS_RUN_DIR/dashboard.log" || true)
+    if [[ "$SERVED" -lt 1 ]]; then
+        echo "error: harness instance $INSTANCE's dashboard served nothing, so the suite ran against" >&2
+        echo "       another instance (a test build from before F14? try --build)" >&2
+        TEST_RC=1
+    else
+        echo "    ok (harness instance $INSTANCE's own dashboard served $SERVED requests)"
+    fi
 fi
 
 # ----------------------------------------------------------------- R1 check --
@@ -238,7 +270,7 @@ fi
 ELAPSED=$(( $(date +%s) - START ))
 if [[ $TEST_RC -ne 0 || $LEAK_RC -ne 0 ]]; then
     xcrun simctl io "$UDID" screenshot "$LOG_DIR/failure.png" >/dev/null 2>&1 || true
-    cp "$HARNESS/.run/"*.log "$LOG_DIR/" 2>/dev/null || true
+    cp "$HARNESS_RUN_DIR/"*.log "$LOG_DIR/" 2>/dev/null || true
     say "FAILED in ${ELAPSED}s — logs, screenshot and xcresult in $LOG_DIR"
     exit 1
 fi

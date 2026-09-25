@@ -56,6 +56,41 @@ enum HarnessControl {
     }
 }
 
+/// Which harness instance a run talks to, and on which ports (F14).
+///
+/// Two suite runs at once need two harnesses, so the ports are not constants:
+/// the suite scripts read an instance's ports from `make ports` and hand them
+/// to xcodebuild as `TEST_RUNNER_LATCHKEY_<NAME>`, which reach this process as
+/// `LATCHKEY_<NAME>`. Absent, each is the Makefiles' default (instance 0),
+/// which is what a single run has always used.
+enum HarnessInstance {
+    static let id = ProcessInfo.processInfo.environment["LATCHKEY_HARNESS_INSTANCE"] ?? "0"
+
+    static func port(_ name: String, default fallback: Int) -> Int {
+        guard let raw = ProcessInfo.processInfo.environment["LATCHKEY_\(name)"] else { return fallback }
+        guard let port = Int(raw), (1...65535).contains(port) else {
+            preconditionFailure("LATCHKEY_\(name)=\(raw) is not a port")
+        }
+        return port
+    }
+
+    /// Fails unless the server behind `stateURL` (a control endpoint whose
+    /// JSON carries `instance`) is this run's instance. Ports are the only
+    /// thing keeping two instances apart, and a run that reached its sibling
+    /// would change modes under the sibling's tests and pass on its journal.
+    static func assertIsOurs(_ stateURL: String) async throws {
+        let state = try JSONSerialization.jsonObject(
+            with: try await HarnessControl.get(stateURL)) as? [String: Any]
+        let theirs = state?["instance"] as? String ?? "<none>"
+        guard theirs == id else { throw WrongInstance(url: stateURL, theirs: theirs, ours: id) }
+    }
+
+    struct WrongInstance: Error, CustomStringConvertible {
+        let url: String, theirs: String, ours: String
+        var description: String { "\(url) is harness instance \(theirs), not this run's \(ours)" }
+    }
+}
+
 extension XCUIElement {
     /// `waitForExistence`, polled every 100 ms. XCTest's own wait first looks
     /// about a second after it starts and then once a second (F14 §4.1,

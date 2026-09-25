@@ -746,6 +746,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
 
 class Control(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    instance = "0"
 
     def log_message(self, fmt, *a):
         pass
@@ -765,7 +766,7 @@ class Control(BaseHTTPRequestHandler):
             return self.reply({"reports": REPORTS, "requests": REQUESTS, "paths": list(PATHS),
                                "ws_open": len(WS_OPEN), "front": FRONT_STATUS,
                                "insets": INSETS, "root": ROOT_PROBE or "page",
-                               "handshakes": HANDSHAKES})
+                               "handshakes": HANDSHAKES, "instance": self.instance})
 
     def do_POST(self):
         global FRONT_STATUS, ROOT_PROBE
@@ -897,10 +898,17 @@ def main():
     ap.add_argument("--control-port", type=int, default=8480)
     ap.add_argument("--cert", required=True)
     ap.add_argument("--key", required=True)
-    ap.add_argument("--away-url", default=Page.away_url,
-                    help="where /redirect-away sends the browser (another origin)")
+    ap.add_argument("--away-url",
+                    help="where /redirect-away sends the browser (another origin); "
+                         "default https://dash.localtest.me:<--port>/away-target")
+    ap.add_argument("--instance", default="0",
+                    help="which harness instance this is (F14); /__state reports it")
     a = ap.parse_args()
-    Page.away_url = a.away_url
+    # The away origin is this server under its public loopback name, so it
+    # follows --port: an instance on another port must not send the page to
+    # its sibling's dashboard.
+    Page.away_url = a.away_url or "https://dash.localtest.me:%d/away-target" % a.port
+    Control.instance = a.instance
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(a.cert, a.key)

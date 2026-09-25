@@ -191,7 +191,7 @@ class Control(BaseHTTPRequestHandler):
             with J_LOCK:
                 return self.reply(list(EVENTS))
         if urlparse(self.path).path == "/state":
-            return self.reply(STATE)
+            return self.reply(dict(STATE, instance=ARGS.instance))
         return self.reply({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -233,6 +233,8 @@ def main():
     ap.add_argument("--map", action="append", default=[], metavar="NAME:PORT=IP:PORT",
                     help="fake-MagicDNS mapping, repeatable")
     ap.add_argument("--control-port", type=int, default=0)
+    ap.add_argument("--instance", default="0",
+                    help="which harness instance this is (F14); GET /state reports it")
     ARGS = ap.parse_args()
     ARGS.hostmap = {}
     for m in ARGS.map:

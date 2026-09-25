@@ -21,19 +21,38 @@
 # BLACKHOLE=1 starts the proxy in refuse-every-CONNECT mode, which is the
 # negative fixture: the page load must FAIL rather than quietly succeeding by
 # some direct route.
+#
+# INSTANCE=k (0-9, F14) runs a second, third... harness beside the first:
+# every port moves up by 100*k and the pidfiles, logs and journal live in
+# .run/i<k>, so harness-up and harness-down touch only instance k. The
+# certificates are shared: they name hosts, not ports, and every instance
+# maps the same names to its own listeners. INSTANCE=0, the default, is the
+# layout this file always had. `make ports` prints what an instance uses.
 
 PY           ?= python3
-PROXY_PORT   ?= 1080
-PROXY_CONTROL_PORT ?= 1081
-DASH_PORT    ?= 8443
-DASH_CONTROL_PORT  ?= 8480
-GW_PORT      ?= 8444
-GW_CONTROL_PORT ?= 8481
+INSTANCE     ?= 0
+ifeq ($(filter $(INSTANCE),0 1 2 3 4 5 6 7 8 9),)
+  $(error INSTANCE must be one of 0-9, not '$(INSTANCE)')
+endif
+port = $(shell echo $$(( $(1) + 100 * $(INSTANCE) )))
+PROXY_PORT   ?= $(call port,1080)
+PROXY_CONTROL_PORT ?= $(call port,1081)
+DASH_PORT    ?= $(call port,8443)
+DASH_CONTROL_PORT  ?= $(call port,8480)
+GW_PORT      ?= $(call port,8444)
+GW_CONTROL_PORT ?= $(call port,8481)
+PORT_VARS    := PROXY_PORT PROXY_CONTROL_PORT DASH_PORT DASH_CONTROL_PORT GW_PORT GW_CONTROL_PORT
+# Expand each once, rather than a shell per reference.
+$(foreach v,$(PORT_VARS),$(eval $(v) := $($(v))))
 GW_EXPIRE_IN ?= 0
 PROXY_USER   ?= tsnet
 PROXY_PASS   ?= s3cret
 DASH_HOST    ?= dash.tail-scale.ts.net
-RUN_DIR      ?= .run
+ifeq ($(INSTANCE),0)
+  RUN_DIR    ?= .run
+else
+  RUN_DIR    ?= .run/i$(INSTANCE)
+endif
 JOURNAL      ?= $(RUN_DIR)/proxy.ndjson
 BLACKHOLE    ?= 0
 
@@ -59,9 +78,17 @@ else
   BLACKHOLE_FLAG :=
 endif
 
+.PHONY: ports
+ports:  ## Print this INSTANCE's ports and run dir, one NAME=value per line
+	@echo INSTANCE=$(INSTANCE)
+	@$(foreach v,$(PORT_VARS),echo $(v)=$($(v));)
+	@echo RUN_DIR=$(CURDIR)/$(RUN_DIR)
+
 .PHONY: certs
 certs:  ## Mint the test CA and leaf (no-op if present and unexpired)
-	@./gen-certs.sh
+	@# Instances share the certificates, and two starting at once must not
+	@# both mint them: one would overwrite the CA the other just trusted.
+	@mkdir -p .run && lockf -k .run/certs.lock ./gen-certs.sh
 
 .PHONY: trust
 trust: certs  ## Trust the test CA in the booted simulator
@@ -92,8 +119,8 @@ harness-up: certs harness-down  ## Start the fake dashboard + stub proxy
 	@# connect events -- the exact way this kind of test rots into a no-op.
 	@: > $(JOURNAL)
 	@$(PY) dashboard.py --port $(DASH_PORT) --control-port $(DASH_CONTROL_PORT) \
-		--cert server.pem --key server.key > $(DASH_LOG) 2>&1 & echo $$! > $(DASH_PID)
-	@$(PY) socks5stub.py --port $(PROXY_PORT) \
+		--instance $(INSTANCE) --cert server.pem --key server.key > $(DASH_LOG) 2>&1 & echo $$! > $(DASH_PID)
+	@$(PY) socks5stub.py --port $(PROXY_PORT) --instance $(INSTANCE) \
 		--user $(PROXY_USER) --password $(PROXY_PASS) \
 		--journal $(JOURNAL) $(BLACKHOLE_FLAG) --control-port $(PROXY_CONTROL_PORT) \
 		--map $(DASH_HOST):443=127.0.0.1:$(DASH_PORT) \
@@ -122,7 +149,7 @@ harness-up: certs harness-down  ## Start the fake dashboard + stub proxy
 	        echo "--- $$log ---"; cat $$log 2>/dev/null; exit 1; \
 	    fi; \
 	done
-	@echo "::: harness up — dashboard :$(DASH_PORT), proxy :$(PROXY_PORT)$(if $(BLACKHOLE_FLAG), (BLACKHOLE),) :::"
+	@echo "::: harness$(if $(filter-out 0,$(INSTANCE)), $(INSTANCE),) up — dashboard :$(DASH_PORT), proxy :$(PROXY_PORT)$(if $(BLACKHOLE_FLAG), (BLACKHOLE),) :::"
 
 .PHONY: harness-down
 harness-down:  ## Stop the fake dashboard + stub proxy
@@ -230,6 +257,12 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	count() { curl -s $$DCTL/__state | $(PY) -c "import json,sys; print(json.load(sys.stdin)['requests'].get('$$1', 0))"; }; \
 	echo "==> HTTPS GET through the proxy (the tailnet-name path)"; \
 	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; echo "    ok"; \
+	echo "==> F14: both servers say they are instance $(INSTANCE), and the away origin is this dashboard's port"; \
+	curl -s $$DCTL/__state | grep -q '"instance": *"$(INSTANCE)"'; \
+	curl -s $$CTL/state | grep -q '"instance": *"$(INSTANCE)"'; \
+	loc=$$(curl -sS -o /dev/null -w '%{redirect_url}' --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/redirect-away); \
+	if [ "$$loc" != "https://dash.localtest.me:$(DASH_PORT)/away-target" ]; then \
+	    echo "FAIL: /redirect-away sends the page to '$$loc', not this instance's away origin" >&2; exit 1; fi; echo "    ok"; \
 	echo "==> a wrong proxy password is rejected"; \
 	if curl -sS --fail --cacert ca.pem --proxy socks5h://$(PROXY_USER):wrong@127.0.0.1:$(PROXY_PORT) https://$(DASH_HOST)/ >/dev/null 2>&1; then \
 	    echo "FAIL: a wrong password got through" >&2; exit 1; fi; echo "    ok"; \
@@ -265,13 +298,13 @@ check: harness-up  ## Self-test the harness host-side with curl (no simulator)
 	    assert abs(r['received_at'] - time.time()) < 5 and r['received_seq'] >= 1, r"; echo "    ok"; \
 	echo "==> F4 D10: /__mode?front=502 answers 5xx on a LIVE connection, from the control port"; \
 	curl -sS --fail -X POST "$$DCTL/__mode?front=502" | grep -q '"front": *502'; \
-	code=$$(curl -s -o /tmp/front502.body -w '%{http_code}' --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/); \
+	code=$$(curl -s -o $(RUN_DIR)/front502.body -w '%{http_code}' --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/); \
 	if [ "$$code" != "502" ]; then echo "FAIL: front=502 served $$code, not 502" >&2; exit 1; fi; \
-	if [ -s /tmp/front502.body ]; then echo "FAIL: the 502 carried a body; ReverseProxy sends none" >&2; exit 1; fi; \
+	if [ -s $(RUN_DIR)/front502.body ]; then echo "FAIL: the 502 carried a body; ReverseProxy sends none" >&2; exit 1; fi; \
 	curl -s $$DCTL/__state | grep -q '"front": *502'; \
 	curl -sS --fail -X POST "$$DCTL/__mode?front=0" >/dev/null; \
 	curl -sS --fail --cacert ca.pem --proxy $$PX https://$(DASH_HOST)/ | grep -q "FAKE DASHBOARD"; \
-	rm -f /tmp/front502.body; echo "    ok (and front=0 restores the page)"; \
+	rm -f $(RUN_DIR)/front502.body; echo "    ok (and front=0 restores the page)"; \
 	echo "==> ...and a bad front value is refused rather than silently ignored"; \
 	code=$$(curl -s -o /dev/null -w '%{http_code}' -X POST "$$DCTL/__mode?front=200"); \
 	if [ "$$code" != "400" ]; then echo "FAIL: front=200 answered $$code, not 400" >&2; exit 1; fi; echo "    ok"; \

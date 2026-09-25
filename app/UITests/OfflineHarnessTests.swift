@@ -23,7 +23,8 @@
 //
 //  Needs the harness running and the test CA trusted in the simulator:
 //  `scripts/test-offline.sh` (parent repo) does both, and fails fast if not.
-//  Endpoints must match testing/harness/Makefile's defaults.
+//  Endpoints are testing/harness/Makefile's, for the instance the script
+//  names (HarnessInstance; instance 0 unless told otherwise).
 //
 //  Never use a real tailnet name or address here (R10): on a machine running
 //  Tailscale, a leak to one would SUCCEED through the host's VPN.
@@ -37,10 +38,10 @@ final class OfflineHarnessTests: XCTestCase {
 
     // MARK: - Harness endpoints (testing/harness/Makefile)
 
-    static let proxyEndpoint = "127.0.0.1:1080"
+    static let proxyEndpoint = "127.0.0.1:\(HarnessInstance.port("PROXY_PORT", default: 1080))"
     static let proxyCredential = "s3cret"
-    static let dashboardControl = "http://127.0.0.1:8480"
-    static let proxyControl = "http://127.0.0.1:1081"
+    static let dashboardControl = "http://127.0.0.1:\(HarnessInstance.port("DASH_CONTROL_PORT", default: 8480))"
+    static let proxyControl = "http://127.0.0.1:\(HarnessInstance.port("PROXY_CONTROL_PORT", default: 1081))"
 
     /// The fixture tailnet. Public DNS answers NXDOMAIN for it, so its names
     /// can only ever load through the proxy.
@@ -49,7 +50,7 @@ final class OfflineHarnessTests: XCTestCase {
     /// A PUBLIC name resolving to 127.0.0.1 and ::1, served by the same fake
     /// dashboard. The anti-leak origin (R10): a leaked direct connection to it
     /// would succeed, so a leak is detectable.
-    static let leakOrigin = "https://dash.localtest.me:8443"
+    static let leakOrigin = "https://dash.localtest.me:\(HarnessInstance.port("DASH_PORT", default: 8443))"
 
     override func setUp() async throws {
         continueAfterFailure = false
@@ -61,6 +62,8 @@ final class OfflineHarnessTests: XCTestCase {
             XCTFail("Offline harness is not running. Use scripts/test-offline.sh (parent repo).")
             return
         }
+        try await HarnessInstance.assertIsOurs("\(Self.dashboardControl)/__state")
+        try await HarnessInstance.assertIsOurs("\(Self.proxyControl)/state")
         _ = try await Self.post("\(Self.dashboardControl)/__reset")
         _ = try await Self.post("\(Self.proxyControl)/reset")
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
