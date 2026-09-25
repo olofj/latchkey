@@ -229,12 +229,12 @@ def wait_shards(shards):
             rc = s["proc"].poll()
             elapsed = time.monotonic() - s["t0"]
             if rc is None and elapsed > s["limit"]:
-                os.killpg(s["proc"].pid, signal.SIGTERM)
-                time.sleep(5)
-                try:
-                    os.killpg(s["proc"].pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                for sig in (signal.SIGTERM, signal.SIGKILL):
+                    try:
+                        os.killpg(s["proc"].pid, sig)
+                    except OSError:   # gone, or only zombies left in the group
+                        pass
+                    time.sleep(5)
                 rc = s["proc"].wait()
                 s["timed_out"] = True
             if rc is not None:
@@ -274,14 +274,28 @@ def xcresult_tests(bundle):
     return found
 
 
-def log_failures(shard_dir, name):
-    """A failed test's `error:` lines from the worker's xcodebuild log, for
-    when the xcresult carries no message."""
-    path = os.path.join(shard_dir, "test.log")
-    if not os.path.exists(path):
-        return []
-    return [l.strip() for l in open(path, errors="replace")
-            if " error: " in l and f" {name}]" in l][:10]
+CASE = re.compile(r"^Test Case '-\[\S+ (test\w+)\]' (passed|failed) \((\d+\.\d+) seconds\)")
+ERROR = re.compile(r"^(\S+:\d+): error: -\[\S+ (test\w+)\] : (.*)")
+
+
+def log_tests(shard_dir):
+    """name -> (result, seconds, [failure messages]) from the xcodebuild logs
+    as they were written. A shard killed at its time limit leaves an xcresult
+    with nothing in it, and its log is then the only record of what ran."""
+    found, errors = {}, {}
+    for label in ("suite", "signin"):
+        path = os.path.join(shard_dir, f"{label}.log")
+        if not os.path.exists(path):
+            continue
+        for line in open(path, errors="replace"):
+            m = ERROR.match(line)
+            if m:
+                errors.setdefault(m.group(2), []).append(f"{m.group(1)}: {m.group(3).strip()}")
+            m = CASE.match(line)
+            if m:
+                found[m.group(1)] = ("Passed" if m.group(2) == "passed" else "Failed",
+                                     float(m.group(3)), errors.get(m.group(1), []))
+    return found
 
 
 def sim_state(udid):
@@ -342,14 +356,13 @@ def main():
     # ------------------------------------------------------------ verdict --
     results = {}
     for k, s in shards.items():
-        got = {}
+        got = log_tests(s["dir"])
         for bundle in ("suite.xcresult", "signin.xcresult"):
-            got.update(xcresult_tests(os.path.join(s["dir"], bundle)))
+            for t, (result, secs, msgs) in xcresult_tests(os.path.join(s["dir"], bundle)).items():
+                got[t] = (result, secs, msgs or got.get(t, (0, 0, []))[2])
         s["state_after"] = sim_state(s["udid"])
         for t in s["tests"]:
             result, secs, msgs = got.pop(t, ("Not run", 0.0, []))
-            if result != "Passed" and not msgs:
-                msgs = log_failures(s["dir"], t)
             results.setdefault(t, []).append(
                 {"shard": k, "sim": s["sim"], "result": result, "seconds": secs, "failures": msgs})
         for t, (result, secs, msgs) in got.items():   # ran, but was not this shard's

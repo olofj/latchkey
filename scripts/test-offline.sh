@@ -194,15 +194,41 @@ done < <("${HMAKE[@]}" -s ports)
 # A shard runs the sign-in pass and R1's scan only if the test is its own.
 CLASS="LatchkeyUITests/OfflineHarnessTests"
 SIGNIN="$CLASS/testSignInTokenIsStrippedFromTheAddress"
-run_tests() {   # $1 = label, rest = -only-testing/-skip-testing args
-    local label=$1; shift
+#
+# After a failure the test runner is relaunched for the rest, and xcodebuild
+# can then sit for up to 600 s after the last test, waiting on the first
+# runner (seen serially on 2026-09-23 and in a shard on 2026-09-25). So once
+# every test of the pass has reported, or the runner has printed its closing
+# summary (a test killed with its simulator never reports), and the log has
+# been quiet for 60 s, xcodebuild is stopped and the pass fails, saying why.
+run_tests() {   # $1 = label, $2 = tests in the pass, rest = -only-testing/-skip-testing args
+    local label=$1 want=$2 log="$LOG_DIR/$1.log"; shift 2
     local from=(-project Latchkey.xcodeproj -scheme Latchkey -configuration Testing
                 -derivedDataPath build/DerivedData)
     [[ -n "$XCTESTRUN" ]] && from=(-xctestrun "$XCTESTRUN")
-    (cd "$APP" && xcodebuild test-without-building "${from[@]}" \
+    (cd "$APP" && exec xcodebuild test-without-building "${from[@]}" \
         -destination "platform=iOS Simulator,id=$UDID" -resultBundlePath "$LOG_DIR/$label.xcresult" \
         -parallel-testing-enabled NO -test-timeouts-enabled YES \
-        -default-test-execution-time-allowance 120 "$@") > "$LOG_DIR/$label.log" 2>&1
+        -default-test-execution-time-allowance 120 "$@") > "$log" 2>&1 &
+    local pid=$! size=-1 quiet=0 reported
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 2
+        reported=$(grep -cE "^Test Case '.*' (passed|failed) \(" "$log")
+        if [[ ( $reported -ge $want || $(grep -v '^\s*$' "$log" | tail -1) =~ ^[[:space:]]*Executed\ [0-9]+\ test ) \
+              && $(stat -f %z "$log") == "$size" ]]; then
+            quiet=$(( quiet + 2 ))
+        else
+            quiet=0; size=$(stat -f %z "$log")
+        fi
+        if [[ $quiet -ge 60 ]]; then
+            echo "error: xcodebuild ($label) was still running 60 s after its tests finished" >&2
+            echo "       ($reported of $want reported); stopped it (after a runner relaunch it" >&2
+            echo "       can wait 600 s for nothing)" >&2
+            kill -TERM "$pid" 2>/dev/null; wait "$pid"
+            return 1
+        fi
+    done
+    wait "$pid"
 }
 SUITE_ARGS=(-only-testing:"$CLASS" -skip-testing:"$SIGNIN")
 RUN_SIGNIN=1
@@ -217,8 +243,9 @@ say "OfflineHarnessTests${LATCHKEY_SHARD:+ (shard $LATCHKEY_SHARD, $EXPECTED tes
 set +e
 SUITE_RC=0; SIGNIN_RC=0
 : > "$LOG_DIR/suite.log"; : > "$LOG_DIR/signin.log"
-if [[ ${#SUITE_ARGS[@]} -gt 0 ]]; then run_tests suite "${SUITE_ARGS[@]}"; SUITE_RC=$?; fi
-if [[ $RUN_SIGNIN -eq 1 ]]; then run_tests signin -only-testing:"$SIGNIN"; SIGNIN_RC=$?; fi
+SUITE_WANT=$(( EXPECTED - RUN_SIGNIN ))
+if [[ $SUITE_WANT -gt 0 ]]; then run_tests suite "$SUITE_WANT" "${SUITE_ARGS[@]}"; SUITE_RC=$?; fi
+if [[ $RUN_SIGNIN -eq 1 ]]; then run_tests signin 1 -only-testing:"$SIGNIN"; SIGNIN_RC=$?; fi
 set -e
 TEST_RC=$(( SUITE_RC | SIGNIN_RC ))
 cat "$LOG_DIR/suite.log" "$LOG_DIR/signin.log" > "$LOG_DIR/test.log"
@@ -342,8 +369,6 @@ fi
 # stalls a dial for 22 s (and WebKit's own second dial takes it to ~39 s) --
 # there is no shorter way to hold a connecting state long enough to assert
 # anything about it. A budget that is always exceeded stops being read, so it
-# moved rather than being left to warn on every green run.
-say "passed in ${ELAPSED}s (budget: 240s)"
-if [[ $ELAPSED -gt 240 ]]; then
-    say "WARNING: over the budget of 4 minutes"
-fi
+# moved rather than being left to warn on every green run. Since F14 it is the
+# sharded default's budget: serially L1 cannot get under ~400 s (F14 §9).
+say "passed in ${ELAPSED}s (serial; the 240s budget is the sharded default's)"
