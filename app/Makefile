@@ -207,6 +207,7 @@ test-policy:  ## Run the host-only unit tests (fast; no simulator, no framework)
 	@./scripts/test-gateway-candidates.sh
 	@./scripts/test-diagnostics.sh
 	@./scripts/test-socks-relay-policy.sh
+	@./scripts/test-loopback-stalls.sh
 	@./scripts/test-signout.sh
 	@./scripts/test-share.sh
 	@./scripts/test-fixture-tailnets.sh

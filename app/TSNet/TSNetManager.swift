@@ -284,7 +284,7 @@ final class TSNetManager {
     /// Upstream's L2 recovery hooks (R14 uses them). Test builds only (R15).
     nonisolated static func tcpChaosTestRequested() -> Bool {
         TestHooks.flag("-UITestDefunctLoopback") || TestHooks.flag("-UITestShutdownTCPConnections")
-            || TestHooks.flag("-UITestDefunctRelayListener")
+            || TestHooks.flag("-UITestDefunctRelayListener") || TestHooks.flag("-UITestStallLoopback")
     }
 
     nonisolated private func startTailscale() async {
@@ -361,6 +361,9 @@ final class TSNetManager {
     @MainActor private var busRestartBackoff: Duration = .milliseconds(500)
     @MainActor private var loopbackRecoveryTask: Task<Void, Never>?
     @MainActor private var loopbackRecoveryGeneration: UInt64 = 0
+    /// Status requests abandoned at `LoopbackHealth.statusBound` in a row,
+    /// from the poll and `refreshStatusNow` alike (F16 §4.1).
+    @MainActor private var statusStalls = LoopbackStallCount()
 
     /// Starts observing `prefs` for exit-node changes. Idempotent.
     @MainActor
@@ -414,7 +417,7 @@ final class TSNetManager {
     @MainActor
     private func scheduleBusRestart(localAPI: LocalAPIClient, consumer: TSNetConsumer,
                                     error: Error) {
-        if Self.isLocalLoopbackConnectionFailure(error) {
+        if LoopbackHealth.isLocalLoopbackConnectionFailure(error) {
             recoverLoopbackAfterFailure(error)
             return
         }
@@ -449,15 +452,40 @@ final class TSNetManager {
         }
     }
 
-    nonisolated private static func isLocalLoopbackConnectionFailure(_ error: Error) -> Bool {
-        let ns = error as NSError
-        guard ns.domain == NSURLErrorDomain,
-              (ns.code == NSURLErrorCannotConnectToHost
-                || ns.code == NSURLErrorNetworkConnectionLost)
-        else { return false }
-        let rawURL = (ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL)?.absoluteString ?? ""
-        guard let host = URL(string: rawURL)?.host()?.lowercased() else { return false }
-        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+    /// `backendStatus()` raced against `LoopbackHealth.statusBound` (F16).
+    /// TailscaleKit's request carries a 60 s timeout (LocalAPIClient.swift:337)
+    /// that no caller here may inherit. Throws `LoopbackStatusTimeout` at the
+    /// bound; the abandoned request is cancelled, which URLSession's async API
+    /// honours. An answer slower than `slowAnswer` is logged, because the
+    /// bound is chosen, not measured (F16 §8).
+    nonisolated static func boundedStatus(_ client: LocalAPIClient,
+                                          within bound: Duration = LoopbackHealth.statusBound)
+        async throws -> IpnState.Status {
+        let started = ContinuousClock.now
+        let status = try await LoopbackHealth.bounded(within: bound) { try await client.backendStatus() }
+        let took = ContinuousClock.now - started
+        if took > LoopbackHealth.slowAnswer {
+            let ms = took.components.seconds * 1000 + took.components.attoseconds / 1_000_000_000_000_000
+            logger.log("Status request answered after \(ms) ms (bound \(bound.components.seconds) s)")
+        }
+        return status
+    }
+
+    /// A bounded status request answered: the loopback carries bytes.
+    @MainActor
+    private func statusAnswered() {
+        statusStalls.answered()
+    }
+
+    /// A bounded status request was abandoned (F16 §4.1). The second in a row
+    /// replaces the loopback, as a refused one is replaced.
+    @MainActor
+    private func statusAbandoned() {
+        let (strike, recover) = statusStalls.abandoned()
+        logger.log("Status request abandoned after \(LoopbackHealth.statusBound.components.seconds) s (\(strike) of \(LoopbackStallCount.strikes) before loopback recovery)")
+        if recover {
+            recoverLoopbackAfterFailure(LoopbackStatusTimeout())
+        }
     }
 
     @MainActor
@@ -530,12 +558,16 @@ final class TSNetManager {
                 guard let self else { return }
                 if let client = await MainActor.run(body: { self.localAPIClient }) {
                     do {
-                        let status = try await client.backendStatus()
+                        let status = try await Self.boundedStatus(client)
+#if LATCHKEY_TEST_HOOKS
+                        await self.stallLoopbackBeforePublishingIfRequested(status)
+#endif
                         await MainActor.run {
                             // A successful request proves the local listener is
                             // carrying bytes again; future watcher failures may
                             // start from the short retry delay.
                             self.busRestartBackoff = .milliseconds(500)
+                            self.statusAnswered()
                             self.model.localStatus = status
                             if status.BackendState == "Running" {
                                 self.runTCPChaosTestIfNeeded()
@@ -561,8 +593,12 @@ final class TSNetManager {
                         }
                     } catch {
                         await MainActor.run {
+                            if error is LoopbackStatusTimeout {
+                                self.statusAbandoned()
+                                return
+                            }
                             logger.log("Status poll failed: \(error)")
-                            if Self.isLocalLoopbackConnectionFailure(error) {
+                            if LoopbackHealth.isLocalLoopbackConnectionFailure(error) {
                                 self.recoverLoopbackAfterFailure(error)
                             }
                         }
@@ -962,11 +998,15 @@ final class TSNetManager {
                 return
             }
 #endif
-            logger.log("TCP chaos test: defuncting the tsnet loopback listener")
             do {
-                if TestHooks.flag("-UITestDefunctLoopback") {
+                if TestHooks.flag("-UITestStallLoopback") {
+                    logger.log("TCP chaos test: stalling the tsnet loopback listener")
+                    try await node.debugStallLoopback()
+                } else if TestHooks.flag("-UITestDefunctLoopback") {
+                    logger.log("TCP chaos test: defuncting the tsnet loopback listener")
                     try await node.debugDefunctLoopback()
                 } else {
+                    logger.log("TCP chaos test: shutting down the process's TCP sockets")
                     try await node.debugShutdownTCPConnections()
                 }
                 self.model.tcpChaosTestStatus = "damaged"
@@ -977,6 +1017,32 @@ final class TSNetManager {
             }
         }
     }
+
+#if LATCHKEY_TEST_HOOKS
+    /// `-UITestStallLoopback -UITestTCPChaosDelay 0` (F16): the loopback goes
+    /// silent BEFORE the first Running status with peers is published, not
+    /// after it. That status is what starts the picker's first sweep, so
+    /// through `runTCPChaosTestIfNeeded` the stall would race the sweep and
+    /// some probes would get through. Awaited by the poll, so the sweep
+    /// starts on a loopback that is already silent. Any other delay fires
+    /// through `runTCPChaosTestIfNeeded` as the other hooks do.
+    @MainActor
+    private func stallLoopbackBeforePublishingIfRequested(_ status: IpnState.Status) async {
+        guard TestHooks.flag("-UITestStallLoopback"), TestHooks.value("-UITestTCPChaosDelay") == "0",
+              !didRunTCPChaosTest, status.BackendState == "Running",
+              !(status.Peer ?? [:]).isEmpty, let node
+        else { return }
+        didRunTCPChaosTest = true
+        logger.log("TCP chaos test: stalling the tsnet loopback listener before the first status")
+        do {
+            try await node.debugStallLoopback()
+            model.tcpChaosTestStatus = "damaged"
+        } catch {
+            model.tcpChaosTestStatus = "failed: \(error)"
+            logger.log("TCP chaos test failed: \(error)")
+        }
+    }
+#endif
 
     /// Permanently tears down this manager when its workspace is deleted.
     /// Unlike scene backgrounding, deletion must release the node and all
@@ -1050,10 +1116,16 @@ final class TSNetManager {
     func refreshStatusNow() async -> Bool {
         guard let client = localAPIClient else { return false }
         do {
-            let status = try await client.backendStatus()
+            // Bounded (F16): discovery's "Searching…" and `pageLoadFailed`'s
+            // relay verdict both wait on this.
+            let status = try await Self.boundedStatus(client)
+            statusAnswered()
             model.localStatus = status
             refreshProxyPolicyIfNeeded()
             return true
+        } catch is LoopbackStatusTimeout {
+            statusAbandoned()
+            return false
         } catch {
             logger.log("Immediate status refresh failed: \(error)")
             return false
