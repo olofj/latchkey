@@ -44,6 +44,14 @@ final class AppDiagnostics: ObservableObject {
     /// listener could be started (R30 review): from then on the log has no
     /// per-connection lines, which this row explains.
     @Published var socksRelayFallbacks = 0
+    /// F3's share: items admitted to the inbox, confirmed by a gateway
+    /// (sent, or queued behind a busy session), failed attempts, and items
+    /// the sweep removed unsent.
+    @Published var sharesReceived = 0
+    @Published var sharesSent = 0
+    @Published var sharesQueued = 0
+    @Published var sharesFailed = 0
+    @Published var sharesSwept = 0
 
     private init() {}
 }

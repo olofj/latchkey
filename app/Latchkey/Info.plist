@@ -4,5 +4,16 @@
 <dict>
 	<key>LatchkeyGitSHA</key>
 	<string>$(LATCHKEY_GIT_SHA)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>net.lixom.latchkey.share</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>latchkey</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

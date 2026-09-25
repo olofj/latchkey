@@ -65,6 +65,9 @@ struct DashboardRootView: View {
         .background {
             if let ws = presentedWorkspace {
                 TokenSheetHost(session: ws.session, allowed: tokenSheetAllowed)
+                // F3: after the sign-in sheet, never with it or with Settings.
+                ShareSheetHost(delivery: ShareDelivery.shared, session: ws.session,
+                               allowed: tokenSheetAllowed)
             }
         }
         .onChange(of: showingSettings) { _, showing in
@@ -105,6 +108,30 @@ private struct TokenSheetHost: View {
                 TokenEntrySheet(session: session)
                     .onAppear { session.isTokenSheetOnScreen = true }
                     .onDisappear { session.isTokenSheetOnScreen = false }
+            }
+    }
+}
+
+/// Presents the share picker (F3 §4.7) from the root, beside the sign-in
+/// sheet: one sheet at a time, so it waits while Settings or the sign-in
+/// sheet is up -- a share that stopped for sign-in comes back after it.
+private struct ShareSheetHost: View {
+    @ObservedObject var delivery: ShareDelivery
+    @ObservedObject var session: SessionManager
+    let allowed: Bool
+
+    var body: some View {
+        Color.clear
+            .sheet(isPresented: Binding(
+                get: { delivery.isPickerRequested && allowed && !session.isTokenSheetPresented },
+                set: { shown in
+                    // Swiped away: the item stays for later, as with Later.
+                    if !shown, delivery.isPickerRequested, allowed, !session.isTokenSheetPresented {
+                        delivery.close()
+                    }
+                }
+            )) {
+                ShareDestinationView(delivery: delivery)
             }
     }
 }
@@ -289,6 +316,10 @@ private struct DashboardContent: View {
                 // identifier applied to a container view is not reliably surfaced.
                 Text("Connected Browser")
                     .accessibilityIdentifier("connected-browser")
+                // F3: the inbox, the last share's outcome (counted, so one
+                // that flashes by is not missed) and the content-process
+                // deaths a 50 MB upload must not cause.
+                ShareInstruments(delivery: ShareDelivery.shared, diagnostics: AppDiagnostics.shared)
                 if TSNetManager.tcpChaosTestRequested(),
                    let status = workspace.model.tcpChaosTestStatus {
                     Text(status)
@@ -391,6 +422,8 @@ private struct DashboardContent: View {
         .onChange(of: homePageAvailability) { _, availability in
             loadGatewayIfRecovered(availability)
         }
+        // F3: shares are delivered through this workspace's page.
+        .onAppear { ShareDelivery.shared.attach(workspace) }
         // State, not only transitions: if the gateway became available before
         // this view existed, onChange never fires and the fallback page would
         // stay (M5: a relaunch hit exactly that).
@@ -437,6 +470,22 @@ private struct DashboardContent: View {
             status: model.localStatus)
     }
 }
+
+#if LATCHKEY_TEST_HOOKS
+private struct ShareInstruments: View {
+    @ObservedObject var delivery: ShareDelivery
+    @ObservedObject var diagnostics: AppDiagnostics
+
+    var body: some View {
+        Text("\(delivery.waiting.count)")
+            .accessibilityIdentifier("share-inbox-count")
+        Text(delivery.lastResult)
+            .accessibilityIdentifier("share-last-result")
+        Text("\(diagnostics.webContentTerminations)")
+            .accessibilityIdentifier("share-terminations")
+    }
+}
+#endif
 
 /// Shown only after a same-origin new-window request loaded in place
 /// (KiroCrew's "pop out chat", "open in new tab"). One window and no back

@@ -27,6 +27,7 @@ import UIKit
 
 struct TokenEntrySheet: View {
     @ObservedObject var session: SessionManager
+    @ObservedObject private var shareDelivery = ShareDelivery.shared
     @Environment(\.dismiss) private var dismiss
     @State private var input = ""
     /// What was pasted and the pasteboard's change count at that moment. The
@@ -83,6 +84,18 @@ struct TokenEntrySheet: View {
                             .font(.subheadline)
                             .foregroundStyle(.orange)
                             .accessibilityIdentifier("token-foreign-host")
+                    }
+                }
+
+                // F3: a share that stopped for sign-in goes on by itself after it.
+                if shareDelivery.waiting.count > 0, shareDelivery.current != nil {
+                    Section {
+                        Label(shareDelivery.waiting.count == 1 ? "1 share waiting for sign-in"
+                                                               : "\(shareDelivery.waiting.count) shares waiting for sign-in",
+                              systemImage: "square.and.arrow.up")
+                            .font(.subheadline)
+                            .accessibilityLabel("\(shareDelivery.waiting.count)")
+                            .accessibilityIdentifier("share-waiting-count")
                     }
                 }
 

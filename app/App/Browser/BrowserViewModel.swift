@@ -1238,6 +1238,20 @@ extension BrowserViewModel: SessionHost {
         }
     }
 
+    /// Runs `script` as an async function in the app's content world, with
+    /// the page's cookies and Origin (F3's share, like the M4 check). Its
+    /// result, or nil when there is no page or the call threw.
+    func sessionCall(_ script: String, arguments: [String: Any]) async -> Any? {
+        guard let webView else { return nil }
+        do {
+            return try await webView.callAsyncJavaScript(script, arguments: arguments,
+                                                         in: nil, contentWorld: SessionManager.world)
+        } catch {
+            logger.log("Share: a page-world call failed: \(LogRedaction.describe(error))")
+            return nil
+        }
+    }
+
     func revealSessionBanner() {
         webView?.evaluateJavaScript(PageScriptSources.revealSessionBanner, in: nil,
                                     in: SessionManager.world) { _ in }

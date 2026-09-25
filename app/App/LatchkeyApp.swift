@@ -37,28 +37,38 @@ struct LatchkeyApp: App {
         // bypass it and own their node lifecycle.
         if !Self.harnessMode {
             _workspaceManager = State(initialValue: WorkspaceManager())
+            // F3: the inbox is swept, and any waiting share read, at launch.
+            _ = ShareDelivery.shared
         }
     }
 
     var body: some Scene {
         WindowGroup {
+            Group {
 #if LATCHKEY_TEST_HOOKS
-            if TestHooks.flag("-TimingHarness") {
-                TimingHarnessView()
-            } else if TestHooks.flag("-UITestProxyBounceHarness") {
-                ProxyBounceTestHarnessView()
-            } else if let workspaceManager {
-                DashboardRootView(workspaceManager: workspaceManager)
-            } else {
-                ProgressView()
-            }
+                if TestHooks.flag("-TimingHarness") {
+                    TimingHarnessView()
+                } else if TestHooks.flag("-UITestProxyBounceHarness") {
+                    ProxyBounceTestHarnessView()
+                } else if let workspaceManager {
+                    DashboardRootView(workspaceManager: workspaceManager)
+                } else {
+                    ProgressView()
+                }
 #else
-            if let workspaceManager {
-                DashboardRootView(workspaceManager: workspaceManager)
-            } else {
-                ProgressView()
-            }
+                if let workspaceManager {
+                    DashboardRootView(workspaceManager: workspaceManager)
+                } else {
+                    ProgressView()
+                }
 #endif
+            }
+            // F3 §4.2: `latchkey://share?…`. Captured into the inbox, never
+            // sent from here; the picker comes up once the page is signed in.
+            .onOpenURL { url in
+                guard !Self.harnessMode else { return }
+                ShareDelivery.shared.receive(url: url)
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             // Don't fan scenePhase to WorkspaceManager in harness mode (there
@@ -68,6 +78,7 @@ struct LatchkeyApp: App {
             switch newPhase {
             case .background:
                 workspaceManager.willEnterBackground()
+                ShareDelivery.shared.sceneLeftForeground()
             case .inactive:
                 // Do NOT tear down the node on .inactive. That scenePhase
                 // fires for Control Center, the app-switcher peek, an incoming
@@ -84,6 +95,7 @@ struct LatchkeyApp: App {
                 break
             case .active:
                 workspaceManager.willEnterForeground()
+                ShareDelivery.shared.sceneBecameActive()
             @unknown default:
                 break
             }

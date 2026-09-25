@@ -164,6 +164,23 @@ final class SessionManager: NSObject, ObservableObject {
         return status
     }
 
+    /// A request of the app's own was refused with 403 + `X-Auth-Required`
+    /// (F3's share). The page may not have noticed yet -- its own next
+    /// request will -- so the sheet is asked for now. A check in flight
+    /// cannot mark the session active over this; a sign-in, or the page
+    /// recovering by itself, does.
+    func requireSignIn() {
+        guard state != .needsToken else {
+            isTokenSheetPresented = true
+            return
+        }
+        logger.log("Session: the gateway refused an app request for want of a session")
+        authGeneration += 1
+        state = .needsToken
+        isTokenSheetPresented = true
+        Task { await verify(afterRedemption: false) }
+    }
+
     // MARK: - Installation
 
     /// Adds the bridge to a web view's configuration. Call before its first

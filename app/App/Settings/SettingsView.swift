@@ -247,6 +247,9 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                // F3: what was shared and is not yet confirmed by a gateway.
+                ShareSettingsSection(delivery: ShareDelivery.shared, dismissSettings: dismissAction)
+
                 // The log viewer moved here when the browser toolbar was
                 // deleted (PLAN §1.5). It had been reachable only from that
                 // toolbar's "more" menu, which would have left an iPhone with
