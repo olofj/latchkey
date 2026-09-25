@@ -326,6 +326,72 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(inboxCount(app), 1, "a 6-day item stays, and the instrument sees it")
     }
 
+    // MARK: - Stage 2: the share sheet's app row
+
+    /// F3 §7, "The share sheet route (stage 2)" -- fragile by nature: it
+    /// drives Safari and the system share sheet, whose layout is Apple's.
+    /// A page is shared from Safari to "Latchkey"; the extension saves it to
+    /// the App Group inbox and sends nothing; the app, brought back, has the
+    /// item from `source: extension` and delivers it like any other.
+    func testTheShareSheetSavesForTheAppAndTheAppSendsIt() async throws {
+        let app = try await launchSignedIn()
+        defer { app.terminate() }
+        let page = "http://127.0.0.1:8481/ext-share-probe"
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        safari.launch()
+        XCUIDevice.shared.system.open(URL(string: page)!)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        if springboard.buttons["Open"].waitForExistence(timeout: 2) { springboard.buttons["Open"].tap() }
+        XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 15), "Safari is in front")
+        try await Task.sleep(for: .seconds(2))
+
+        // Share: a toolbar button on older layouts; on iOS 26 it is in the
+        // page menu, the leading button of the address bar.
+        let share = safari.buttons.matching(NSPredicate(format: "identifier == 'ShareButton' OR label == 'Share'")).firstMatch
+        if !share.waitForExistence(timeout: 3) {
+            let menu = safari.buttons.matching(NSPredicate(
+                format: "identifier CONTAINS[c] 'PageMenu' OR identifier CONTAINS[c] 'PageFormat' OR label CONTAINS[c] 'Page Menu' OR label == 'More'")).firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 5),
+                          "Safari's page menu; its buttons: \(safari.buttons.allElementsBoundByIndex.prefix(30).map { "\($0.identifier)|\($0.label)" })")
+            menu.tap()
+        }
+        XCTAssertTrue(share.waitForExistence(timeout: 5),
+                      "Safari offers Share; on screen: \(safari.buttons.allElementsBoundByIndex.prefix(40).map { "\($0.identifier)|\($0.label)" })")
+        share.tap()
+
+        // The app row. New extensions may sit behind "More" at its end.
+        let row = safari.descendants(matching: .any).matching(NSPredicate(format: "label == 'Latchkey'")).firstMatch
+        if !row.waitForExistence(timeout: 8) {
+            let moreApps = safari.descendants(matching: .any).matching(NSPredicate(format: "label == 'More'")).firstMatch
+            if moreApps.exists { moreApps.tap() }
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 8), "Latchkey is in the share sheet's app row (the extension is built in)")
+        row.tap()
+
+        let save = safari.descendants(matching: .any)["share-capture-save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 15), "the extension's sheet offers Save for Latchkey")
+        save.tap()
+        let saved = safari.descendants(matching: .any)["share-capture-saved"]
+        XCTAssertTrue(saved.waitForExistence(timeout: 10), "it says Saved. Open Latchkey to send it.")
+        XCTAssertTrue(saved.label.contains("Open Latchkey"), saved.label)
+        let before = try await gatewayState()
+        XCTAssertEqual(counter(before, "share_posts"), 0, "the extension sent nothing")
+        _ = saved.waitForNonExistence(timeout: 5)
+
+        app.activate()
+        let source = element(app, "share-item-source")
+        XCTAssertTrue(source.waitForExistence(timeout: 30), "the app brings the saved share up")
+        XCTAssertEqual(source.label, "extension", "written by the extension, to the group inbox")
+        try pick(app, "obsidian")
+        element(app, "share-send").tap()
+        let awaitedExt = try await lastResult(app)
+        XCTAssertEqual(awaitedExt, "sent:obsidian")
+        let state = try await gatewayState()
+        let message = ((state["posts"] as? [[String: Any]])?.first?["message"] as? String) ?? ""
+        XCTAssertTrue(message.contains(page), "the post carries the shared URL: \(message)")
+        XCTAssertEqual(violations(state), 0)
+    }
+
     // MARK: - Helpers
 
     private func launch(seed: String? = nil, reset: Bool = true) -> XCUIApplication {

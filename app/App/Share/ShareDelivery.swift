@@ -94,11 +94,15 @@ final class ShareDelivery: ObservableObject {
 
     private weak var workspace: Workspace?
     private var observers: Set<AnyCancellable> = []
-    /// Read, not tracked: a cold launch by the share URL reaches `.active`
-    /// with no scene-phase change to hear.
+    /// Set by the scene-phase change; SwiftUI reports `.active` before
+    /// `UIApplication.applicationState` says so, and a foreground that read
+    /// only the latter never brought up what the extension had saved.
+    private var sceneActive = false
+    /// A cold launch by the share URL reaches `.active` with no scene-phase
+    /// change to hear, so the application state counts too.
     private var appActive: Bool {
 #if canImport(UIKit)
-        UIApplication.shared.applicationState == .active
+        sceneActive || UIApplication.shared.applicationState == .active
 #else
         true
 #endif
@@ -202,6 +206,7 @@ final class ShareDelivery: ObservableObject {
     }
 
     func sceneBecameActive() {
+        sceneActive = true
         deferred.removeAll()
         retriedThisForeground.removeAll()
         reload()
@@ -209,6 +214,7 @@ final class ShareDelivery: ObservableObject {
     }
 
     func sceneLeftForeground() {
+        sceneActive = false
         pageWaitTask?.cancel()
         pageWaitTask = nil
     }
