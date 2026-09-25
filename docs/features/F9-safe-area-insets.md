@@ -417,3 +417,12 @@ it. VoiceOver would have done the same. The web view is now
 
 L1 passed in 257 s against a 240 s budget, which is 9 s over the 248 s last
 measured. The budget is unchanged.
+
+### 2026-09-24 — F15 puts the app bar between the island and the page
+
+The page is still told 0, but the web view now starts at the window's
+safe-area top **plus the 44 pt app bar** (F15 §4a). The bar displaces the page
+for the reason §0 gives: no gateway can be trusted to inset itself.
+`testInsetProbesReportWhatThePageIsTold` asserts `minY = safeTop + 44`, and it
+measured `webViewMinY=106 windowSafeTop=62 innerHeight=734`. The strip pixel
+above is still the page's canvas colour. F15 §9 has the rest.

@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Status** | spec — needs a decision in §4 before building |
+| **Status** | **built** (B, 2026-09-24) — awaiting the owner's device check, §7.4. §9 records the threshold, the overlay audit and the evidence |
 | **Requested** | 2026-09-24, by Olof, on the first build carrying F9: "I noticed the gear and the notification alarm bell render on top of each other. I don't think latchkey can assume it owns any of the screen to render its own icons on." Plus: "Top bar clears the island. Maybe a bit more than it has to, it could move up a bit." |
 | **Revision** | none |
-| **Touches** | `app/App/Browser/DashboardRootView.swift`, `app/App/Browser/BrowserView.swift`, the L1 geometry checks (F10 §4.3) |
+| **Touches** | `app/App/Browser/DashboardRootView.swift`, `app/App/Browser/BrowserView.swift`, new `AppBar.swift` / `AppBarController.swift` / `AppBarRetraction.swift`, `PageScriptSources.appBarObserver`, `testing/harness/dashboard.py` (the shell probe), L1 |
 
 ## 1. Why
 
@@ -153,3 +153,194 @@ chrome sit under a system obstruction" to "does our chrome sit over the page".
 ## 9. Log
 
 Opened 2026-09-24, from the first device build carrying F9.
+
+### 2026-09-24 — B built
+
+**The shape.** `AppBarColumn` is a `VStack`: the app bar (44 pt, `AppBar`), the
+node's banners, then `BrowserView`. The web view's top edge is the bar's
+bottom edge (§4a). Retracted, the bar is zero height, the column closes over
+it and the page starts at the window's safe-area top. The status-bar strip and
+the bar both take the page's canvas colour (F9 §0.1), so the three read as one
+surface. The bar has no divider. `DashboardContent` has no overlays left.
+
+**Watching the scroll needs the page, and this is why.** The first plan was to
+observe the web view's `UIScrollView` through KVO. The installed KiroCrew
+0.7.0 rules that out. Its `index.html` says the shell is "`h-dvh` with
+`overflow-hidden` and inner `min-h-0` scrollers", and its CSS has
+`body{…overflow:hidden auto}` and `#root{height:100%}`. The document never
+scrolls, so the web view's scroll view never moves. A bar driven by it would
+never retract on the owner's dashboard: it would quietly be option A.
+
+So the observer is a page script, `PageScriptSources.appBarObserver`. It runs
+in the app's own content world, the same way the page-background reporter
+does. It stays within §3 and §4b:
+
+- It reads no markup. Its listeners sit on `window` in the capture phase, so
+  they see a scroll of *any* element and do not need to know which one.
+- It cannot take part in the gesture. Every listener is `passive`, and none
+  calls `preventDefault` or `stopPropagation`. The Node test enforces all of
+  this against the exact injected text (`scripts/test-app-bar-observer.js`).
+- If it fails, the bar stays shown. A page that never reports anything never
+  retracts the bar.
+
+It posts the finger's travel in screen points, coalesced to one message per
+frame, and the largest vertical scroll range of anything that scrolled during
+the touch. A change in viewport size re-bases the finger. That matters because
+the bar's own retraction moves the page 44 pt under a finger that has not
+moved, and without the re-base the page script would count that as travel.
+
+**The hysteresis: 64 pt of finger travel, in one drag, in one direction.**
+The rules are in `AppBarRetraction`:
+
+- Only finger travel counts. Momentum sends no touches, so nothing changes
+  mid-momentum. A page that scrolls itself also changes nothing, such as a
+  chat following new messages.
+- Travel restarts at each touch-down and whenever the finger reverses, so
+  nudges made while reading never add up.
+- Retracting needs something that actually scrolled, with a range larger than
+  the bar. A page too short to scroll keeps the bar (§4b). So does a page that
+  would stop being scrollable as soon as the bar gave it 44 pt.
+- Returning needs only the finger. A 64 pt downward drag brings the bar back
+  on any page, whether it scrolls or not. This is what makes a retracted bar
+  always recoverable.
+
+**Why 64.** It is above the 10–40 pt corrections a reader makes while holding
+a place, and below the travel of one ordinary scrolling drag (100 pt or more).
+It is also about one and a half bar heights: moving the page by 44 pt should
+take clearly more than 44 pt of intent. This is reasoned, not measured on a
+hand. The feel needs the owner's thumb on a device. It is one constant,
+`AppBarRetraction.threshold`. If it feels twitchy, raise it. If it feels
+sticky, lower it. Do not switch to cumulative travel, which would let nudges
+add up.
+
+A known cost, chosen on purpose: a 64 pt downward drag of something that does
+not scroll also reveals the bar. Dragging a card down a board is an example.
+That costs one reflow. The alternative is a bar that some page cannot bring
+back.
+
+**Hidden is not gone for VoiceOver.** While VoiceOver or Switch Control is
+running, the bar never retracts. Turning either one on brings a retracted bar
+back immediately (`AppBarController`, which watches both status
+notifications). For those users Settings is always on screen. It is also
+first in the accessibility order: the bar is the column's first child, at the
+safe-area top, and nothing overlaps it. L1 cannot switch VoiceOver on, so
+`-UITestAssumeVoiceOver` stands in for it.
+
+The first L1 run caught one more way to lose a control. The first version
+clipped the bar to zero height with `accessibilityHidden`. That still laid out
+the gear, above the bar and under the status bar, and XCUITest found it
+hittable there while the bar was retracted. An invisible control that can
+still be hit is exactly what §4b forbids. Retracted now **removes** the bar's
+controls from the tree. The hardware-keyboard path to Settings (⌘,) is
+unchanged.
+
+**Reduce Motion:** `AppBar.animation(reduceMotion:)` returns no animation, so
+the bar and the page move in one step. There is **no end-to-end test** of this:
+XCUITest cannot turn Reduce Motion on, and "no animation" is a timing claim that
+a UI test would only guess at.
+
+**The eight overlays.** Every one was re-homed. None stays on the page.
+
+| # | Was | Now | Why |
+|---|---|---|---|
+| 1 | `.topTrailing` settings gear | **app bar**, trailing | The collision that opened this spec. Now full opacity with a 44 pt target. The 0.45 fade existed only because it sat on the page. |
+| 2 | `.topLeading` "Dashboard" (return from a popped-out page) | **app bar**, leading | Navigation. Retracting with the bar is right, as Safari's back button does. |
+| 3 | `.top` "Signed out — Sign in" capsule | **app bar**, between the other two | It is the only sign-in control (R22), so it **pins** the bar shown while it is there (`setPinned`). |
+| 4 | `.bottomLeading` `page-connecting-shown-count` | behind, status-bar corner | Test instrument, Testing builds only. |
+| 5 | `.bottom` `session-auth-required-count` | behind, status-bar corner | Test instrument, Testing builds only. |
+| 6 | `.bottomTrailing` "Connected Browser" | behind, status-bar corner, **now Testing builds only** | This one **shipped**: an invisible element that VoiceOver read over the dashboard's bottom-right corner. Every use is a UI test's `.exists` (L2, lifecycle and inherited suites). |
+| 7 | `.bottomLeading` `tcp-chaos-test-status` | behind, status-bar corner | Test instrument, set only by a chaos test hook. |
+| 8 | `BrowserView`'s `.topLeading` `WindowSafeAreaProbe` | same background group | It reads the window, so where it sits does not matter. It was on the page's corner for no reason. |
+
+Items 4–8 are 1 pt text at 0.01 opacity in the status-bar strip's top-leading
+corner, with hit testing off. The first attempt put them *behind* the web view,
+and that was not enough. L1's sweep reported all four texts as hittable **on
+the page**: a view the page covers still wins accessibility's hit test there.
+That is the same ordering trap as the F9 regression.
+
+**The banners (§4b's "argue it").** Login-required, machine-auth,
+gateway-unreachable and the expiry warnings stay where they were, and none of
+them overlays the page. They were already members of the layout (R31 review).
+They **displace** the page exactly as the bar does, so they sit alongside it
+rather than on it, and they cannot hide the dashboard's bell. They take the top
+edge (the expiry warnings the bottom) for four reasons:
+
+- They are about the app's own health, not the page's content.
+- They are full-width, with no corner of their own to collide with.
+- They are brief: each goes away by itself when the state clears.
+- While they show, the page is often the thing that has failed.
+
+They do **not** go in the bar and do not retract. A state the owner must act
+on cannot be hidden by a scroll. The bar pins only for the sign-in capsule.
+The login, machine-auth and gateway-unreachable banners do not pin it, because
+they stand on their own, and gateway-unreachable carries its own "Change"
+button into Settings. Their 52 pt trailing padding ("room for the gear") is
+gone, because the gear no longer floats over them.
+
+**§8's "sits lower than needed".** Not changed. The page now starts 44 pt below
+the safe-area top, and the strip above it is the bar. That is §8's own
+prediction: "the strip is correct, and the app bar fills it". It still needs
+the owner's eye on the device.
+
+**Tests (§6), each shown able to fail.** L1 adds two tests, and one existing
+test is updated:
+
+- `testNothingOfOursSitsOnThePageAndSettingsIsReachable` covers all three of
+  §6's rows, in portrait and then landscape, on one launch:
+  - It takes one accessibility snapshot. Everything outside the web view's
+    subtree that is a control or text and overlaps the web view's frame is
+    asked `isHittable`, and none may be.
+  - The gear must be hittable, and tapping it must open Settings and close it
+    again.
+  - The web view's `minY` must be `windowSafeTop + 44`, with 44 hard-coded so
+    a padded bar cannot redefine it.
+  - Then it drags the short fake dashboard up 240 pt, and the bar must stay.
+
+  Measured: portrait `webViewFrame=(0, 106, 402, 734) windowSafeTop=62`,
+  landscape `(62, 44, 750, 338) windowSafeTop=0`.
+- `testTheAppBarRetractsOnADeliberateScrollAndComesBack` runs on the new
+  `root=shell` probe (`testing/harness/dashboard.py`). The probe is KiroCrew's
+  layout: a `100dvh` shell whose body never scrolls, an inner scroller, and a
+  button in the header's top-trailing corner where the bell is. The test checks
+  four things:
+  - A 30 pt nudge changes nothing.
+  - A 240 pt drag up retracts the bar: `minY` goes from 106 to 62, and the page
+    reports `scrollTop=251`, so the drag reached it and was not consumed.
+  - A 240 pt drag down brings the bar back, with the gear hittable.
+  - Relaunched with `-UITestAssumeVoiceOver`, the same drag scrolls the page
+    (`scrollTop=230`) and the bar stays at 106.
+- `testInsetProbesReportWhatThePageIsTold` (F9) now expects
+  `minY = safeTop + 44`. The probes are still told 0 px, and the strip pixel is
+  still the page's colour.
+
+Mutations, each built and run (`app/build/f15-runs/`):
+
+| Mutation | Failing assertion, as printed |
+|---|---|
+| The pre-F15 gear as `.overlay(alignment: .topTrailing)` on the web view | `portrait: nothing of Latchkey's may sit on the page (web view (0.0, 106.0, 402.0, 734.0)); on it: ["restored-overlay-gear (359.3, 110.0, 32.7, 32.7)"]` |
+| The gear removed from the bar (Settings only behind ⌘,) | `portrait: the gear is on screen and tappable` |
+| The bar padded 8 pt | `("114.0") is not equal to ("106.0") … webViewMinY=114.0 windowSafeTop=62.0 barHeight=44.0` |
+| The VoiceOver guard removed | `("62.0") is not equal to ("106.0") … VoiceOver: the bar never retracts` |
+| The page observer not installed | `("106.0") is not equal to ("62.0") … a deliberate drag up retracts the bar` (the page still scrolled, to 250) |
+
+Host tests in `make test-policy`:
+
+- `scripts/test-app-bar-retraction.sh`, 23 checks of the policy. It fails 2 of
+  23 when the "something scrolled, with more range than the bar" condition is
+  removed.
+- `scripts/test-app-bar-observer.js`, 22 checks of the injected script. It
+  fails on all five listeners when `passive` is flipped to `false`.
+
+The retraction test's first run also confirmed that WebKit delivers `touchmove`
+to a passive capture listener while an inner scroller is scrolling natively.
+The whole design rests on that, and it was an assumption until then.
+
+**Suites.**
+
+- `scripts/test-offline.sh --build`: 17 of 17 passed, and the R1 disk and log
+  scan passed, in **321 s** against the 240 s budget. The previous run was
+  257 s. The two new tests take about 60 s of that (27.6 s and 32.3 s). The
+  budget is unchanged.
+- `make test-policy`: green.
+
+Both runs used the working tree before two comment-only edits.

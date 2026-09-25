@@ -3046,3 +3046,45 @@ owner's decision rather than Xcode's. Reasoning in `docs/TESTFLIGHT.md`.
 **Evidence:** `docs/TESTFLIGHT.md`; archive `build/Latchkey-appstore.xcarchive`
 from `make tf UPLOAD=0` (ARCHIVE SUCCEEDED, both manifests present; export
 failed on the missing distribution certificate, as above).
+
+## 2026-09-24 — F15: an app bar that displaces the page and retracts on a deliberate scroll
+
+**Decision:** nothing of the app's is drawn over the dashboard any more. The
+gear, the way back to the dashboard and the sign-in button move into a 44 pt
+app bar above the page. It retracts on a 64 pt drag up in a single touch and
+returns on a 64 pt drag down. The web view starts at the bar's bottom edge.
+The finger is observed by a passive page script, not the web view's scroll
+view. This supersedes 2026-09-20's "A floating gear on the dashboard".
+
+**Why:**
+
+- **Overlays.** The overlays assumed the page left its corners empty, and
+  KiroCrew puts its notification bell under our gear. Option B was Olof's
+  call.
+- **Displace, don't overlay.** F9 measured the gateway ignoring the safe-area
+  inset outside an installed web app, so the bar displaces rather than
+  overlays.
+- **A page script, not KVO.** KVO on the web view's `UIScrollView` was the
+  first plan and would have been dead code. KiroCrew 0.7.0's shell never
+  scrolls the document, only inner elements, so the bar would never have
+  retracted there.
+- **Hysteresis on finger travel only**, restarting per touch and on reversal.
+  This means no change mid-momentum, none from the page scrolling itself, and
+  no reading nudges adding up.
+- **Retracting and returning are asymmetric.** Retracting needs a real scroll
+  with more range than the bar. Returning needs only the finger, so any page
+  can bring it back.
+- **VoiceOver and Switch Control.** The bar never retracts while either is
+  running. That was chosen over keeping an off-screen Settings element in the
+  accessibility tree, which is how this app lost a control once already.
+
+Rejected:
+
+- **KVO on the web view's scroll view:** see above.
+- **Cumulative travel across drags:** nudges add up.
+- **Pinning the bar for every banner:** the banners carry their own actions
+  and do not need it.
+
+**Evidence:** `docs/features/F15-chrome-does-not-own-the-page.md` §9, which
+holds the overlay audit, the banners' case, the threshold's reasoning and five
+L1 mutations with the assertion each one tripped.

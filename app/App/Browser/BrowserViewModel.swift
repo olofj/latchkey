@@ -84,6 +84,8 @@ final class BrowserViewModel: NSObject, ObservableObject {
             return
         }
         pageState = next
+        // A state page covers the web view: the bar stays, with the gear.
+        appBar.setPageCovered(!next.leavesWebViewUncovered)
         switch next {
         case .idle:
             break
@@ -177,6 +179,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// pageBackground`), `""` until the page reports one. `BrowserView` tints
     /// the strip above the web view with it (F9 §0.1).
     @Published private(set) var pageBackgroundCSS = ""
+    /// Whether the app bar is shown over this page (F15). Fed from the page
+    /// script's finger samples and from `pageState`.
+    let appBar = AppBarController()
 
     private var observers: [AnyCancellable] = []
     private var webViewObservations: [NSKeyValueObservation] = []
@@ -297,6 +302,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
             guard let self, self.pageBackgroundCSS != css else { return }
             self.pageBackgroundCSS = css
         }
+        PageScripts.installAppBarObserver(into: configuration.userContentController) { [weak self] sample in
+            self?.appBar.observe(sample)
+        }
         session?.install(into: configuration.userContentController, host: self)
         configureWebView?(configuration)
 
@@ -374,6 +382,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         didLoadInitial = false
         // The next makeWebView loads the page afresh anyway.
         reloadWhenActive = false
+        appBar.documentChanged()
         // No web view, so no page: a stale `connecting` here would have the
         // restored tab show a spinner for a load that is not running.
         setPageState(.idle)
@@ -956,6 +965,7 @@ extension BrowserViewModel: WKNavigationDelegate {
         refreshState(from: webView, includeCommittedURL: true)
         failedInitialURL = nil
         session?.navigationCommitted()
+        appBar.documentChanged()
         // Back on the dashboard's root: the way-back control has done its job.
         if showsReturnToDashboard, webView.url?.path == "/" || webView.url?.path == "" {
             showsReturnToDashboard = false

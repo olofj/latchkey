@@ -39,7 +39,8 @@ struct BrowserView: View {
             // above the page, it is told 0, and its y=0 is below the island
             // whatever CSS the gateway ships. Do not add
             // `.ignoresSafeArea(.container, edges: .top)` back; L1's
-            // testInsetProbesReportWhatThePageIsTold fails if you do.
+            // testInsetProbesReportWhatThePageIsTold fails if you do. Since
+            // F15 the app bar sits between the safe-area top and this view.
             RawWebView(model: model)
                 // A WKWebView belongs to exactly one tab; prevent
                 // UIViewRepresentable from reusing the previous tab's view.
@@ -56,27 +57,11 @@ struct BrowserView: View {
                           onRetry: { model.reload() },
                           onChooseGateway: onChooseGateway)
         }
-#if LATCHKEY_TEST_HOOKS && canImport(UIKit)
-        .overlay(alignment: .topLeading) {
-            if TestHooks.flag("-UITestReportSafeArea") {
-                WindowSafeAreaProbe().frame(width: 1, height: 1)
-            }
-        }
-#endif
-        // A ShapeStyle background extends into the safe area, so this is also
-        // the strip the web view no longer covers, between the island and the
-        // page. It takes the page's own canvas colour, so strip and page read
-        // as one surface rather than a letterbox bar. Until the page reports
-        // one, and on our own state pages, it is the system background: the
-        // web view's own colour before its first paint (`RawWebView`).
-        .background(stripColor)
-    }
-
-    private var stripColor: Color {
-        guard model.pageState == .committed,
-              let rgb = PageScriptSources.opaqueRGB(fromCSS: model.pageBackgroundCSS)
-        else { return Color.platformSystemBackground }
-        return Color(.sRGB, red: rgb.red, green: rgb.green, blue: rgb.blue)
+        // The strip between the island and the page, and the app bar in it,
+        // take the page's canvas colour from `AppBarColumn` (F15), which owns
+        // everything above the web view now. The window safe-area probe that
+        // was overlaid on this view's corner lives in `DashboardContent`'s
+        // background: it reads the window, so it never needed to sit on the page.
     }
 }
 

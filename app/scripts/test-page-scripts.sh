@@ -51,6 +51,15 @@ EOF3
 xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-fetch"
 "$OUT/print-fetch" | node scripts/test-session-fetch.js
 
+# F15 §4a: the app bar's finger observer, run against a fake window.
+cat > "$OUT/main.swift" <<'EOF5'
+import Foundation
+let payload = ["observer": PageScriptSources.appBarObserver]
+print(String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!)
+EOF5
+xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-app-bar"
+"$OUT/print-app-bar" | node scripts/test-app-bar-observer.js
+
 # F9 §0.1: what the page-background reporter posts, parsed for the strip.
 cat > "$OUT/main.swift" <<'EOF4'
 var failed = 0

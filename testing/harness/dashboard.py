@@ -27,11 +27,12 @@ Control routes (plain HTTP, 127.0.0.1:<control-port>):
   GET  /__state     {"reports": {host: latest report}, "requests": {host: n},
                      "paths": [recent "HOST METHOD PATH | USER-AGENT" lines],
                      "ws_open": n, "insets": {probe: latest inset report},
-                     "root": "page"|"cover"|"plain"|"product"}
+                     "root": "page"|"cover"|"plain"|"product"|"shell"}
   POST /__reset     clear all of the above (not the modes)
-  POST /__mode?front=502|0, ?root=cover|plain|product|page
+  POST /__mode?front=502|0, ?root=cover|plain|product|shell|page
                     answer the document 5xx on a live connection; or serve an
-                    inset probe at / (the app loads only an origin)
+                    inset probe, or F15's dashboard-shaped scroll probe
+                    ("shell"), at / (the app loads only an origin)
   POST /__drop_ws   close every open WebSocket server-side, as a gateway
                     restart does; the page must reconnect by itself (M6.4)
   POST /__ws_push?text=T  send T as a text frame down every open WebSocket;
@@ -84,7 +85,7 @@ PATHS = deque(maxlen=200)
 REPORT_SEQ = 0        # every stored report gets the next number
 WS_OPEN = set()       # the handlers of WebSocket connections currently open
 INSETS = {}           # probe name ("cover"/"plain") -> latest inset report
-ROOT_PROBE = ""       # "" = / serves the page; "cover"/"plain" = that probe
+ROOT_PROBE = ""       # "" = / serves the page; "cover"/"plain"/"shell"/... = that probe
 
 
 def host_of(handler):
@@ -249,7 +250,58 @@ setInterval(report, 1000);
 
 
 def inset_probe(probe):
+    if probe == "shell":
+        return SHELL_PROBE
     return INSET_PROBE % {"probe": probe, "viewport": INSET_VIEWPORTS[probe]}
+
+
+# F15 §6's shell probe: the LAYOUT of KiroCrew 0.7.0, which is what decides
+# whether the app bar can see a scroll at all. The product's own index.html
+# says it: the shell is `h-dvh` with `overflow-hidden` and inner `min-h-0`
+# scrollers, so the document never scrolls and the web view's UIScrollView
+# never moves -- only an element inside the page does. A fake that scrolled
+# the document would pass a bar that never retracts on the real dashboard.
+# The header carries a control in its top-trailing corner, where the real
+# dashboard's notification bell is (F15 §1). Reports the inner scroller's
+# position to POST /__inset-report as probe "shell", so a test can prove the
+# page really scrolled -- the bar observes the gesture, it never consumes it.
+SHELL_PROBE = """<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
+<title>SHELL PROBE</title>
+<style>
+html { background: rgb(32, 96, 160); overscroll-behavior-y: none; color: white; }
+body { margin: 0; overflow: hidden; }
+#shell { height: 100dvh; display: flex; flex-direction: column; }
+header { flex: none; height: 44px; display: flex; align-items: center; padding: 0 8px; }
+#bell { margin-left: auto; font-size: 17px; }
+main { flex: 1; min-height: 0; overflow: hidden auto; }
+.row { height: 60px; line-height: 60px; padding: 0 8px; border-bottom: 1px solid rgba(255, 255, 255, .2); }
+</style>
+<div id=shell><header><b>SHELL PROBE</b><button id=bell>Bell</button></header><main id=main></main></div>
+<script>
+var main = document.getElementById('main');
+for (var i = 0; i < 80; i++) {
+  var row = document.createElement('div'); row.className = 'row'; row.textContent = 'Row ' + i; main.appendChild(row);
+}
+var DOC = Math.random().toString(36).slice(2), SEQ = 0, pending = false;
+function report() {
+  pending = false;
+  var s = {
+    probe: 'shell', doc: DOC, seq: ++SEQ,
+    scrollTop: main.scrollTop, scrollRange: main.scrollHeight - main.clientHeight,
+    innerHeight: window.innerHeight, docScrollY: window.scrollY, ts: Date.now()
+  };
+  fetch('/__inset-report', {method: 'POST', body: JSON.stringify(s),
+                            headers: {'Content-Type': 'application/json'}}).catch(function(){});
+}
+main.addEventListener('scroll', function () {
+  if (!pending) { pending = true; requestAnimationFrame(report); }
+}, {passive: true});
+window.addEventListener('resize', report);
+report();
+setInterval(report, 1000);
+</script>"""
+PROBES = tuple(INSET_VIEWPORTS) + ("shell",)
 
 
 class Page(HandshakeInThread, BaseHTTPRequestHandler):
@@ -333,7 +385,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             data["received_seq"] = REPORT_SEQ
             if self.path == "/__report":
                 REPORTS[host_of(self)] = data
-            elif data.get("probe") in INSET_VIEWPORTS:
+            elif data.get("probe") in PROBES:
                 data["host"] = host_of(self)
                 INSETS[data["probe"]] = data
             else:
@@ -487,12 +539,13 @@ class Control(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         if path == "/__mode":
             q = urllib.parse.parse_qs(query)
-            # root=cover|plain makes / serve that inset probe (F9 §6); root=page
+            # root=cover|plain|product makes / serve that inset probe (F9 §6),
+            # root=shell the dashboard-shaped scroll probe (F15 §6); root=page
             # restores the dashboard page. Independent of front=.
             if "root" in q:
                 root = q["root"][0]
-                if root not in ("page",) + tuple(INSET_VIEWPORTS):
-                    return self.reply({"error": "root must be page, cover, plain or product"}, 400)
+                if root not in ("page",) + PROBES:
+                    return self.reply({"error": "root must be page, cover, plain, product or shell"}, 400)
                 ROOT_PROBE = "" if root == "page" else root
                 if "front" not in q:
                     return self.reply({"ok": True, "front": FRONT_STATUS, "root": root})

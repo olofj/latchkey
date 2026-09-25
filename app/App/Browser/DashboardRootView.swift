@@ -13,7 +13,8 @@
 //
 //  Upstream this was `TabbedBrowserView`: a Safari-style multi-tab browser
 //  with an address bar, bookmarks and a tab overview. Latchkey is
-//  single-purpose (PLAN §1.3) — one window, one destination, no chrome.
+//  single-purpose (PLAN §1.3) — one window, one destination, no browser
+//  chrome. The one strip it keeps is the app bar above the page (F15).
 //
 //  `TabManager` still owns the one page's WKWebView lifecycle. It no longer
 //  persists anything: every cold start opens the gateway origin (R2).
@@ -177,8 +178,8 @@ private struct WorkspaceRoot: View {
 
 // MARK: - Dashboard (connected)
 
-/// One full-screen web view, plus the two things allowed to appear over it:
-/// the log viewer and the tailnet login banner.
+/// The app bar, the node's banners and one web view below them. Nothing of
+/// the app's is drawn over the page (F15).
 private struct DashboardContent: View {
     let workspace: Workspace
     @ObservedObject var homePage: HomePage
@@ -214,38 +215,14 @@ private struct DashboardContent: View {
         // Without this the root layout leaves an app-background strip beneath
         // dark web content.
         .ignoresSafeArea(.container, edges: .bottom)
-        .overlay(alignment: .topTrailing) {
-            settingsAffordance
-        }
-        .overlay(alignment: .topLeading) {
-            // Its own view, observing the BrowserViewModel directly: this view
-            // observes the BrowserTab, which does not republish the view
-            // model's changes, so reading the flag here would never update.
-            ReturnToDashboardAffordance(model: tab.viewModel)
-        }
-        .overlay(alignment: .top) {
-            // The way back to the sheet after closing it: the page's own
-            // banner is hidden (R22), so this is the only sign-in control.
-            // Keyed on the sheet being ON SCREEN, not requested: a deferred
-            // request must not hide the only way in (M4 review).
-            // Not while the node itself is down: its banner comes first, and
-            // no dashboard sign-in can work until it is back (R31 review).
-            if session.state == .needsToken, !session.isTokenSheetOnScreen,
-               !statusViewModel.needsAuth, !statusViewModel.needsMachineAuth {
-                Button {
-                    session.isTokenSheetPresented = true
-                } label: {
-                    Label("Signed out — Sign in", systemImage: "person.crop.circle.badge.exclamationmark")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.thinMaterial, in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 4)
-                .accessibilityIdentifier("session-signin-button")
-            }
-        }
+        // No overlays (F15). Eight used to be painted over the page, at six
+        // alignments, as though its corners were ours; the dashboard draws its
+        // own controls there, and the gear landed on its notification bell.
+        // The three controls went into the app bar (`AppBar`); the rest are
+        // test instruments, below, in the status-bar corner. Do not add an
+        // overlay back:
+        // L1's testNothingOfOursSitsOnThePageAndSettingsIsReachable names any
+        // hittable control of ours whose frame meets the web view's.
         // M5.5: re-probe when the chosen gateway is unreachable.
         .sheet(isPresented: $showingGatewayPicker, onDismiss: {
             if let origin = pendingGateway {
@@ -263,39 +240,50 @@ private struct DashboardContent: View {
                               },
                               onCancel: { showingGatewayPicker = false })
         }
+        // Test instruments, never controls, and never over the page: one point
+        // of text each, in the top-leading corner of the status-bar strip.
+        // Behind the web view was tried first and is not enough -- a view the
+        // page covers still wins accessibility's hit test there, and L1's sweep
+        // found all four "on the page". Testing builds only: "Connected
+        // Browser" used to ship, as an invisible element VoiceOver read out
+        // over the dashboard's bottom-right corner (F15 §9).
 #if LATCHKEY_TEST_HOOKS
-        .overlay(alignment: .bottomLeading) {
-            // For UI tests: how many times the connecting block became visible
-            // for this tab (F4 §4.7). A block that flashes up and away between
-            // two looks is invisible to a poll but not to this number — which is
-            // the failure mode the 300 ms delay could introduce.
-            Text("connecting-shown:\(tab.viewModel.connectingShownCount)")
-                .accessibilityIdentifier("page-connecting-shown-count")
-                .opacity(0.01)
-        }
-        .overlay(alignment: .bottom) {
-            // For UI tests: how many times the page asked for a token, so a
-            // sheet that flashes up and away between two looks is caught.
-            Text("\(session.authRequiredEvents)")
-                .accessibilityIdentifier("session-auth-required-count")
-                .opacity(0.01)
+        .background(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
+                // How many times the connecting block became visible for this
+                // tab (F4 §4.7). A block that flashes up and away between two
+                // looks is invisible to a poll but not to this number -- which
+                // is the failure mode the 300 ms delay could introduce.
+                Text("connecting-shown:\(tab.viewModel.connectingShownCount)")
+                    .accessibilityIdentifier("page-connecting-shown-count")
+                // How many times the page asked for a token, so a sheet that
+                // flashes up and away between two looks is caught.
+                Text("\(session.authRequiredEvents)")
+                    .accessibilityIdentifier("session-auth-required-count")
+                // A concrete element meaning "the dashboard is up". An
+                // identifier applied to a container view is not reliably surfaced.
+                Text("Connected Browser")
+                    .accessibilityIdentifier("connected-browser")
+                if TSNetManager.tcpChaosTestRequested(),
+                   let status = workspace.model.tcpChaosTestStatus {
+                    Text(status)
+                        .accessibilityIdentifier("tcp-chaos-test-status")
+                }
+#if canImport(UIKit)
+                // F9 §0.2 / F15 §6: the window's safe-area top, for L1. It reads
+                // the window, so where it sits does not matter.
+                if TestHooks.flag("-UITestReportSafeArea") {
+                    WindowSafeAreaProbe().frame(width: 1, height: 1)
+                }
+#endif
+            }
+            .font(.system(size: 1))
+            .lineLimit(1)
+            .opacity(0.01)
+            .allowsHitTesting(false)
+            .ignoresSafeArea()
         }
 #endif
-        .overlay(alignment: .bottomTrailing) {
-            // A concrete accessibility element for UI automation. An
-            // identifier applied to a container view is not reliably surfaced.
-            Text("Connected Browser")
-                .accessibilityIdentifier("connected-browser")
-                .opacity(0.01)
-        }
-        .overlay(alignment: .bottomLeading) {
-            if TSNetManager.tcpChaosTestRequested(),
-               let status = workspace.model.tcpChaosTestStatus {
-                Text(status)
-                    .accessibilityIdentifier("tcp-chaos-test-status")
-                    .opacity(0.01)
-            }
-        }
         // With the toolbar gone, these are the hardware-keyboard paths to
         // Settings (which owns the log viewer) and to a reload. Defined here
         // so they stay available regardless of what has focus inside the web
@@ -313,42 +301,23 @@ private struct DashboardContent: View {
         }
     }
 
-    /// The one piece of app chrome the dashboard keeps.
-    ///
-    /// Deleting the browser toolbar (PLAN §1.5) also deleted the only gear
-    /// button reachable after connecting — the other one lives in the
-    /// connection gate, which is gone by then. That left Settings, and through
-    /// it the log viewer and the routing diagnostic, reachable ONLY by ⌘, on a
-    /// hardware keyboard: unreachable on an iPhone. §1.9 says keep the
-    /// diagnostics, so something has to be tappable.
-    ///
-    /// Kept deliberately small and faint so it reads as an affordance rather
-    /// than chrome, and placed top-trailing where KiroCrew's own header has no
-    /// controls. It sits inside the safe area, so it does not fight the status
-    /// bar.
-    ///
-    /// The fade is on the label, not the button: over the web view, a button
-    /// with `.opacity` below 1 gets no taps at all (not even with a
-    /// `contentShape`), so this gear was dead from M1 until R29's diagnostics
-    /// test tapped it.
-    private var settingsAffordance: some View {
-        Button(action: onSettings) {
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(7)
-                .background(.thinMaterial, in: Circle())
-                .opacity(0.45)
-        }
-        .buttonStyle(.plain)
-        .padding(.trailing, 10)
-        .padding(.top, 4)
-        .accessibilityIdentifier("settings-button")
-        .accessibilityLabel("Settings")
+    /// The sign-in button in the app bar. Keyed on the sheet being ON SCREEN,
+    /// not requested: a deferred request must not hide the only way in (M4
+    /// review). Not while the node itself is down: its banner comes first, and
+    /// no dashboard sign-in can work until it is back (R31 review).
+    private var showsSignIn: Bool {
+        session.state == .needsToken && !session.isTokenSheetOnScreen
+            && !statusViewModel.needsAuth && !statusViewModel.needsMachineAuth
     }
 
     private var gatewayContent: some View {
-        VStack(spacing: 0) {
+        // The app bar, then the page (F15). The banners are between them: in
+        // the layout like the page, never over it, and they stay when the bar
+        // retracts (F15 §9 argues their place).
+        AppBarColumn(model: tab.viewModel, controller: tab.viewModel.appBar,
+                     showsSignIn: showsSignIn,
+                     onSignIn: { session.isTokenSheetPresented = true },
+                     onSettings: onSettings) {
             // The node's own trouble first, in the layout rather than over it
             // (R31 review): an overlay covered the gateway banner's buttons and
             // was itself covered by the sign-in capsule.
@@ -381,8 +350,8 @@ private struct DashboardContent: View {
                 .frame(minHeight: 0, maxHeight: .infinity)
                 .layoutPriority(-1)
             // R31, R33: the two clocks that end the app, warned about ahead.
-            // At the bottom: the top edge is where the gear, the way back to
-            // the dashboard, the sign-in capsule and the login banner go.
+            // At the bottom: the top edge is the app bar's and the node's
+            // banners'.
             ForEach(expiryWarnings, id: \.self) { message in
                 Label(message, systemImage: "clock.badge.exclamationmark")
                     .font(.subheadline)
@@ -447,7 +416,7 @@ private struct DashboardContent: View {
 /// Shown only after a same-origin new-window request loaded in place
 /// (KiroCrew's "pop out chat", "open in new tab"). One window and no back
 /// button would otherwise leave the user stranded on that page (R3 review).
-/// Styled to match the gear.
+/// The app bar's leading item (F15), styled to match the gear.
 struct ReturnToDashboardAffordance: View {
     @ObservedObject var model: BrowserViewModel
 
@@ -463,8 +432,8 @@ struct ReturnToDashboardAffordance: View {
                     .background(.thinMaterial, in: Capsule())
             }
             .buttonStyle(.plain)
-            .padding(.leading, 10)
-            .padding(.top, 4)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
             .accessibilityIdentifier("return-to-dashboard-button")
         }
     }
@@ -493,10 +462,7 @@ private struct GatewayUnreachableBanner: View {
                 .font(.subheadline.weight(.semibold))
                 .accessibilityIdentifier("gateway-unreachable-settings-button")
         }
-        .padding(.leading, 12)
-        // Room for the settings gear, which floats over the top-trailing
-        // corner and covered "Change" (seen in an M5 test screenshot).
-        .padding(.trailing, 52)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.thinMaterial)
         .overlay(alignment: .bottom) { Divider() }
@@ -527,8 +493,7 @@ private struct MachineAuthBanner: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 52)   // clear of the settings gear
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.thinMaterial)
         .overlay(alignment: .bottom) { Divider() }
@@ -575,10 +540,7 @@ private struct LoginBanner: View {
                 isStartingLogin = false
             }
         }
-        .padding(.leading, 12)
-        // Room for the settings gear, which sits over this corner: it would
-        // take taps meant for Login (R29 review; as GatewayUnreachableBanner).
-        .padding(.trailing, 52)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.thinMaterial)
         .overlay(alignment: .bottom) { Divider() }

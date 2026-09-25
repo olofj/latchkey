@@ -194,6 +194,76 @@ enum PageScriptSources {
     })();
     """#
 
+    /// The name `appBarObserver` posts to, in the app's own content world.
+    static let appBarHandler = "latchkeyAppBar"
+
+    /// Reports the finger's travel to the app bar (F15 §4a).
+    ///
+    /// Why a page script and not the web view's `UIScrollView`: KiroCrew
+    /// 0.7.0's shell is `h-dvh` with `overflow-hidden` and inner scrollers,
+    /// so the document never scrolls and the scroll view never moves. Only an
+    /// element inside the page does, and WebKit reports that only to the page.
+    ///
+    /// It observes and never takes part. Every listener is `passive` (it
+    /// cannot call `preventDefault`, so it cannot stop a scroll) and on
+    /// `window` in the capture phase, which sees a scroll of ANY element
+    /// without reading the page's markup (F15 §3). It lives in the app's
+    /// content world, invisible to the page.
+    ///
+    /// Posts `{p: 's'|'m'|'e', dx, dy, r}`: a touch-down, a move coalesced to
+    /// one per frame, a lift. dx/dy are screen points. `r` is the largest
+    /// vertical scroll range of anything that scrolled during the touch — 0
+    /// when nothing did, which is how a page too short to scroll is told
+    /// apart from one that scrolls. A change of viewport size (the bar itself
+    /// retracting) re-bases the finger instead of counting as travel.
+    static let appBarObserver = #"""
+    (function () {
+      var handlers = window.webkit && window.webkit.messageHandlers;
+      var handler = handlers && handlers.latchkeyAppBar;
+      if (!handler) { return; }
+      var opts = {capture: true, passive: true};
+      var active = false, pending = false, x = 0, y = 0, w = 0, h = 0, dx = 0, dy = 0, range = 0;
+      function scale() { return window.visualViewport ? window.visualViewport.scale : 1; }
+      function send(p) {
+        try { handler.postMessage({p: p, dx: dx, dy: dy, r: range}); } catch (e) {}
+        dx = 0; dy = 0;
+      }
+      function flush() { pending = false; if (active && (dx || dy)) { send('m'); } }
+      function base(t) { x = t.clientX; y = t.clientY; w = window.innerWidth; h = window.innerHeight; }
+      function end() {
+        if (!active) { return; }
+        if (dx || dy) { send('m'); }
+        active = false;
+        send('e');
+      }
+      window.addEventListener('touchstart', function (e) {
+        if (e.touches.length !== 1) { end(); return; }
+        active = true; dx = 0; dy = 0; range = 0;
+        base(e.touches[0]);
+        send('s');
+      }, opts);
+      window.addEventListener('touchmove', function (e) {
+        if (!active) { return; }
+        if (e.touches.length !== 1) { end(); return; }
+        var t = e.touches[0];
+        if (window.innerWidth !== w || window.innerHeight !== h) { base(t); return; }
+        var k = scale();
+        dx += (t.clientX - x) * k; dy += (t.clientY - y) * k;
+        x = t.clientX; y = t.clientY;
+        if (!pending) { pending = true; requestAnimationFrame(flush); }
+      }, opts);
+      window.addEventListener('touchend', end, opts);
+      window.addEventListener('touchcancel', end, opts);
+      window.addEventListener('scroll', function (e) {
+        if (!active) { return; }
+        var el = (e.target === document || e.target === window) ? document.scrollingElement : e.target;
+        if (!el || typeof el.scrollHeight !== 'number') { return; }
+        var r = (el.scrollHeight - el.clientHeight) * scale();
+        if (r > range) { range = r; }
+      }, opts);
+    })();
+    """#
+
     /// Parses what `pageBackground` posts into sRGB components in 0…1.
     /// `nil` for anything else — an empty report, `color(…)`, `oklch(…)` —
     /// and for a colour that is not fully opaque: the strip would then show

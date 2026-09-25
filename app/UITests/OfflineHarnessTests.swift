@@ -29,6 +29,7 @@
 //  Tailscale, a leak to one would SUCCEED through the host's VPN.
 //
 
+import UIKit
 import XCTest
 
 @MainActor
@@ -493,8 +494,8 @@ final class OfflineHarnessTests: XCTestCase {
     /// is above the page and every probe — `viewport-fit=cover`, an ordinary
     /// page, and the product's complete viewport tag — is told a top inset of
     /// **0px**, with the web view's frame starting at the window's safe-area
-    /// top. The strip between the island and the page carries the page's own
-    /// canvas colour, not a letterbox bar.
+    /// top plus the app bar (F15). The strip between the island and the page
+    /// carries the page's own canvas colour, not a letterbox bar.
     ///
     /// This INVERTED on 2026-09-24. It used to record that the cover probe is
     /// told 62px with the frame at y=0: the web view was drawn under the island
@@ -537,8 +538,9 @@ final class OfflineHarnessTests: XCTestCase {
             // The simulator must have something above the page, or "told 0"
             // proves nothing: L1's iPhone 17 reports 62.
             XCTAssertGreaterThan(safeTop, 0, "\(probe): a device with a top safe area, got \(safeValue)")
-            XCTAssertEqual(minY, safeTop, accuracy: 0.5,
-                           "\(probe): the web view starts at the window's safe-area top, not under the island")
+            // F15: the app bar sits between the safe-area top and the page.
+            XCTAssertEqual(minY, safeTop + Self.appBarHeight, accuracy: 0.5,
+                           "\(probe): the web view starts below the app bar, not under the island")
             XCTAssertEqual(r["top"] as? String, "0px",
                            "\(probe): nothing is above the page any more, so it is told a top inset of 0")
             for edge in ["right", "bottom", "left"] {
@@ -555,6 +557,203 @@ final class OfflineHarnessTests: XCTestCase {
         }
         XCTAssertEqual(seen.count, 3, "every probe reported")
     }
+
+    // MARK: - F15: Latchkey does not own the page's corners
+
+    /// `AppBarRetraction.barHeight`. The UI test target cannot import the app,
+    /// and a test that read the bar's height from the bar would pass a padded one.
+    static let appBarHeight = 44.0
+
+    /// F15 §6, all three of its tests, in both orientations, on one launch:
+    ///
+    /// 1. **Nothing of ours sits on the page.** Every hittable element of the
+    ///    app's own — anything outside the web view's subtree — is swept, and
+    ///    none may overlap the web view's frame. Shown to fail by putting the
+    ///    gear back as an overlay on the web view's top-trailing corner: the
+    ///    sweep names it and both rectangles.
+    /// 2. **Settings is reachable**: the gear is hittable and opens Settings,
+    ///    portrait and landscape. Shown to fail by starting the bar retracted,
+    ///    i.e. Settings behind a gesture.
+    /// 3. **The top strip is no taller than it must be**: the web view's `minY`
+    ///    is the window's safe-area top plus the bar, and no more. Shown to fail
+    ///    by padding the bar: both numbers are printed.
+    ///
+    /// Then the fake dashboard, which is too short to scroll, is dragged up
+    /// deliberately: the bar must stay (F15 §4b), or it could never come back.
+    func testNothingOfOursSitsOnThePageAndSettingsIsReachable() async throws {
+        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         extra: ["-UITestReportSafeArea"])
+        defer { app.terminate() }
+        _ = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 30) { $0["ws"] as? String == "ws:open" }
+        let web = app.webViews.firstMatch
+        XCTAssertTrue(web.waitForExistence(timeout: 10), "the web view is on screen")
+        let gear = app.buttons["settings-button"]
+
+        for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+            let name = orientation.isLandscape ? "landscape" : "portrait"
+            XCUIDevice.shared.orientation = orientation
+            try await settle(app, web: web, landscape: orientation.isLandscape)
+            let safeTop = windowSafeTop(app)
+            let webFrame = web.frame
+
+            let line = "APP-BAR \(name): webViewFrame=\(webFrame) windowSafeTop=\(safeTop) barHeight=\(Self.appBarHeight)"
+            print(line)
+            add(XCTAttachment(string: line))
+
+            let onThePage = try hittableControlsOverlapping(webFrame, in: app)
+            XCTAssertTrue(onThePage.isEmpty,
+                          "\(name): nothing of Latchkey's may sit on the page (web view \(webFrame)); on it: \(onThePage)")
+            XCTAssertEqual(Double(webFrame.minY), safeTop + Self.appBarHeight, accuracy: 0.5,
+                           "\(name): the page starts at the safe-area top plus the bar, and no lower: "
+                           + "webViewMinY=\(webFrame.minY) windowSafeTop=\(safeTop) barHeight=\(Self.appBarHeight)")
+
+            XCTAssertTrue(gear.waitForExistence(timeout: 5) && gear.isHittable,
+                          "\(name): the gear is on screen and tappable")
+            gear.tap()
+            let settings = app.navigationBars["Settings"]
+            XCTAssertTrue(settings.waitForExistence(timeout: 10), "\(name): the gear opens Settings")
+            settings.buttons["Done"].tap()
+            XCTAssertTrue(settings.waitForNonExistence(timeout: 10), "\(name): and Settings closes again")
+        }
+
+        XCUIDevice.shared.orientation = .portrait
+        try await settle(app, web: web, landscape: false)
+        let safeTop = windowSafeTop(app)
+        drag(web, dy: -240)
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(Double(web.frame.minY), safeTop + Self.appBarHeight, accuracy: 0.5,
+                       "a page too short to scroll keeps the bar, however hard it is dragged")
+        XCTAssertTrue(gear.isHittable, "and the gear with it")
+    }
+
+    /// F15 §4a/§4b on a page shaped like KiroCrew 0.7.0 — a full-height shell
+    /// that never scrolls, with an inner scroller that does (`root=shell`). A
+    /// drag up of 240 pt retracts the bar and the page starts at the safe-area
+    /// top; a drag back down returns it. A 30 pt nudge changes nothing. The page
+    /// reports its own scroll position, which proves the drag reached it: the
+    /// bar observes the gesture and never consumes it.
+    ///
+    /// Then again with `-UITestAssumeVoiceOver`, L1's stand-in for VoiceOver:
+    /// the same drag scrolls the page and the bar stays, with the gear hittable.
+    /// Retracted must not mean gone for VoiceOver.
+    func testTheAppBarRetractsOnADeliberateScrollAndComesBack() async throws {
+        addTeardownBlock { try? await Self.post("\(Self.dashboardControl)/__mode?root=page") }
+        try await Self.post("\(Self.dashboardControl)/__mode?root=shell")
+        for voiceOver in [false, true] {
+            let who = voiceOver ? "VoiceOver" : "no VoiceOver"
+            _ = try await Self.post("\(Self.dashboardControl)/__reset")
+            let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                             extra: ["-UITestReportSafeArea"] + (voiceOver ? ["-UITestAssumeVoiceOver"] : []))
+            _ = try await waitForInsets("shell", timeout: 40) { ($0["seq"] as? Int ?? 0) >= 2 }
+            let web = app.webViews.firstMatch
+            XCTAssertTrue(web.waitForExistence(timeout: 10), "\(who): the web view is on screen")
+            let gear = app.buttons["settings-button"]
+            let safeTop = windowSafeTop(app)
+            let shown = safeTop + Self.appBarHeight
+            XCTAssertEqual(Double(web.frame.minY), shown, accuracy: 0.5, "\(who): the bar starts shown")
+
+            if !voiceOver {
+                drag(web, dy: -30)
+                try await Task.sleep(for: .seconds(1))
+                XCTAssertEqual(Double(web.frame.minY), shown, accuracy: 0.5, "a 30 pt nudge leaves the bar alone")
+            }
+
+            drag(web, dy: -240)
+            let r = try await waitForInsets("shell", timeout: 10) { Self.number($0["scrollTop"]) > 100 }
+            let line = "APP-BAR-SCROLL \(who): scrollTop=\(r["scrollTop"] ?? "-") scrollRange=\(r["scrollRange"] ?? "-")"
+                + " innerHeight=\(r["innerHeight"] ?? "-") webViewMinY=\(web.frame.minY) windowSafeTop=\(safeTop)"
+            print(line)
+            add(XCTAttachment(string: line))
+            XCTAssertGreaterThan(Self.number(r["scrollTop"]), 100, "\(who): the drag scrolled the page: it was not consumed")
+
+            if voiceOver {
+                try await Task.sleep(for: .seconds(1))
+                XCTAssertEqual(Double(web.frame.minY), shown, accuracy: 0.5,
+                               "VoiceOver: the bar never retracts, so Settings is never off screen")
+                XCTAssertTrue(gear.isHittable, "VoiceOver: the gear stays hittable after a scroll")
+            } else {
+                let retracted = try await waitForMinY(web, safeTop, timeout: 5)
+                XCTAssertEqual(retracted, safeTop, accuracy: 0.5,
+                               "a deliberate drag up retracts the bar: the page starts at the safe-area top")
+                XCTAssertFalse(gear.exists && gear.isHittable, "retracted, the gear is not offered where it is not")
+                drag(web, dy: 240)
+                let back = try await waitForMinY(web, shown, timeout: 5)
+                XCTAssertEqual(back, shown, accuracy: 0.5, "a deliberate drag down brings the bar back")
+                XCTAssertTrue(gear.waitForExistence(timeout: 5) && gear.isHittable, "and the gear with it")
+            }
+            app.terminate()
+        }
+    }
+
+    /// Every hittable element outside the web view's subtree whose frame
+    /// overlaps `webFrame` by more than a hairline, as "id-or-label frame".
+    /// One snapshot for the tree; hittability is asked only of the overlaps.
+    private func hittableControlsOverlapping(_ webFrame: CGRect, in app: XCUIApplication) throws -> [String] {
+        let kinds: Set<XCUIElement.ElementType> = [.button, .link, .staticText, .image, .switch, .slider,
+                                                  .textField, .secureTextField, .toggle, .menuButton]
+        var overlapping: [(XCUIElement.ElementType, String, CGRect)] = []
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.elementType == .webView { return }   // the page's own, whatever it draws
+            if kinds.contains(s.elementType) {
+                let i = s.frame.intersection(webFrame)
+                if !i.isNull, i.width > 0.5, i.height > 0.5 {
+                    overlapping.append((s.elementType, s.identifier.isEmpty ? s.label : s.identifier, s.frame))
+                }
+            }
+            s.children.forEach(walk)
+        }
+        walk(try app.snapshot())
+        return overlapping.compactMap { type, key, frame in
+            let e = app.descendants(matching: type).matching(
+                NSPredicate(format: "identifier == %@ OR label == %@", key, key)).firstMatch
+            return e.exists && e.isHittable ? "\(key) \(frame)" : nil
+        }
+    }
+
+    /// Waits for rotation and layout to finish: the app's frame has the
+    /// orientation's shape and the web view's frame reads the same twice.
+    private func settle(_ app: XCUIApplication, web: XCUIElement, landscape: Bool) async throws {
+        let deadline = Date().addingTimeInterval(10)
+        var last = CGRect.null
+        while Date() < deadline {
+            let f = app.frame
+            let current = web.frame
+            if (f.width > f.height) == landscape, current == last { return }
+            last = current
+            try await Task.sleep(for: .milliseconds(400))
+        }
+        XCTFail("layout did not settle in \(landscape ? "landscape" : "portrait"); app \(app.frame), web view \(last)")
+    }
+
+    private func windowSafeTop(_ app: XCUIApplication) -> Double {
+        let probe = app.descendants(matching: .any).matching(identifier: "window-safe-area").firstMatch
+        XCTAssertTrue(probe.waitForExistence(timeout: 10), "the safe-area probe is installed")
+        let value = probe.value as? String ?? ""
+        let top = Double(value.replacingOccurrences(of: "top=", with: ""))
+        XCTAssertNotNil(top, "the safe-area probe reads a number: \(value)")
+        return top ?? -1
+    }
+
+    /// A finger drag of `dy` points over the element's middle, held still at
+    /// the end so it lifts with no momentum: a deliberate scroll, not a flick.
+    private func drag(_ element: XCUIElement, dy: Double) {
+        let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: dy < 0 ? 0.75 : 0.3))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: dy)),
+                    withVelocity: .slow, thenHoldForDuration: 0.3)
+    }
+
+    private func waitForMinY(_ element: XCUIElement, _ want: Double, timeout: TimeInterval) async throws -> Double {
+        let deadline = Date().addingTimeInterval(timeout)
+        var y = Double(element.frame.minY)
+        while abs(y - want) > 0.5, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(200))
+            y = Double(element.frame.minY)
+        }
+        return y
+    }
+
+    private static func number(_ v: Any?) -> Double { (v as? NSNumber)?.doubleValue ?? -1 }
 
     /// The screen's colour at the horizontal centre, `y` points down: below
     /// the island and above the web view when `y` is just short of the

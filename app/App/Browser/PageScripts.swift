@@ -45,6 +45,45 @@ enum PageScripts {
         controller.add(PageBackgroundHandler(onChange), contentWorld: pageBackgroundWorld,
                        name: PageScriptSources.pageBackgroundHandler)
     }
+
+    /// The app's own world for `PageScriptSources.appBarObserver`.
+    static let appBarWorld = WKContentWorld.world(name: "latchkey-app-bar")
+
+    /// Installs the app bar's finger observer (F15 §4a). `onSample` gets each
+    /// touch-down, move and lift, main frame only. Called once per web view,
+    /// before its first navigation.
+    static func installAppBarObserver(into controller: WKUserContentController,
+                                      onSample: @escaping (AppBarRetraction.Sample) -> Void) {
+        controller.addUserScript(WKUserScript(source: PageScriptSources.appBarObserver,
+                                              injectionTime: .atDocumentStart,
+                                              forMainFrameOnly: true,
+                                              in: appBarWorld))
+        controller.add(AppBarHandler(onSample), contentWorld: appBarWorld,
+                       name: PageScriptSources.appBarHandler)
+    }
+}
+
+/// Decodes the observer's posts. Anything malformed is dropped: the bar's
+/// safe state is shown, and a sample that is not understood changes nothing.
+private final class AppBarHandler: NSObject, WKScriptMessageHandler {
+    let onSample: (AppBarRetraction.Sample) -> Void
+    init(_ onSample: @escaping (AppBarRetraction.Sample) -> Void) { self.onSample = onSample }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any],
+              let phase = body["p"] as? String else { return }
+        switch phase {
+        case "s": onSample(.began)
+        case "e": onSample(.ended)
+        case "m":
+            guard let dx = (body["dx"] as? NSNumber)?.doubleValue,
+                  let dy = (body["dy"] as? NSNumber)?.doubleValue,
+                  let range = (body["r"] as? NSNumber)?.doubleValue,
+                  dx.isFinite, dy.isFinite, range.isFinite else { return }
+            onSample(.moved(dx: dx, dy: dy, scrollRange: range))
+        default: return
+        }
+    }
 }
 
 /// Holds a closure rather than the model: WKUserContentController retains its
