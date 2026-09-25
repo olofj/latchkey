@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 # L1: the offline harness suite (PLAN M2.9; revisions R9, R10, R11, R13).
 #
-#   scripts/test-offline.sh [--build]
+#   scripts/test-offline.sh [--build] [--serial | --shards N]
+#
+# By default L1 runs across 4 simulators at once (F14 stage 2):
+# scripts/test-offline-shards.py builds once, creates and boots "Latchkey
+# Shard 1..N" if they are not booted, runs this script on each as a worker
+# with its share of the tests, and gives one verdict. The shard simulators
+# stay booted between runs; `scripts/test-offline-shards.py sims down` shuts
+# them down (`sims delete` removes them). --shards N or LATCHKEY_SHARDS=N
+# picks N (2-9).
+#
+# --serial runs everything on one simulator, SIM_NAME (default "iPhone 17"),
+# as before F14; use it on a host with room for one simulator. Naming a
+# simulator (SIM_NAME) or an instance (LATCHKEY_INSTANCE) also means serial.
 #
 # Runs the real app, a real WKWebView and the production proxy path against a
 # stub SOCKS5 proxy and a fake dashboard on loopback. Needs no Tailscale
@@ -28,21 +40,45 @@
 # its own ports (testing/harness/Makefile, F14), so two runs can share the
 # host. Give each its own simulator with SIM_NAME, and build once beforehand:
 # two --build runs at once would race in one DerivedData.
+#
+# As a shard worker (test-offline-shards.py sets these): LATCHKEY_SHARD_TESTS
+# names the tests to run, LATCHKEY_XCTESTRUN the built .xctestrun to run them
+# from, LATCHKEY_LOG_DIR where the logs go. --build-only builds and exits.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/app"
 HARNESS="$ROOT/testing/harness"
+BUILD=0; BUILD_ONLY=0; SHARDS="${LATCHKEY_SHARDS:-4}"
+[[ -n "${SIM_NAME:-}${LATCHKEY_INSTANCE:-}" ]] && SHARDS=1
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --build) BUILD=1 ;;
+        --build-only) BUILD=1; BUILD_ONLY=1 ;;
+        --serial) SHARDS=1 ;;
+        --shards) SHARDS=${2:-}; shift ;;
+        *) echo "usage: $0 [--build] [--serial | --shards N]" >&2; exit 2 ;;
+    esac
+    shift
+done
+[[ "$SHARDS" =~ ^[1-9]$ ]] || { echo "error: the shard count must be 1-9, not '$SHARDS'" >&2; exit 1; }
+SHARD_TESTS="${LATCHKEY_SHARD_TESTS:-}"
+if [[ $SHARDS -gt 1 && -z "$SHARD_TESTS" && $BUILD_ONLY -eq 0 ]]; then
+    exec python3 "$ROOT/scripts/test-offline-shards.py" --shards "$SHARDS" \
+        $([[ $BUILD -eq 1 ]] && echo --build)
+fi
 SIM_NAME="${SIM_NAME:-iPhone 17}"
 BUNDLE="net.lixom.latchkey"
 INSTANCE="${LATCHKEY_INSTANCE:-0}"
 [[ "$INSTANCE" =~ ^[0-9]$ ]] || { echo "error: LATCHKEY_INSTANCE must be 0-9, not '$INSTANCE'" >&2; exit 1; }
 HMAKE=(make -C "$HARNESS" --no-print-directory INSTANCE="$INSTANCE")
-BUILD=0
-[[ "${1:-}" == "--build" ]] && BUILD=1
+XCTESTRUN="${LATCHKEY_XCTESTRUN:-}"
+if [[ -n "$SHARD_TESTS" && ( $BUILD -eq 1 || -z "$XCTESTRUN" ) ]]; then
+    echo "error: a shard worker runs a prebuilt LATCHKEY_XCTESTRUN and never builds" >&2; exit 1
+fi
 
-LOG_DIR="$APP/build/offline-logs/$(date +%Y%m%d-%H%M%S)"
-[[ "$INSTANCE" == 0 ]] || LOG_DIR+="-i$INSTANCE"
+LOG_DIR="${LATCHKEY_LOG_DIR:-$APP/build/offline-logs/$(date +%Y%m%d-%H%M%S)}"
+[[ -n "${LATCHKEY_LOG_DIR:-}" || "$INSTANCE" == 0 ]] || LOG_DIR+="-i$INSTANCE"
 mkdir -p "$LOG_DIR"
 START=$(date +%s)
 say() { printf '::: %s\n' "$*"; }
@@ -55,7 +91,12 @@ say "preflight"
 "$ROOT/scripts/check-fixture-tailnets.sh" \
     "$APP/UITests/OfflineHarnessTests.swift" "$HARNESS"/*.py \
     "$HARNESS/Makefile" "$HARNESS/leaf.cnf"
-EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/OfflineHarnessTests.swift")
+if [[ -n "$SHARD_TESTS" ]]; then
+    read -ra TESTS <<< "$SHARD_TESTS"
+    EXPECTED=${#TESTS[@]}
+else
+    EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/OfflineHarnessTests.swift")
+fi
 if ifconfig 2>/dev/null | grep -A4 '^utun' | grep -qE 'inet 100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.'; then
     say "WARNING: the host's Tailscale is up (a utun interface holds a 100.64/10 address)."
     say "         Accepted (decision D7): the tests use no tailnet names or addresses,"
@@ -82,6 +123,33 @@ xcrun simctl keychain "$UDID" add-root-cert "$HARNESS/ca.der"
 # whose cached JS contains `?token=` in code) share the container otherwise.
 # test-without-building installs the app again.
 xcrun simctl uninstall "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
+
+# -------------------------------------------------------------------- build --
+SANDBOX_FLAGS=()
+if ! sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then
+    SANDBOX_FLAGS=("OTHER_SWIFT_FLAGS=\$(inherited) -disable-sandbox")
+fi
+if [[ $BUILD -eq 1 ]]; then
+    # A vendored Go change is only in the app once the framework is rebuilt
+    # (R29 shipped a stale one); a no-op when it is current.
+    say "TailscaleKit framework (rebuilds only if libtailscale changed; minutes if so)"
+    make -C "$APP" --no-print-directory framework > "$LOG_DIR/framework.log" 2>&1 \
+        || { echo "error: TailscaleKit framework build failed; see $LOG_DIR/framework.log" >&2; exit 1; }
+    # The commit, stamped as make tf stamps it (F12), so Status has a row to
+    # show; -dirty when the tree is, since a test build is taken from disk.
+    GIT_SHA=$(git -C "$ROOT" rev-parse --short=12 HEAD)
+    [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=all)" ]] || GIT_SHA+=-dirty
+    say "build-for-testing (Testing configuration, commit $GIT_SHA)"
+    (cd "$APP" && xcodebuild build-for-testing -project Latchkey.xcodeproj -scheme Latchkey \
+        -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \
+        -derivedDataPath build/DerivedData LATCHKEY_GIT_SHA="$GIT_SHA" \
+        "${SANDBOX_FLAGS[@]}" > "$LOG_DIR/build.log" 2>&1) \
+        || { echo "error: build failed; see $LOG_DIR/build.log" >&2; exit 1; }
+    if [[ $BUILD_ONLY -eq 1 ]]; then
+        say "built in $(( $(date +%s) - START ))s"
+        exit 0
+    fi
+fi
 
 # ------------------------------------------------------------------ harness --
 teardown() {
@@ -118,49 +186,39 @@ while IFS='=' read -r name value; do
 done < <("${HMAKE[@]}" -s ports)
 [[ -n "$HARNESS_RUN_DIR" ]] || { echo "error: make ports named no RUN_DIR" >&2; exit 1; }
 
-# -------------------------------------------------------------------- build --
-SANDBOX_FLAGS=()
-if ! sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then
-    SANDBOX_FLAGS=("OTHER_SWIFT_FLAGS=\$(inherited) -disable-sandbox")
-fi
-if [[ $BUILD -eq 1 ]]; then
-    # A vendored Go change is only in the app once the framework is rebuilt
-    # (R29 shipped a stale one); a no-op when it is current.
-    say "TailscaleKit framework (rebuilds only if libtailscale changed; minutes if so)"
-    make -C "$APP" --no-print-directory framework > "$LOG_DIR/framework.log" 2>&1 \
-        || { echo "error: TailscaleKit framework build failed; see $LOG_DIR/framework.log" >&2; exit 1; }
-    # The commit, stamped as make tf stamps it (F12), so Status has a row to
-    # show; -dirty when the tree is, since a test build is taken from disk.
-    GIT_SHA=$(git -C "$ROOT" rev-parse --short=12 HEAD)
-    [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=all)" ]] || GIT_SHA+=-dirty
-    say "build-for-testing (Testing configuration, commit $GIT_SHA)"
-    (cd "$APP" && xcodebuild build-for-testing -project Latchkey.xcodeproj -scheme Latchkey \
-        -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \
-        -derivedDataPath build/DerivedData LATCHKEY_GIT_SHA="$GIT_SHA" \
-        "${SANDBOX_FLAGS[@]}" > "$LOG_DIR/build.log" 2>&1) \
-        || { echo "error: build failed; see $LOG_DIR/build.log" >&2; exit 1; }
-fi
-
 # -------------------------------------------------------------------- tests --
 # Two passes. The sign-in test runs LAST and alone, so R1's disk scan below
 # sees the state it left: every other test launches with
 # -UITestResetWorkspaces, which deletes the workspace data, and XCTest runs
 # tests alphabetically, so a later test would erase the evidence (M2 review).
-SIGNIN="LatchkeyUITests/OfflineHarnessTests/testSignInTokenIsStrippedFromTheAddress"
+# A shard runs the sign-in pass and R1's scan only if the test is its own.
+CLASS="LatchkeyUITests/OfflineHarnessTests"
+SIGNIN="$CLASS/testSignInTokenIsStrippedFromTheAddress"
 run_tests() {   # $1 = label, rest = -only-testing/-skip-testing args
     local label=$1; shift
-    (cd "$APP" && xcodebuild test-without-building -project Latchkey.xcodeproj -scheme Latchkey \
-        -configuration Testing -destination "platform=iOS Simulator,id=$UDID" \
-        -derivedDataPath build/DerivedData -resultBundlePath "$LOG_DIR/$label.xcresult" \
+    local from=(-project Latchkey.xcodeproj -scheme Latchkey -configuration Testing
+                -derivedDataPath build/DerivedData)
+    [[ -n "$XCTESTRUN" ]] && from=(-xctestrun "$XCTESTRUN")
+    (cd "$APP" && xcodebuild test-without-building "${from[@]}" \
+        -destination "platform=iOS Simulator,id=$UDID" -resultBundlePath "$LOG_DIR/$label.xcresult" \
         -parallel-testing-enabled NO -test-timeouts-enabled YES \
         -default-test-execution-time-allowance 120 "$@") > "$LOG_DIR/$label.log" 2>&1
 }
-say "OfflineHarnessTests"
+SUITE_ARGS=(-only-testing:"$CLASS" -skip-testing:"$SIGNIN")
+RUN_SIGNIN=1
+if [[ -n "$SHARD_TESTS" ]]; then
+    SUITE_ARGS=(); RUN_SIGNIN=0
+    for t in "${TESTS[@]}"; do
+        if [[ "$CLASS/$t" == "$SIGNIN" ]]; then RUN_SIGNIN=1
+        else SUITE_ARGS+=(-only-testing:"$CLASS/$t"); fi
+    done
+fi
+say "OfflineHarnessTests${LATCHKEY_SHARD:+ (shard $LATCHKEY_SHARD, $EXPECTED tests)}"
 set +e
-run_tests suite -only-testing:LatchkeyUITests/OfflineHarnessTests -skip-testing:"$SIGNIN"
-SUITE_RC=$?
-run_tests signin -only-testing:"$SIGNIN"
-SIGNIN_RC=$?
+SUITE_RC=0; SIGNIN_RC=0
+: > "$LOG_DIR/suite.log"; : > "$LOG_DIR/signin.log"
+if [[ ${#SUITE_ARGS[@]} -gt 0 ]]; then run_tests suite "${SUITE_ARGS[@]}"; SUITE_RC=$?; fi
+if [[ $RUN_SIGNIN -eq 1 ]]; then run_tests signin -only-testing:"$SIGNIN"; SIGNIN_RC=$?; fi
 set -e
 TEST_RC=$(( SUITE_RC | SIGNIN_RC ))
 cat "$LOG_DIR/suite.log" "$LOG_DIR/signin.log" > "$LOG_DIR/test.log"
@@ -207,7 +265,9 @@ scan() {  # outfile, grep args...
     fi
     return $rc
 }
-if [[ -n "$CONTAINER" ]]; then
+if [[ $RUN_SIGNIN -eq 0 ]]; then
+    echo "    not this shard's: the sign-in test and its scan run on another"
+elif [[ -n "$CONTAINER" ]]; then
     # Everything the app can write: all of Library (Application Support,
     # WebKit's website data and caches, Cookies, HTTPStorages, Preferences)
     # and tmp. -a so binary stores (SQLite, the HTTP cache) are searched too;
@@ -273,6 +333,10 @@ if [[ $TEST_RC -ne 0 || $LEAK_RC -ne 0 ]]; then
     cp "$HARNESS_RUN_DIR/"*.log "$LOG_DIR/" 2>/dev/null || true
     say "FAILED in ${ELAPSED}s — logs, screenshot and xcresult in $LOG_DIR"
     exit 1
+fi
+if [[ -n "$SHARD_TESTS" ]]; then
+    say "shard $LATCHKEY_SHARD passed in ${ELAPSED}s"
+    exit 0
 fi
 # 240s, up from M2's 180s: F4 added three tests, one of which deliberately
 # stalls a dial for 22 s (and WebKit's own second dial takes it to ~39 s) --

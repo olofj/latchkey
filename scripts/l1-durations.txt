@@ -1,0 +1,48 @@
+# L1 per-test durations in seconds, for balancing shards (F14 stage 2).
+#
+# Seeded from docs/features/F14-fast-suites.md §9, the "after" column of the
+# 609 s table. scripts/test-offline-shards.py packs tests onto simulators
+# longest first by these numbers; a test missing here is given a default and
+# named in a warning. Each sharded run writes the durations it measured to
+# durations.txt in its log directory, in this format, to refresh from.
+#
+# The four F6 observers share one launch (settledDefaultRun) and always go
+# to one shard together, so the first of them by name carries it.
+38.1 testStalledLoadShowsTheConnectingStateForItsWholeDuration
+36.0 testANodeThatCannotStartShowsAScreenInsteadOfDying
+29.9 testTheAppBarRetractsOnADeliberateScrollAndComesBack
+28.7 testTypingInThePageKeepsItOnScreen
+27.3 testInsetProbesReportWhatThePageIsTold
+26.2 testStatusNamesTheCommitTheAppWasBuiltFrom
+25.3 testStrictModeBlocksTheAllowlistedCDNs
+24.8 testNothingOfOursSitsOnThePageAndSettingsIsReachable
+16.9 testBlockedImageShowsAMarkerThatOpensSafari
+18.1 testStartingANewNodeMovesTheOldStateAsideAndKeepsIt
+17.4 testLoggingSetupFailureStopsTheNodeRatherThanStartingItBlind
+17.6 testTheErrorPageOffersRetryAndAnotherGateway
+16.5 testAnUnwritableStateDirectoryIsSurvived
+14.5 testTryNowRestartsTheNodeImmediately
+14.5 testWindowOpenToAnotherOriginStillOpensSafari
+13.0 testAnAllowlistedCDNIsFetchedAndItsLookalikesAreNot
+13.3 testAReturningUserIsNotReintroduced
+0.1 testThePageCannotWidenTheAllowlist
+12.9 testWithoutTheRuleListTheAwayOriginIsReached
+0.1 testTheFontHostsStayBlockedWhileTheCDNsAreAllowed
+0.1 testOffOriginLoadsNeverReachTheAwayOrigin
+12.7 testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard
+11.8 testFailedRuleCompileLoadsNothing
+12.2 testSignInTokenIsStrippedFromTheAddress
+10.5 testTheNodeStartRetryIsVisibleAndSucceeds
+9.0 testDashboardLoadsThroughTheProxy
+9.7 testAGatewayAnswering502ShowsTheErrorPageInsteadOfABlankScreen
+9.8 testAFastLoadDoesNotLeaveTheConnectingStateOnScreen
+8.4 testProxyGoneWithoutRelayFailsWithoutDirectFallback
+9.0 testProxyGoneFailsWithoutDirectFallback
+7.9 testUnreachableGatewayShowsTheErrorPage
+8.0 testTheGatewaysOwnMachineryStillWorks
+8.2 testCertificateNameMismatchShowsTheErrorPage
+8.0 testBlackholedProxyFailsWithoutDirectFallback
+7.9 testNonTailnetOriginLoadsDirectAndNeverTouchesTheProxy
+6.5 testTheSignInButtonSurvivesItsOwnCopy
+6.5 testAFirstLaunchExplainsItself
+6.3 testTheIntroductionNamesThePostLoginSteps
