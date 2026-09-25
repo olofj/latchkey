@@ -821,7 +821,7 @@ keeps testing it.
 | `testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard` (existing) | L1 | unchanged: Safari foregrounds, no error page, `/away-target` never fetched in-app | dropping `top-document` from rule 2: WebKitErrorDomain 104, error page, Safari never appears |
 | `testWindowOpenToAnotherOriginStillOpensSafari` | L1 | tap the page's `window.open` link: Safari foregrounds; no in-app fetch of `/away-target` | dropping `popup` from rule 2: `open` returns null, nothing happens |
 | `testBlockedImageShowsAMarkerThatOpensSafari` | L1 | `blocked_marks >= 3` (no-alt, `alt=""`, and the one inside `/f6/inner`); `app.webViews.images["Image not loaded. Tap to open in Safari."]` exists with a frame ≥ 44×44; the page's own `el.click()` and a page-world `postMessage` attempt produce **no** Safari within 5 s and no "opened externally" log line; then a real tap: Safari foregrounds and `paths` shows `/f6/img.png` only with a `Safari/` UA | no marker script: `blocked_marks == 0`; `forMainFrameOnly: true`: the inner frame's image is unmarked; dropping `isTrusted`: Safari appears on the synthetic click |
-| `testTheRealDashboardConnectsToNothingButTheGateway` | session (`test-session.sh`), real 0.6.0 bundle, `-ProxyEverything` | after the existing sign-in reaches a live chat: the journal's CONNECT set is exactly `{gw.tail-scale.ts.net:443}` — no `fonts.googleapis.com`, no `fonts.gstatic.com`; and the `LOADED-PAGE` log line (`-UITestLogResponses`, extended with `fontsLinkRel` and `webFonts`) shows `fontsLinkRel: "preload"` (its `onload` never ran) and no Space Grotesk / JetBrains Mono face. Post-run grep in `test-session.sh`, like the R1 check | `testWithoutTheRuleListTheRealDashboardReachesForGoogle`: `-UITestNoContentRules` — the journal shows CONNECT `fonts.googleapis.com:443` and `fonts.gstatic.com:443` (dying on port 9, never leaving the machine). Permanent, like R10's control |
+| `testTheRealDashboardConnectsToNothingButTheGateway` | session (`test-session.sh`), real pinned bundle (0.7.1), `-ProxyEverything` | after the existing sign-in reaches a live chat: the journal's CONNECT set is exactly `{gw.tail-scale.ts.net:443}` — no `fonts.googleapis.com`, no `fonts.gstatic.com`; and the `LOADED-PAGE` log line (`-UITestLogResponses`, extended with `fontsLinkRel` and `webFonts`) shows `fontsLinkRel: "preload"` (its `onload` never ran) and no Space Grotesk / JetBrains Mono face. Post-run grep in `test-session.sh`, like the R1 check | `testWithoutTheRuleListTheRealDashboardReachesForGoogle`: `-UITestNoContentRules` — the journal shows CONNECT `fonts.googleapis.com:443` and `fonts.gstatic.com:443` (dying on port 9, never leaving the machine). Permanent, like R10's control |
 | The dashboard is undisturbed | session + F5 + F4 | the existing session tests, F5's chip tests and F4's "a painted dashboard never shows the connecting state" all run with the list installed — they are F6's regression net for "nothing else changes" | any of them failing after F6 lands |
 | A ported gateway under the list (when F1 lands) | discovery (L2) | against `gw-alt` on 8443: the CONNECT set is `{…:8443}` only and the WebSocket opens (the page reports) | an allow rule built from the host alone |
 | `test-content-rules.sh` | host (`make test-policy`) | `json(forOrigin:allowCDNs:)` for `https://gw.example.ts.net` (no port) and `:8443`; `.` escaped; an IPv6-literal origin escapes `[`; `http://` yields `ws://`; identifier carries `v1`, `cdn0`/`cdn1` and the origin; **10 rules with the allowlist on and 6 with it off**, the four CDN entries in the documented order, each anchored `^https://` and ending `/`; **then compiles the exact JSON with macOS WebKit's `WKContentRuleListStore(url:)`** in a temp store — pass = compiles; and asserts the `-UITestBreakContentRules` payload does **not** compile, so the compile check is not vacuous | a misspelled type (`"top-documents"`) fails to compile; an alternation `(https\|wss)` fails to compile; a CDN entry without its trailing `/` fails the shape assertion — all recorded once as evidence. If the CLI cannot use WebKit under the agent's sandbox, the same check moves into the simulator suite |
@@ -851,7 +851,7 @@ launches, not fixtures.
   request counters and SNI handshake counts, in both modes.
 - The same host on another port is refused: no CONNECT to `:8444` — the
   journal.
-- The real 0.6.0 bundle's connection set under `-ProxyEverything` is exactly
+- The real bundle's (pinned; 0.7.1 since 2026-09-25) connection set under `-ProxyEverything` is exactly
   the gateway; the fonts link stays `preload` — the journal and the
   `LOADED-PAGE` log line.
 - Sign-in, chat, `/__drop_ws` reconnect, the sessions panel and F5's chips work
@@ -1023,7 +1023,7 @@ launches, not fixtures.
   committed unrun; so is the session suite as F6's regression net (the
   acceptance criterion "sign-in, chat, `/__drop_ws` reconnect … the session
   suite green" is **not met yet**). They need a 0.6.0 bundle (`KIROCREW_DIST`)
-  or the fake re-pinned to 0.7.x.
+  or the fake re-pinned to 0.7.x. (Both have since run: the last entry.)
   Host tests: sabotages recorded by the implementing agent — a CDN rule
   without `/` or `^`, a fifth host, an identifier without the version, a
   misspelled `"top-documents"` (WebKit: `WKErrorDomain 6`, "Invalid string
@@ -1084,5 +1084,41 @@ launches, not fixtures.
   - `test-session.sh`'s font check reads only runs with the list and has
     no positive control for "a Google face loaded": the dump runs at
     `didFinish`, before a font may land. The journal assertion, with its
-    control, is the evidence; the log check is supporting. (Neither has run;
-    above.)
+    control, is the evidence; the log check is supporting. (Neither had run
+    then; both have since, below.)
+- 2026-09-25, **the session suite ran against the real bundle: 33/33 in
+  872 s, with the list installed** (SessionTests + ShareTests, `--build`).
+  The criterion "sign-in, chat, `/__drop_ws` reconnect, the sessions panel
+  … the session suite green" is **met**, against KiroCrew **0.7.1**, not
+  0.6.0: the fake gateway now serves one released wheel pinned by version
+  and sha256 (`4a7ee2a`; the 0.6.0 wheel was still on KiroCrew's CDN, but
+  0.7.1 is what the owner runs). The fake's auth emulation was re-read
+  against 0.7.1's source first; `/api/auth/me` gained two fields.
+  - **What the list blocked: one load per page, the Google Fonts
+    stylesheet** `https://fonts.googleapis.com/css2?family=Space+Grotesk…
+    &family=JetBrains+Mono…` — 84 page reports of exactly one blocked
+    load. The journal's CONNECT set was exactly `gw.tail-scale.ts.net:443`
+    (`testTheRealDashboardConnectsToNothingButTheGateway`), its control
+    reached both font hosts, and `LOADED-PAGE` showed `fontsLinkRel:
+    "preload"` and `webFonts: []` on both loads under the list. The page
+    falls back to system fonts, as §2 expects. Nothing else was blocked.
+  - **Gateway's own assets failed: 0** — after one fixture fix. The first
+    run logged one per page load; it was `/logo.png`, which the real
+    server serves from `static/` outside `dist` and the fake 404'd. Not
+    the list.
+  - WebSockets opened and reconnected across gateway restarts (the
+    restart tests; the fake gateway has no `/__drop_ws`, which is L1's
+    dashboard, so a restart is this suite's socket drop). Chat posts and
+    uploads went through (ShareTests). The sessions list reached the page
+    over `/api/chat/slots` and the socket's `slots` frame; no test asserts
+    on the panel's rendering itself.
+  - Two failures in the first run were fixture drift, not the list: the
+    banner's placeholder is "Paste sign-in URL…" in 0.7.x, and 0.7.x's
+    page retries a lost refresh inside the grace window before the test's
+    `/__restart` landed (now `?restart=1`, at the loss) — `746f020`.
+  - **Not exercised: same-origin `/sandbox-doc/` widgets.** The fake does
+    not emulate `POST /api/sandbox-doc` or its one-shot GET, and no fake
+    chat renders a widget, so the real bundle's widget frames never load
+    here. L1's `srcdoc`, same-origin iframe and blob cases remain the
+    evidence for §1's widget claim; a real-bundle check needs that route
+    and a widget-bearing message in the fake.
