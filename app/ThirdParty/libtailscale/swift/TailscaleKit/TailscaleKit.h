@@ -105,6 +105,8 @@ extern int tailscale_debug_reset_connections(tailscale sd);
 // TEST/DEBUG ONLY: shutdown(SHUT_RDWR) every TCP descriptor without close(2).
 extern int tailscale_debug_shutdown_tcp_connections(tailscale sd);
 extern int tailscale_debug_defunct_loopback(tailscale sd);
+// TEST/DEBUG ONLY: accept on the loopback and never answer, until restarted.
+extern int tailscale_debug_stall_loopback(tailscale sd);
 
 // Starts one disposable VM Ethernet/DHCP/DNS/gVisor bridge borrowing this
 // server's existing tsnet identity. macOS-only at runtime; declared here so

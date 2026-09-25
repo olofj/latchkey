@@ -759,6 +759,15 @@ func TsnetDebugDefunctLoopback(sd C.int) C.int {
 	return s.recErr(s.s.DebugDefunctLoopback())
 }
 
+//export TsnetDebugStallLoopback
+func TsnetDebugStallLoopback(sd C.int) C.int {
+	s := getServer(sd)
+	if s == nil {
+		return -1
+	}
+	return s.recErr(s.s.DebugStallLoopback())
+}
+
 // TsnetDebugShutdownTCPConnections deliberately calls shutdown(SHUT_RDWR) on
 // every TCP descriptor in the process without close(2). TEST/DEBUG ONLY. This
 // simulates iOS defuncting sockets while avoiding fd-number reuse races.

@@ -140,6 +140,18 @@ public actor TailscaleNode {
         }
     }
 
+    /// Makes the owned tsnet loopback listener accept every new connection and
+    /// never answer it, until `restartLoopback()` replaces it. TEST/DEBUG
+    /// ONLY: the silent loopback, where every LocalAPI request waits out its
+    /// timeout instead of failing with -1004 (Latchkey F16).
+    public func debugStallLoopback() throws {
+        guard let tailscale else { throw TailscaleError.badInterfaceHandle }
+        let res = tailscale_debug_stall_loopback(tailscale)
+        guard res == 0 else {
+            throw TailscaleError.fromPosixErrCode(res, tailscale.getErrorMessage())
+        }
+    }
+
     /// Calls shutdown(SHUT_RDWR) on every TCP socket in this process without
     /// closing descriptors. TEST/DEBUG ONLY: destructive chaos injection used
     /// to reproduce iOS socket defuncting and verify recovery.

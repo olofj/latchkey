@@ -109,6 +109,10 @@ extern int tailscale_debug_shutdown_tcp_connections(tailscale sd);
 // retaining its stale endpoint, reproducing an immediate loopback -1004.
 extern int tailscale_debug_defunct_loopback(tailscale sd);
 
+// TEST/DEBUG ONLY: make the owned tsnet LocalAPI/SOCKS listener accept every
+// new connection and never answer it, until the loopback is restarted.
+extern int tailscale_debug_stall_loopback(tailscale sd);
+
 // Starts one disposable VM Ethernet/DHCP/DNS/gVisor bridge borrowing this
 // server's existing tsnet identity. The bridge binds socket_path as a Unix
 // datagram endpoint for VZFileHandleNetworkDeviceAttachment. It never creates

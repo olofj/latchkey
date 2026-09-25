@@ -454,10 +454,12 @@ func (s *Server) startLoopbackLocked() (loopbackConfig, error) {
 		return loopbackConfig{}, err
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return loopbackConfig{}, err
 	}
+	// Latchkey F16: stallable by DebugStallLoopback (latchkey_stall.go).
+	ln := &stallableListener{Listener: tcpLn}
 	s.proxyCred = hex.EncodeToString(proxyCred[:])
 	s.localAPICred = hex.EncodeToString(localAPICred[:])
 	s.loopbackListener = ln

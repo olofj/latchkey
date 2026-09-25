@@ -25,6 +25,7 @@ extern int TsnetCrashTest(int sd, int mode);
 extern int TsnetDebugResetConnections(int sd);
 extern int TsnetDebugShutdownTCPConnections(int sd);
 extern int TsnetDebugDefunctLoopback(int sd);
+extern int TsnetDebugStallLoopback(int sd);
 extern int TsnetVMBridgeStart(int sd, char* socketPath, char* magicDNSSuffix, int* bridgeOut);
 extern int TsnetVMBridgeReady(int sd, int bridgeHandle);
 extern int TsnetVMBridgeStop(int sd, int bridgeHandle);
@@ -121,6 +122,10 @@ int tailscale_debug_shutdown_tcp_connections(tailscale sd) {
 
 int tailscale_debug_defunct_loopback(tailscale sd) {
 	return TsnetDebugDefunctLoopback(sd);
+}
+
+int tailscale_debug_stall_loopback(tailscale sd) {
+	return TsnetDebugStallLoopback(sd);
 }
 
 int tailscale_vm_bridge_start(tailscale sd, const char* socket_path, const char* magic_dns_suffix, int* bridge_out) {
