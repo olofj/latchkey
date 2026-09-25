@@ -169,6 +169,10 @@ function report() {
     refetches: REFETCHES,
     visible_fetches: VISIBLE_FETCHES,
     next_delay_ms: DELAY,
+    // F5 §6: the app's chip-row <style>, added at document start on the
+    // gateway's origin. The DOM is shared across content worlds, so the
+    // page sees the element the app's world appended.
+    chip_style: document.getElementById('latchkey-chip-row') !== null,
     ts: Date.now()
   };
   fetch('/__report', {method: 'POST', body: JSON.stringify(s),

@@ -586,6 +586,165 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(violations(later), 0)
     }
 
+    // MARK: - F5: the page's instance chips at phone width
+
+    /// F5 §1a, the measured bug: in portrait the header's left cell is about
+    /// 180 px and the bundle's own degrade rungs never fire, so the fake's
+    /// 404 from /api/instances puts the list-failed chip on top of `Local`
+    /// and the chevron. With the app's gated rule the bar scrolls instead.
+    func testTheInstanceChipsDoNotOverlapInPortrait() async throws {
+        let app = try await signedInDashboard()
+        defer { app.terminate() }
+        let bar = try await settledInstanceBar(app)
+        let chips = try instanceChips(bar)
+        let window = app.windows.firstMatch.frame
+        XCTAssertTrue(chips.contains { $0.label == "Local dashboard" } && chips.contains { $0.label == "Switch instance" },
+                      "the bar holds Local and the chevron: \(describe(chips))")
+        XCTAssertTrue(chips.contains { $0.label.contains("Ask the agent") || $0.label.contains("remote crews") },
+                      "the list failed (the fake's 404), so its chip is there too: \(describe(chips))")
+        assertLegible(chips, bar: bar.frame, window: window)
+        XCTAssertTrue(labelled(app, "Local dashboard").isHittable, "Local is hittable")
+        XCTAssertTrue(labelled(app, "Switch instance").isHittable, "the chevron is hittable")
+    }
+
+    /// Landscape too: the web view stops at the side safe areas (F9), so at
+    /// 874 pt the page is inside the bundle's `(width <= 767px)` phone band
+    /// and the rule applies (the bar measured 185 pt wide). The chips must
+    /// still be one row, disjoint, and on screen.
+    func testTheInstanceChipsStayInOneRowInLandscape() async throws {
+        let app = try await signedInDashboard()
+        defer { app.terminate() }
+        _ = try await settledInstanceBar(app)
+        try await rotate(app, to: .landscapeLeft)
+        let bar = try await settledInstanceBar(app)
+        let chips = try instanceChips(bar)
+        XCTAssertGreaterThanOrEqual(chips.count, 3, "Local, the chevron and the list-failed chip: \(describe(chips))")
+        assertLegible(chips, bar: bar.frame, window: app.windows.firstMatch.frame)
+    }
+
+    /// The rule touches the bar and nothing else: the page's sessions panel,
+    /// which F5 §1 measured as working in portrait, still opens and works.
+    func testTheSessionsPanelStillOpensInPortrait() async throws {
+        let app = try await signedInDashboard()
+        defer { app.terminate() }
+        _ = try await settledInstanceBar(app)
+        let toggle = app.webViews.buttons["Toggle sessions"].firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10), "the header has Toggle sessions")
+        toggle.tap()
+        let search = app.webViews.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR placeholderValue == %@", "Search sessions…", "Search sessions…"))
+            .firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10), "the panel opens with its search field")
+        XCTAssertTrue(search.isHittable, "the search field is hittable")
+        let new = app.webViews.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New")).firstMatch
+        XCTAssertTrue(new.waitForExistence(timeout: 5) && new.isHittable, "the panel's New button is there and hittable")
+    }
+
+    /// The page element labelled `label`, whatever XCUITest types it.
+    private func labelled(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+        app.webViews.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
+    }
+
+    /// A chip, as read from one accessibility snapshot of the bar.
+    private struct Chip {
+        let label: String
+        let frame: CGRect
+    }
+
+    /// Signed in on the real bundle, with its header rendered.
+    private func signedInDashboard() async throws -> XCUIApplication {
+        XCUIDevice.shared.orientation = .portrait
+        let app = launch()
+        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        try await signIn(app, kind: "cli")
+        return app
+    }
+
+    /// The page's instance bar (`role="group"`, `aria-label="Remote
+    /// instances"`), once its frame is the same across two reads 300 ms
+    /// apart: the header's ResizeObserver and a rotation's relayout run
+    /// after the element first appears, and so does its first paint, which
+    /// a tap must not beat (eb255cd).
+    private func settledInstanceBar(_ app: XCUIApplication,
+                                    file: StaticString = #filePath, line: UInt = #line) async throws -> XCUIElement {
+        let bar = app.webViews.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Remote instances")).firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 30), "the page's header shows its instance bar", file: file, line: line)
+        var last = bar.frame
+        for _ in 0..<20 {
+            try await Task.sleep(for: .milliseconds(300))
+            let now = bar.frame
+            if now == last && !now.isEmpty { return bar }
+            last = now
+        }
+        XCTFail("the instance bar's frame did not settle: \(last)", file: file, line: line)
+        return bar
+    }
+
+    /// Every control and labelled leaf in the bar, from one snapshot, with
+    /// its frame as is: a chip squeezed to nothing is still a chip, and the
+    /// overlap and window checks then fail on it. A control's own children
+    /// are its content, not chips.
+    private func instanceChips(_ bar: XCUIElement) throws -> [Chip] {
+        var chips: [Chip] = []
+        func labelled(_ node: XCUIElementSnapshot) -> Bool {
+            node.children.contains { !$0.label.isEmpty || labelled($0) }
+        }
+        func walk(_ node: XCUIElementSnapshot) {
+            for child in node.children {
+                // The chevron is a popup trigger, typed Other, not Button.
+                let control = [.button, .link, .popUpButton, .menuButton].contains(child.elementType)
+                let leaf = control || (!child.label.isEmpty && !labelled(child))
+                if leaf {
+                    if !child.label.isEmpty { chips.append(Chip(label: child.label, frame: child.frame)) }
+                } else {
+                    walk(child)
+                }
+            }
+        }
+        walk(try bar.snapshot())
+        return chips
+    }
+
+    private func describe(_ chips: [Chip]) -> String {
+        chips.map { "\($0.label) @ \(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))×\(Int($0.frame.height))" }
+            .joined(separator: "; ")
+    }
+
+    /// F5 §9: pairwise disjoint (each frame inset by 1 pt, so a shared edge
+    /// is not an overlap), in one row (every midY within 3 pt of the bar's),
+    /// and, when a window is given, inside it.
+    private func assertLegible(_ chips: [Chip], bar: CGRect, window: CGRect?,
+                               file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertGreaterThanOrEqual(chips.count, 2, "chips found: \(describe(chips))", file: file, line: line)
+        for (i, a) in chips.enumerated() {
+            for b in chips[(i + 1)...] {
+                let overlap = a.frame.insetBy(dx: 1, dy: 1).intersection(b.frame.insetBy(dx: 1, dy: 1))
+                XCTAssertTrue(overlap.isEmpty, "\"\(a.label)\" and \"\(b.label)\" overlap: \(describe(chips))",
+                              file: file, line: line)
+            }
+            XCTAssertLessThanOrEqual(abs(a.frame.midY - bar.midY), 3,
+                                     "\"\(a.label)\" is out of the bar's row (\(bar)): \(describe(chips))",
+                                     file: file, line: line)
+            if let window {
+                XCTAssertTrue(window.contains(a.frame), "\"\(a.label)\" is outside the window \(window): \(describe(chips))",
+                              file: file, line: line)
+            }
+        }
+    }
+
+    /// Rotates the device, then waits (up to 5 s) for the window to follow.
+    private func rotate(_ app: XCUIApplication, to orientation: UIDeviceOrientation) async throws {
+        XCUIDevice.shared.orientation = orientation
+        for _ in 0..<25 {
+            let f = app.windows.firstMatch.frame
+            if (f.width > f.height) == orientation.isLandscape { return }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        XCTFail("the window did not rotate: \(app.windows.firstMatch.frame)")
+    }
+
     // MARK: - Helpers
 
     /// `reset` false relaunches the SAME workspace -- its data store, cookies

@@ -16,7 +16,9 @@
 //  Order, as `BrowserViewModel.makeWebView` installs them: R2's token strip,
 //  F6's marker, F17's click reporter, the page-background reporter, the app
 //  bar's observer, then the session bridge. Each is an IIFE in its own world, so the order does
-//  not matter functionally; it is fixed so nobody has to wonder. No code
+//  not matter functionally; it is fixed so nobody has to wonder. F5's
+//  chip-row style is the one added later, at the first load of an origin,
+//  because it carries that origin. No code
 //  path removes a user script at runtime (`removeAllUserScripts` removes
 //  every one of them, the M1 finding), and `removeAllContentRuleLists`
 //  touches no script.
@@ -98,6 +100,24 @@ enum PageScripts {
                                               in: activationWorld))
         controller.add(ActivationHandler(onClick), contentWorld: activationWorld,
                        name: PageScriptSources.activationHandler)
+    }
+
+    /// The app's own world for `PageScriptSources.chipRowStyle(origin:)`.
+    static let chipRowWorld = WKContentWorld.world(name: "latchkey-chip-row")
+
+    /// Adds the chip-row style for `origin` (F5 §6). Main frame only; the
+    /// `<style>` it appends is DOM, so it applies whatever the world. Not
+    /// before the first navigation but at the first load of `origin`
+    /// (`BrowserViewModel.loadResolved`), which is where the qualified
+    /// origin is known; a script added before `load` runs on that load.
+    /// False when the origin is refused and nothing was added.
+    static func installChipRowStyle(into controller: WKUserContentController, origin: String) -> Bool {
+        guard let source = PageScriptSources.chipRowStyle(origin: origin) else { return false }
+        controller.addUserScript(WKUserScript(source: source,
+                                              injectionTime: .atDocumentStart,
+                                              forMainFrameOnly: true,
+                                              in: chipRowWorld))
+        return true
     }
 
     /// The app's own world for `PageScriptSources.appBarObserver`.

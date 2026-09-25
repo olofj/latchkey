@@ -541,6 +541,56 @@ enum PageScriptSources {
     })();
     """#
 
+    /// The id of the `<style>` element `chipRowStyle` adds.
+    nonisolated static let chipRowStyleID = "latchkey-chip-row"
+
+    /// The rule `chipRowStyle` adds (F5 §6). In the bundle's own phone band
+    /// the header's left cell is about 180 px, its degrade rungs (152 and
+    /// 128 px) never fire, and the instance bar's `shrink-0` chips overflow
+    /// their shrunken wrapper: they overlap the list-failed chip, or pinned
+    /// remotes are clipped to a sliver. This makes the bar a strip that
+    /// scrolls and stops its one wrapper shrinking below its content.
+    ///
+    /// Three facts must hold for it to match: `.tb-left`, its direct child
+    /// `.instance-tab-bar-inline` (a marker class no stylesheet uses) and
+    /// `role="group"`. A bundle that changes any of them makes it a no-op,
+    /// which is today's page, and the session suite's overlap test fails.
+    /// No `display`, `position` or size, so a reused class does little harm.
+    nonisolated static let chipRowCSS = "@media (width <= 767px) { "
+        + ".tb-left > .instance-tab-bar-inline[role=\"group\"] { "
+        + "overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; } "
+        + ".tb-left > .instance-tab-bar-inline[role=\"group\"] > div { flex-shrink: 0; } }"
+
+    /// Adds `chipRowCSS` once per document, and only on `origin`, the
+    /// gateway's (F5 §6). Runs in the app's own world, main frame only, at
+    /// document start: the `<style>` is DOM and applies in every world.
+    /// The origin is baked in, as R3's `allowedOrigin` is set from the same
+    /// value; redundant with R3 and kept, since it costs one compare.
+    ///
+    /// `nil` for anything that is not a plain `scheme://host[:port]`: the
+    /// text is substituted into a string literal, so a quote or a backslash
+    /// must never reach it. `GatewayAddress.origin(of:)` cannot produce one.
+    nonisolated static func chipRowStyle(origin: String) -> String? {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789.-:/[]")
+        guard origin.hasPrefix("https://") || origin.hasPrefix("http://"),
+              origin.allSatisfy({ allowed.contains($0) }) else { return nil }
+        return """
+        (function () {
+          try {
+            if (window.location.origin !== '\(origin)') { return; }
+            if (document.getElementById('\(chipRowStyleID)')) { return; }
+            var style = document.createElement('style');
+            style.id = '\(chipRowStyleID)';
+            style.textContent = '\(chipRowCSS)';
+            (document.head || document.documentElement).appendChild(style);
+          } catch (e) {
+            // Never break the page over this: without it, the page is
+            // exactly the bundle's own.
+          }
+        })();
+        """
+    }
+
     /// Parses what `pageBackground` posts into sRGB components in 0…1.
     /// `nil` for anything else — an empty report, `color(…)`, `oklch(…)` —
     /// and for a colour that is not fully opaque: the strip would then show

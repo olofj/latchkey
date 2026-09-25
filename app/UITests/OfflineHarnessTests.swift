@@ -90,6 +90,9 @@ final class OfflineHarnessTests: XCTestCase {
         }
         XCTAssertEqual(report["title"] as? String, "FAKE DASHBOARD")
         XCTAssertEqual(report["echo"] as? String, "echo:echo:ping", "the WebSocket echoes through TLS through SOCKS5")
+        // F5 §6: the gated chip-row style reached the real DOM on the
+        // gateway's origin. The positive control for the host test's gate.
+        XCTAssertEqual(report["chip_style"] as? Bool, true, "the app's chip-row <style> is in the gateway's page")
 
         let first = try XCTUnwrap(Self.sseTick(report), "an SSE tick has arrived")
         let later = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 10) {

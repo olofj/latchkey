@@ -220,6 +220,10 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// only in `loadResolved`.** Nil until the first install, and again
     /// after `unloadWebView` (the next view brings a new controller).
     private var installedRulesIdentifier: String?
+    /// Origins this web view's controller has F5's chip-row style for. User
+    /// scripts are only ever added (the M1 finding), so each origin is added
+    /// once, at its first `loadResolved`; empty again after `unloadWebView`.
+    private var chipRowStyleOrigins: Set<String> = []
     /// Bumped by every `loadResolved`, so a compile that finishes after a
     /// later load was asked for starts nothing (F6 §4.3, coalescing).
     private var loadGeneration = 0
@@ -418,6 +422,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // compiled list stays cached in the installer. A compile in flight
         // must not load into the next view.
         installedRulesIdentifier = nil
+        chipRowStyleOrigins = []
         loadGeneration += 1
         isLoading = false
         estimatedProgress = 0
@@ -655,6 +660,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
             return
         }
         allowedOrigin = origin
+        installChipRowStyle(for: origin)
         let generation = loadGeneration
         let allowCDNs = allowWidgetCDNs()
         let identifier = ContentRules.identifier(forOrigin: origin, allowCDNs: allowCDNs)
@@ -683,6 +689,19 @@ final class BrowserViewModel: NSObject, ObservableObject {
         Task { [weak self] in
             await self?.installThenLoad(url, origin: origin, allowCDNs: allowCDNs,
                                         identifier: identifier, generation: generation)
+        }
+    }
+
+    /// F5 §6: the gated chip-row style, before the first load of `origin`
+    /// in this web view, so it runs at that load's document start.
+    private func installChipRowStyle(for origin: String) {
+        guard !chipRowStyleOrigins.contains(origin),
+              let controller = webView?.configuration.userContentController else { return }
+        chipRowStyleOrigins.insert(origin)
+        if PageScripts.installChipRowStyle(into: controller, origin: origin) {
+            logger.log("Chip-row style installed for \(origin)")
+        } else {
+            logger.log("Chip-row style not installed: the origin is not a plain scheme://host[:port]")
         }
     }
 

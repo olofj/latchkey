@@ -82,6 +82,20 @@ EOF7
 xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-marker"
 "$OUT/print-marker" | node scripts/test-blocked-marker.js
 
+# F5 §6: the chip-row style, built for one origin, run against fake pages
+# on that origin and others; plus what Swift makes of an origin it must refuse.
+cat > "$OUT/main.swift" <<'EOF8'
+import Foundation
+let origin = "https://gw.tail-scale.ts.net"
+let payload: [String: Any] = ["script": PageScriptSources.chipRowStyle(origin: origin) ?? "",
+                              "origin": origin, "styleID": PageScriptSources.chipRowStyleID,
+                              "refused": PageScriptSources.chipRowStyle(origin: "https://x.example');alert(1);('")
+                                  .map { $0 as Any } ?? NSNull()]
+print(String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!)
+EOF8
+xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-chip-row"
+"$OUT/print-chip-row" | node scripts/test-chip-row-style.js
+
 # F9 §0.1: what the page-background reporter posts, parsed for the strip.
 cat > "$OUT/main.swift" <<'EOF4'
 var failed = 0
