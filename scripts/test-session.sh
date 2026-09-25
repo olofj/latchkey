@@ -49,6 +49,14 @@ for c in "${CLASSES[@]}"; do
 done
 ONLY_ARGS=()
 for c in "${CLASSES[@]}"; do ONLY_ARGS+=("-only-testing:LatchkeyUITests/$c"); done
+# ONLY_TESTS="SessionTests/testX ShareTests/testY" runs just those, while
+# iterating; a pass then says it was not the whole suite.
+if [[ -n "${ONLY_TESTS:-}" ]]; then
+    read -ra PICKED <<< "$ONLY_TESTS"
+    EXPECTED=${#PICKED[@]}
+    ONLY_ARGS=()
+    for t in "${PICKED[@]}"; do ONLY_ARGS+=("-only-testing:LatchkeyUITests/$t"); done
+fi
 
 # ------------------------------------------------------------------ gateway --
 teardown() {
@@ -210,31 +218,36 @@ fi
 # Validated by the share having been sent in this same log -- a scan of a log
 # with no share in it would prove nothing. Then the log lines the spec names
 # for the sweep and the capture refusal, which the UI cannot read.
-say "F3: nothing about a share is logged (D1); the sweep and the capture refusal are"
-F3_RC=0
-if [[ -n "$CONTAINER" ]]; then
-    LOGS=("$LOG_DIR/unified.log")
-    while IFS= read -r d; do LOGS+=("$d"); done \
-        < <(find "$CONTAINER/Library/Application Support" -type d -name Logs 2>/dev/null)
-    SCAN_RC=0
-    scan "$LOG_DIR/share-in-logs.txt" -rn "XYZ" "${LOGS[@]}" || SCAN_RC=$?
-    if [[ -s "$LOG_DIR/share-in-logs.txt" ]]; then
-        echo "error: shared content reached a log (D1):" >&2
-        head -5 "$LOG_DIR/share-in-logs.txt" | sed 's/^/    /' >&2
-        F3_RC=1
-    elif [[ $SCAN_RC -ge 2 ]]; then
-        echo "error: the D1 scan could not read everything" >&2; F3_RC=1
+# ONLY_TESTS picks tests whose log these lines may not be in.
+if [[ -n "${ONLY_TESTS:-}" ]]; then
+    say "F3 and F6 log checks: skipped (ONLY_TESTS)"
+else
+    say "F3: nothing about a share is logged (D1); the sweep and the capture refusal are"
+    F3_RC=0
+    if [[ -n "$CONTAINER" ]]; then
+        LOGS=("$LOG_DIR/unified.log")
+        while IFS= read -r d; do LOGS+=("$d"); done \
+            < <(find "$CONTAINER/Library/Application Support" -type d -name Logs 2>/dev/null)
+        SCAN_RC=0
+        scan "$LOG_DIR/share-in-logs.txt" -rn "XYZ" "${LOGS[@]}" || SCAN_RC=$?
+        if [[ -s "$LOG_DIR/share-in-logs.txt" ]]; then
+            echo "error: shared content reached a log (D1):" >&2
+            head -5 "$LOG_DIR/share-in-logs.txt" | sed 's/^/    /' >&2
+            F3_RC=1
+        elif [[ $SCAN_RC -ge 2 ]]; then
+            echo "error: the D1 scan could not read everything" >&2; F3_RC=1
+        fi
     fi
+    for want in "Share: sent " "Share: uploaded " "Share: swept [1-9][0-9]* item" "Share: refused .* over 50 MB"; do
+        if grep -qE "$want" "$LOG_DIR/unified.log"; then
+            echo "    ok ($want)"
+        else
+            echo "error: no \"$want\" line in the unified log" >&2; F3_RC=1
+        fi
+    done
+    [[ $F3_RC -eq 0 ]] && echo "    ok (D1: no XYZ in the unified log or the app's Logs, and shares were sent)"
+    [[ $F3_RC -eq 0 ]] || TEST_RC=1
 fi
-for want in "Share: sent " "Share: uploaded " "Share: swept [1-9][0-9]* item" "Share: refused .* over 50 MB"; do
-    if grep -qE "$want" "$LOG_DIR/unified.log"; then
-        echo "    ok ($want)"
-    else
-        echo "error: no \"$want\" line in the unified log" >&2; F3_RC=1
-    fi
-done
-[[ $F3_RC -eq 0 ]] && echo "    ok (D1: no XYZ in the unified log or the app's Logs, and shares were sent)"
-[[ $F3_RC -eq 0 ]] || TEST_RC=1
 
 # ----------------------------------------------------------------------- F6 --
 # The journal proves no connection to Google; the page proves the fonts did
@@ -244,7 +257,7 @@ done
 # control's lines are told apart. Validated by at least one line from a run
 # with the list that found the link: a selector that matched nothing would
 # otherwise pass.
-if [[ " ${CLASSES[*]} " == *" SessionTests "* ]]; then
+if [[ " ${CLASSES[*]} " == *" SessionTests "* && -z "${ONLY_TESTS:-}" ]]; then
     say "F6: under the rule list the real bundle's fonts link stays preload, and no web font loads"
     F6_RC=0
     WITH_LIST=$(grep -F 'LOADED-PAGE: ' "$LOG_DIR/unified.log" | grep -F '"rules":"installed"' || true)
@@ -274,4 +287,4 @@ if [[ $TEST_RC -ne 0 ]]; then
     say "FAILED in ${ELAPSED}s — logs, screenshot and xcresult in $LOG_DIR"
     exit 1
 fi
-say "passed in ${ELAPSED}s${ONLY:+ (ONLY=$ONLY: not the whole suite)}"
+say "passed in ${ELAPSED}s${ONLY:+ (ONLY=$ONLY: not the whole suite)}${ONLY_TESTS:+ (ONLY_TESTS: not the whole suite)}"

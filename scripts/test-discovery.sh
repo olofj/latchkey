@@ -44,6 +44,15 @@ say "preflight"
     "$TSNET/Makefile" "$HARNESS/leaf.cnf" "$APP/App/Discovery"
 EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/DiscoveryTests.swift" || true)
 [[ "$EXPECTED" -gt 0 ]] || { echo "error: no tests found in DiscoveryTests.swift" >&2; exit 1; }
+# ONLY_TESTS="testX testY" runs just those, while iterating. The R26 timing
+# check needs the whole class's sweeps, so it is skipped, and a pass says so.
+ONLY_ARGS=(-only-testing:LatchkeyUITests/DiscoveryTests)
+if [[ -n "${ONLY_TESTS:-}" ]]; then
+    read -ra PICKED <<< "$ONLY_TESTS"
+    EXPECTED=${#PICKED[@]}
+    ONLY_ARGS=()
+    for t in "${PICKED[@]}"; do ONLY_ARGS+=("-only-testing:LatchkeyUITests/DiscoveryTests/$t"); done
+fi
 
 # ------------------------------------------------------------------ harness --
 teardown() {
@@ -98,7 +107,7 @@ set +e
     -derivedDataPath build/DerivedData -resultBundlePath "$LOG_DIR/tests.xcresult" \
     -parallel-testing-enabled NO -test-timeouts-enabled YES \
     -default-test-execution-time-allowance 180 \
-    -only-testing:LatchkeyUITests/DiscoveryTests) > "$LOG_DIR/test.log" 2>&1
+    "${ONLY_ARGS[@]}") > "$LOG_DIR/test.log" 2>&1
 TEST_RC=$?
 set -e
 grep -E "Test Case .*(passed|failed)" "$LOG_DIR/test.log" | sed 's/^/    /' || true
@@ -137,6 +146,10 @@ fi
 # one sweep must have found the gateway, or this measured nothing; and the
 # purgatory sweep happens exactly once (the rehearsal's first run), so a
 # sweep in which every peer failed for some other reason cannot pass as it.
+if [[ -n "${ONLY_TESTS:-}" ]]; then
+    say "passed in ${ELAPSED}s (ONLY_TESTS: not the whole suite; R26 timing not checked)"
+    exit 0
+fi
 say "R26 sweeps, from the app's own log"
 xcrun simctl spawn "$UDID" log show --start "$LOG_START" \
     --predicate 'subsystem == "net.lixom.latchkey"' --style compact 2>/dev/null \
