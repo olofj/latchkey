@@ -44,7 +44,7 @@ class Client:
         self.ctx = ssl.create_default_context(cafile=ca)
         self.jar = {}
 
-    def req(self, method, path, headers=None, host=HOST, cookies=True):
+    def req(self, method, path, headers=None, host=HOST, cookies=True, body=None):
         c = http.client.HTTPSConnection("127.0.0.1", self.port, context=self.ctx, timeout=10)
         # SNI and certificate check against the gateway's public name.
         c.sock = self.ctx.wrap_socket(socket.create_connection(("127.0.0.1", self.port), timeout=10),
@@ -53,7 +53,7 @@ class Client:
         if cookies and self.jar:
             h["Cookie"] = "; ".join("%s=%s" % kv for kv in self.jar.items())
         h.update(headers or {})
-        c.request(method, path, headers=h)
+        c.request(method, path, body=body, headers=h)
         r = c.getresponse()
         body = r.read()
         sets = r.headers.get_all("Set-Cookie") or []
@@ -331,6 +331,82 @@ def run(port, cport, ca):
     s, h, _, _ = r.req("POST", "/api/auth/refresh", {"Origin": ORIGIN}, cookies=False)
     check(s == 429 and h.get("Retry-After") == "60", "the 61st: want 429 + Retry-After: 60, got %d %s" % (s, h))
 
+    # -- F3: the share routes --
+    control(cport, "POST", "/__reset")
+    sh = Client(port, ca)
+    sh.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    H = {"Origin": ORIGIN, "X-Latchkey-Share": "item-1"}
+
+    step("F3 slots: a bare array in serialize_slots' shape, three by default, one busy")
+    s, _, body, _ = sh.req("GET", "/api/chat/slots", {"X-Latchkey-Share": "item-1"})
+    slots = json.loads(body)
+    check(s == 200 and isinstance(slots, list) and [x["key"] for x in slots] == ["obsidian", "notes", "plan"],
+          "slots: %d %r" % (s, body[:200]))
+    for f in ("key", "title", "folder_id", "mode", "surface", "running", "queue_depth", "last_activity_ts"):
+        check(all(f in x for x in slots), "every slot carries %s" % f)
+    check([x["running"] for x in slots] == [False, False, True], "plan is busy by default")
+    s, _, body, _ = sh.req("GET", "/api/chat/folders")
+    check(s == 200 and {f["id"] for f in json.loads(body)} == {"f-notes", "f-work"}, "folders: %r" % body)
+
+    step("F3 post: {ok, slot} for a listed slot; queued for a busy one; 400 without a slot")
+    post = lambda slot, msg: sh.req("POST", "/api/chat?ws=1", dict(H, **{"Content-Type": "application/json"}),
+                                    body=json.dumps({"message": msg, "slot": slot} if slot else {"message": msg}))
+    s, _, body, _ = post("obsidian", "hello")
+    check(s == 200 and json.loads(body).get("ok") is True and json.loads(body).get("slot") == "obsidian", "%d %r" % (s, body))
+    s, _, body, _ = post("plan", "hello")
+    check(s == 200 and json.loads(body).get("queued") is True and "queue_id" in json.loads(body), "busy: %r" % body)
+    s, _, _, _ = post(None, "hello")
+    check(s == 400, "a post without a slot is a 400 here, not a guess: %d" % s)
+
+    step("F3 the trap: an unlisted slot is a VIOLATION and a 404, never a new session")
+    s, _, _, _ = post("typo-slot", "hello")
+    st = control(cport, "GET", "/__state")
+    check(s == 404 and any("not in the list" in v["why"] for v in st["violations"]), "unlisted: %d %r" % (s, st["violations"]))
+    check(st["counters"]["share_posts"] == 2 and [p["slot"] for p in st["posts"]] == ["obsidian", "plan"],
+          "only the accepted posts are journalled: %r" % st["posts"])
+
+    step("F3 upload: multipart 'file' -> {paths}; the path, and only it, may be referenced")
+    boundary = "b0undary"
+    def upload(name, data):
+        payload = (("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+                    "Content-Type: application/octet-stream\r\n\r\n" % (boundary, name)).encode()
+                   + data + ("\r\n--%s--\r\n" % boundary).encode())
+        return sh.req("POST", "/api/upload/file", dict(H, **{"Content-Type": "multipart/form-data; boundary=" + boundary}),
+                      body=payload)
+    s, _, body, _ = upload("r.pdf", b"%PDF-1.4\n" + b"x" * 1000)
+    path = json.loads(body)["paths"][0]
+    check(s == 200 and path.endswith("/r.pdf"), "upload: %d %r" % (s, body))
+    st = control(cport, "GET", "/__state")
+    check(st["counters"]["share_uploads"] == 1 and st["counters"]["upload_bytes"] == 1009, "counted: %r" % st["counters"])
+    s, _, _, _ = post("obsidian", "note\n[attached_file 1] " + path)
+    check(s == 200, "a returned path may be referenced: %d" % s)
+    s, _, _, _ = post("obsidian", "[attached_file 1] /srv/never/returned.pdf")
+    st = control(cport, "GET", "/__state")
+    check(s == 400 and any("never returned" in v["why"] for v in st["violations"]), "an invented path: %d" % s)
+
+    step("F3 upload refusals: the gateway's own words (type, content, size)")
+    s, _, body, _ = upload("x.bin", b"abc")
+    check(s == 400 and json.loads(body) == {"error": "Unsupported file type: .bin", "code": "unsupported_file_type"}, "%r" % body)
+    s, _, body, _ = upload("x.pdf", b"not a pdf")
+    check(s == 400 and "does not match" in json.loads(body)["error"], "%r" % body)
+    control(cport, "POST", "/__upload-limit?bytes=1048576")
+    s, _, body, _ = upload("big.pdf", b"%PDF-" + b"x" * 1048576)
+    check(s == 413 and json.loads(body) == {"error": "File too large (max 1MB)"}, "%d %r" % (s, body))
+
+    step("F3 controls: /__slots, /__csrf-deny (text/plain 403, counted as a share denial)")
+    control(cport, "POST", "/__slots?keys=notes,plan&busy=")
+    s, _, body, _ = sh.req("GET", "/api/chat/slots")
+    check([x["key"] for x in json.loads(body)] == ["notes", "plan"] and not any(x["running"] for x in json.loads(body)), "%r" % body)
+    control(cport, "POST", "/__csrf-deny?on=1")
+    s, h, body, _ = post("notes", "hi")
+    st = control(cport, "GET", "/__state")
+    check(s == 403 and "X-Auth-Required" not in h and b"CSRF" in body and st["counters"]["share_denials"] == 1,
+          "csrf-deny: %d %r %r" % (s, body, st["counters"]))
+
+    step("F3 navigation: GET /chat?sid= is journalled, with whether it carried a prefill")
+    sh.req("GET", "/chat?sid=notes&prefill=hi")
+    check(control(cport, "GET", "/__state")["navigations"] == [{"sid": "notes", "prefill": True}], "navigations")
+
     control(cport, "POST", "/__reset")
     print("gateway check: ok (%d checks)" % n[0])
 
@@ -384,10 +460,14 @@ def ws_status(port, ca, jar, origin, want_message=False):
         rest = head.split(b"\r\n\r\n", 1)[1]
         while len(rest) < 2:
             rest += s.recv(4096)
-        ln = rest[1] & 0x7F
-        while len(rest) < 2 + ln:
+        ln, off = rest[1] & 0x7F, 2
+        if ln == 126:   # the slots list (F3) is longer than a short frame
+            while len(rest) < 4:
+                rest += s.recv(4096)
+            ln, off = int.from_bytes(rest[2:4], "big"), 4
+        while len(rest) < off + ln:
             rest += s.recv(4096)
-        msg = json.loads(rest[2:2 + ln])
+        msg = json.loads(rest[off:off + ln])
         if msg.get("type") != "slots":
             raise Fail("first WebSocket message should be slots, got %r" % msg)
     s.close()

@@ -55,6 +55,16 @@ What is emulated (server source references are to kiro_crew/dashboard/):
     came along (the app's sign-out, R32, must show up as both).
   * /api/ws: auth before the upgrade, Origin check, then `slots` and a
     `dashboard` message every 5 s with a constant version (ws.py:513-753).
+  * F3's share routes, with the shapes read from 0.6.0 (and unchanged in
+    0.7.0): GET /api/chat/slots (a bare array, serialize_slots' fields),
+    GET /api/chat/folders, POST /api/upload/file (multipart part `file`, the
+    50 MB limit and the extension allowlist, `%PDF-` for .pdf, {"paths"}),
+    POST /api/chat ({"ok","slot"}; a busy slot {"ok","queued","queue_id"}).
+    Where the real gateway SILENTLY CREATES a session for an unknown slot,
+    this fake records a VIOLATION and answers 404, so the trap fails a test
+    instead of making a stray session. A message naming an
+    `[attached_file N] <path>` this fake never returned is a violation too.
+    The WebSocket's `slots` message carries the same list.
   * The startup endpoints the SPA needs (theme/boot, ui-prefs,
     kiro-prerequisite); every other authenticated /api path is a 404 JSON.
     Unknown paths are recorded, so a gap in this fake shows up in /__state.
@@ -76,6 +86,10 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
                                consumed) but its response is lost
   POST /__config?expire_in=S   access TTL for sessions minted/rotated from now
   POST /__reset                forget everything (a fresh gateway)
+  POST /__slots?keys=a,b[&busy=b]   the live sessions (F3), and which are busy
+  POST /__upload-limit?bytes=N the upload limit (default 50 MB)
+  POST /__csrf-deny?on=1       refuse POST /api/chat and /api/upload/file as
+                               a CSRF failure (the 8443 origin case, F1 §4a)
   GET  /__state                counters, violations, recent requests, unknown paths
 
   python3 fake_gateway.py --port 8444 --control-port 8481 --cert server.pem \\
@@ -84,6 +98,9 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
 """
 import argparse
 import base64
+import email.parser
+import email.policy
+import re
 import hashlib
 import json
 import mimetypes
@@ -151,6 +168,18 @@ QR_SESSION_TTL = 3600        # the QR default
 GRACE_SECS = 60
 RATE_LIMIT = 60              # refreshes per sliding 60 s, per remote
 LINK_SET_MAX = 50
+
+# F3: the share routes (dashboard/handlers/files.py and chat_handlers.py in 0.6.0).
+MAX_UPLOAD = 50 * 1024 * 1024
+DEFAULT_SLOTS = ["obsidian", "notes", "plan"]
+SLOT_INFO = {"obsidian": ("Obsidian vault", "f-notes"), "notes": ("Reading notes", "f-notes"),
+             "plan": ("Weekly plan", "f-work")}
+FOLDERS = [{"id": "f-notes", "name": "Notes", "history_count": 0},
+           {"id": "f-work", "name": "Work", "history_count": 0}]
+UPLOAD_EXT = set((".png .jpg .jpeg .gif .webp .bmp .svg .txt .md .json .excalidraw .har .yaml .yml .xml "
+                  ".csv .log .py .js .ts .tsx .jsx .html .css .sh .bash .rb .go .rs .java .c .cpp .h .hpp "
+                  ".pdf .doc .docx .xls .xlsx .ppt .pptx .odt .ods .odp .rtf .zip .tar .gz "
+                  ".mp4 .m4v .mov .webm").split())
 
 EXEMPT_PREFIXES = ("/assets/", "/static/", "/fonts/", "/vendor/", "/artifact-app/", "/sandbox-doc/")
 EXEMPT_EXACT = {"/logo.png", "/favicon.ico", "/manifest.json", "/sw.js", "/pcm-worklet.js",
@@ -245,6 +274,16 @@ class Gateway:
         self.violations = []     # R25: superseded refresh token used outside grace
         self.requests = deque(maxlen=300)
         self.unknown = {}        # path -> count: routes this fake does not implement
+        # F3: the share routes.
+        self.slot_keys = list(DEFAULT_SLOTS)
+        self.busy = {"plan"}
+        self.upload_limit = MAX_UPLOAD
+        self.csrf_deny = False
+        self.uploads = {}        # returned path -> bytes
+        self.posts = []          # {"slot", "message", "item", "at"}
+        self.navigations = []    # {"sid", "prefill"} for GET /chat?...
+        for k in ("slot_lists", "share_posts", "share_uploads", "upload_bytes", "share_denials"):
+            self.counters[k] = 0
 
     def count(self, name):
         with self.lock:
@@ -421,7 +460,28 @@ class Gateway:
             return {"boot": self.boot, "gen": self.gen, "counters": dict(self.counters),
                     "violations": list(self.violations), "requests": list(self.requests),
                     "unknown": dict(self.unknown), "expire_in": self.expire_in,
+                    "posts": list(self.posts), "navigations": list(self.navigations),
+                    "slots": list(self.slot_keys), "busy": sorted(self.busy),
+                    "uploads": dict(self.uploads),
                     "cookie_port": self.cookie_port}
+
+    def slots(self):
+        """serialize_slots' shape (slot_projection.py:205-275), newest first."""
+        with self.lock:
+            keys, busy = list(self.slot_keys), set(self.busy)
+        now = time.time()
+        out = []
+        for i, k in enumerate(keys):
+            title, folder = SLOT_INFO.get(k, (k.capitalize(), None))
+            out.append({"key": k, "title": title, "folder_id": folder, "agent": "kiro", "mode": "",
+                        "surface": "", "running": k in busy, "queue_depth": 1 if k in busy else 0,
+                        "last_activity_ts": now - 60 * (i + 1), "last_message": "", "memory_mode": "global",
+                        "pinned": False, "subagents_running": 0})
+        return out
+
+    def violation(self, why, **kw):
+        with self.lock:
+            self.violations.append(dict({"at": time.time(), "why": why}, **kw))
 
     def record(self, line):
         with self.lock:
@@ -532,12 +592,22 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
     def is_shell_request(self, path):
         return self.command in ("GET", "HEAD") and not path.startswith(SHELL_EXCLUDED_PREFIXES)
 
+    def share_denied(self):
+        """A 403 to one of the app's share requests (F3's L2 ordering check)."""
+        if self.headers.get("X-Latchkey-Share"):
+            self.gw.count("share_denials")
+
+    def body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(n) if n > 0 else b""
+
     def deny(self, path, reason):
         """No valid credential. GET/HEAD navigations get the SPA shell (so it
         can boot and refresh); everything else a 403 + X-Auth-Required."""
         if self.is_shell_request(path):
             return self.serve_file("/index.html")
         self.gw.count("denials")
+        self.share_denied()
         if path.startswith("/api/"):
             return self.json(403, {"error": reason, "code": "forbidden"},
                              extra=[("X-Auth-Required", "true")])
@@ -573,11 +643,18 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         u = urlsplit(self.path)
         path, query = u.path, parse_qs(u.query)
         self.gw.record("%s %s%s" % (self.command, path, "?…" if u.query else ""))
+        if self.command == "GET" and path == "/chat" and "sid" in query:
+            with self.gw.lock:
+                self.gw.navigations.append({"sid": query["sid"][0], "prefill": "prefill" in query})
 
         # 1. Host allowlist, by name (health endpoints exempt).
         if self.host_name() not in self.allowed_hosts and path not in ("/api/health", "/api/live", "/api/ready"):
             return self.send(403, "Host header not allowed.", "text/plain; charset=utf-8")
         # 2. CSRF for mutating methods: Origin, else Referer, else loopback peer only.
+        if (self.command == "POST" and path in ("/api/chat", "/api/upload/file")
+                and self.gw.csrf_deny):
+            self.share_denied()
+            return self.send(403, "CSRF check failed: request origin not allowed.", "text/plain; charset=utf-8")
         if self.command in ("POST", "PUT", "DELETE", "PATCH"):
             origin = self.headers.get("Origin")
             if origin is None and self.headers.get("Referer"):
@@ -585,6 +662,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
                 origin = "%s://%s" % (ref.scheme, ref.netloc)
             loopback = self.client_address[0] in ("127.0.0.1", "::1")
             if (origin is None and not loopback) or (origin is not None and origin not in self.allowed_origins):
+                self.share_denied()
                 return self.send(403, "CSRF check failed: request origin not allowed.", "text/plain; charset=utf-8")
         cookies = self.cookies()
         port = self.cookie_port()
@@ -651,6 +729,16 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             return self.json(200, {"ok": True})
         if path == "/api/ws":
             return self.websocket()
+        if path == "/api/chat/slots" and m == "GET":
+            if self.headers.get("X-Latchkey-Share"):
+                self.gw.count("slot_lists")
+            return self.json(200, self.gw.slots(), cookies=new_cookies)
+        if path == "/api/chat/folders" and m == "GET":
+            return self.json(200, FOLDERS, cookies=new_cookies)
+        if path == "/api/upload/file" and m == "POST":
+            return self.upload()
+        if path == "/api/chat" and m == "POST":
+            return self.chat_post()
         if path.startswith("/api/"):
             self.gw.record_unknown("%s %s" % (m, path))
             return self.json(404, {"error": "not found"}, cookies=new_cookies)
@@ -660,6 +748,69 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         return self.send(404, "not found", "text/plain")
 
     do_GET = do_HEAD = do_POST = do_PUT = do_DELETE = do_PATCH = handle_any
+
+    # -- F3: upload and send --
+    def upload(self):
+        raw = self.body()
+        ctype = self.headers.get("Content-Type") or ""
+        msg = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
+            b"Content-Type: " + ctype.encode() + b"\r\n\r\n" + raw)
+        files = [p for p in (msg.iter_parts() if msg.is_multipart() else [])
+                 if p.get_param("name", header="content-disposition") == "file"]
+        if not files:
+            return self.json(400, {"error": "No files uploaded"})
+        part = files[0]
+        name = part.get_filename() or "file"
+        data = part.get_payload(decode=True) or b""
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in UPLOAD_EXT:
+            return self.json(400, {"error": "Unsupported file type: %s" % ext, "code": "unsupported_file_type"})
+        limit = self.gw.upload_limit
+        if len(data) > limit:
+            return self.json(413, {"error": "File too large (max %dMB)" % (limit // (1024 * 1024))})
+        if ext == ".pdf" and not data.startswith(b"%PDF-"):
+            return self.json(400, {"error": "File content does not match its type: %s" % ext})
+        safe = "".join(c if c.isalnum() or c in "_.-" else "_" for c in name)
+        path = "/srv/kirocrew/uploads/%s/%s" % (secrets.token_hex(6), safe)
+        with self.gw.lock:
+            self.gw.uploads[path] = len(data)
+            if self.headers.get("X-Latchkey-Share"):
+                self.gw.counters["share_uploads"] += 1
+                self.gw.counters["upload_bytes"] += len(data)
+        return self.json(200, {"paths": [path]})
+
+    def chat_post(self):
+        try:
+            body = json.loads(self.body() or b"{}")
+        except ValueError:
+            return self.json(400, {"error": "invalid JSON"})
+        slot, message = body.get("slot"), (body.get("message") or "").strip()
+        if not slot:
+            return self.json(400, {"error": "slot is required (this fake; the real gateway picks one)"})
+        if not message:
+            return self.json(400, {"error": "message is required", "code": "message_required"})
+        if slot.startswith("member-"):
+            return self.json(409, {"error": "member slot reserved", "code": "member_slot_reserved"})
+        with self.gw.lock:
+            listed, busy = slot in self.gw.slot_keys, slot in self.gw.busy
+            uploaded = set(self.gw.uploads)
+        item = self.headers.get("X-Latchkey-Share")
+        if not listed:
+            # The real gateway would CREATE this session (chat_handlers.py:314).
+            self.gw.violation("post to a slot not in the list: the real gateway would create it",
+                              slot=slot, item=item)
+            return self.json(404, {"error": "no such slot (the real gateway would have created one)"})
+        for mt in re.finditer(r"\[attached_file (\d+)\][ \t]+(\S+)", message):
+            if mt.group(2) not in uploaded:
+                self.gw.violation("an [attached_file] path this gateway never returned", item=item)
+                return self.json(400, {"error": "attached file not found"})
+        with self.gw.lock:
+            self.gw.posts.append({"slot": slot, "message": message, "item": item, "at": time.time()})
+            if item:
+                self.gw.counters["share_posts"] += 1
+        if busy:
+            return self.json(200, {"ok": True, "queued": True, "queue_id": "q-" + secrets.token_hex(4)})
+        return self.json(200, {"ok": True, "slot": slot, "mid": "m-" + secrets.token_hex(4)})
 
     # -- /api/ws --
     def websocket(self):
@@ -684,7 +835,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         def push():
             try:
                 with wlock:
-                    self.ws_write(0x1, json.dumps({"type": "slots", "data": []}).encode())
+                    self.ws_write(0x1, json.dumps({"type": "slots", "data": self.gw.slots()}).encode())
                 while not stop.wait(5):
                     with wlock:
                         self.ws_write(0x1, json.dumps({"type": "dashboard",
@@ -772,6 +923,20 @@ class Control(BaseHTTPRequestHandler):
             return self.reply({"ok": True, "expire_in": self.gw.expire_in})
         if u.path == "/__restart":
             self.gw.restart(num("down"))
+            return self.reply({"ok": True})
+        if u.path == "/__slots":
+            keys = [k for k in ",".join(q.get("keys") or [""]).split(",") if k]
+            with self.gw.lock:
+                self.gw.slot_keys = keys
+                self.gw.busy = {k for k in ",".join(q.get("busy") or [""]).split(",") if k}
+            return self.reply({"ok": True, "slots": keys})
+        if u.path == "/__upload-limit":
+            with self.gw.lock:
+                self.gw.upload_limit = int(num("bytes", MAX_UPLOAD))
+            return self.reply({"ok": True})
+        if u.path == "/__csrf-deny":
+            with self.gw.lock:
+                self.gw.csrf_deny = num("on") != 0
             return self.reply({"ok": True})
         if u.path == "/__drop-next-refresh":
             with self.gw.lock:
