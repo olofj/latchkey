@@ -391,8 +391,10 @@ Most design-changing first.
    to pass.
 4. **Is the App Store on the horizon?** If yes, B pays for itself twice: App
    Store review asks the same question more strictly.
-5. **May KiroCrew's frontend be served to Apple?** Check the wheel's licence,
-   or ask, since it is an official Kiro project.
+5. ~~**May KiroCrew's frontend be served to Apple?**~~ **Settled 2026-09-26**:
+   yes. Olof's reading is that the licence terms govern actual product usage,
+   not a reviewer being shown the interface, so option B may serve the pinned
+   wheel's frontend to App Review.
 6. **Keep claiming iPad?** Test on one, or ship iPhone-only.
 7. **For B, which step-1 variant?** B-account (credentials, challenge risk),
    B-invite (verify Tailscale's invite rules first), or B-key (a new build
