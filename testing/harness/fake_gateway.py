@@ -127,7 +127,8 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
                                seconds before answering, and a POST /api/chat
                                for S seconds AFTER it is recorded (the
                                gateway has the message; the answer is late)
-  GET  /__state                counters, violations, recent requests, unknown paths
+  GET  /__state                counters, violations, recent requests, unknown paths,
+                               and which harness instance this is (F14, --instance)
   `--no-control` leaves the control port out entirely (the review gateway).
 
 Socket activation (F19's review gateway): when systemd passes listening
@@ -1182,6 +1183,7 @@ class Control(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     gw = None
     public_origin = ""
+    instance = "0"
 
     def log_message(self, fmt, *a):
         pass
@@ -1197,7 +1199,7 @@ class Control(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/__state":
             return self.reply({"error": "not found"}, 404)
-        return self.reply(self.gw.snapshot())
+        return self.reply(dict(self.gw.snapshot(), instance=self.instance))
 
     def do_POST(self):
         u = urlsplit(self.path)
@@ -1302,6 +1304,8 @@ def main():
     ap.add_argument("--host", default="gw.tail-scale.ts.net", help="the gateway's public host name")
     ap.add_argument("--cookie-port", type=int, default=5476,
                     help="the listen port being emulated (names the cookies when Host has no port)")
+    ap.add_argument("--instance", default="0",
+                    help="which harness instance this is (F14); GET /__state reports it")
     ap.add_argument("--expire-in", type=int, default=0, help="access-session TTL in seconds (0 = real defaults)")
     ap.add_argument("--dist", default=DEFAULT_DIST,
                     help="the pinned wheel (default) or an installed package's static/dist")
@@ -1365,6 +1369,7 @@ def main():
     Page.allowed_origins = {"https://%s" % a.host, "https://127.0.0.1:%d" % a.port,
                             "https://localhost:%d" % a.port}
     Control.public_origin = "https://%s" % a.host
+    Control.instance = a.instance
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(a.cert, a.key)

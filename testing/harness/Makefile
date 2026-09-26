@@ -43,7 +43,12 @@ DASH_PORT    ?= $(call port,8443)
 DASH_CONTROL_PORT  ?= $(call port,8480)
 GW_PORT      ?= $(call port,8444)
 GW_CONTROL_PORT ?= $(call port,8481)
-PORT_VARS    := PROXY_PORT PROXY_CONTROL_PORT DASH_PORT DASH_CONTROL_PORT GW_PORT GW_CONTROL_PORT
+# The session suite's second fake gateway (F5), started as GW_NAME=gateway2
+# with GW_PORT=$(GW2_PORT) GW_CONTROL_PORT=$(GW2_CONTROL_PORT).
+GW2_PORT     ?= $(call port,8445)
+GW2_CONTROL_PORT ?= $(call port,8482)
+PORT_VARS    := PROXY_PORT PROXY_CONTROL_PORT DASH_PORT DASH_CONTROL_PORT GW_PORT GW_CONTROL_PORT \
+                GW2_PORT GW2_CONTROL_PORT
 # Expand each once, rather than a shell per reference.
 $(foreach v,$(PORT_VARS),$(eval $(v) := $($(v))))
 GW_EXPIRE_IN ?= 0
@@ -188,7 +193,8 @@ harness-reap:  ## Stop strays on the harness ports, pidfile or not
 	@# (it fails with "operation not permitted"), and a reaper that silently
 	@# declines to reap is a reaper that does not work when you need it.
 	@# `lsof` reports cwd in those same shells, so (2) is the one that holds.
-	@for port in $(DASH_PORT) $(DASH_CONTROL_PORT) $(PROXY_PORT) $(PROXY_CONTROL_PORT) $(GW_PORT) $(GW_CONTROL_PORT); do \
+	@for port in $(DASH_PORT) $(DASH_CONTROL_PORT) $(PROXY_PORT) $(PROXY_CONTROL_PORT) $(GW_PORT) $(GW_CONTROL_PORT) \
+	            $(GW2_PORT) $(GW2_CONTROL_PORT); do \
 	    for pid in $$(lsof -nP -iTCP:$$port -sTCP:LISTEN -t 2>/dev/null || true); do \
 	        cmd=$$(ps -o command= -p $$pid 2>/dev/null || true); \
 	        cwd=$$(lsof -a -p $$pid -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1); \
@@ -220,7 +226,7 @@ gateway-up: certs gateway-down  ## Start the fake KiroCrew gateway (GW_EXPIRE_IN
 	    fi; \
 	done
 	@$(PY) fake_gateway.py --port $(GW_PORT) --control-port $(GW_CONTROL_PORT) --host $(GW_HOST) \
-		--cert server.pem --key server.key --expire-in $(GW_EXPIRE_IN) \
+		--instance $(INSTANCE) --cert server.pem --key server.key --expire-in $(GW_EXPIRE_IN) \
 		> $(GW_LOG) 2>&1 & echo $$! > $(GW_PID)
 	@pid=$$(cat $(GW_PID)); ok=0; \
 	for i in $$(seq 1 100); do \
