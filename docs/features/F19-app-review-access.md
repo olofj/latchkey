@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **options, not decided** (§5). Nothing is built. Paste-ready texts per option in §6 |
+| **Status** | **options, not decided** (§5). Option B's own side is built: the demo token, canned content, the service and the check (`../REVIEW-GATEWAY.md`). The review tailnet, the VM and the invites are the owner's. Paste-ready texts per option in §6 |
 | **Requested** | 2026-09-25, by Olof, after Beta App Review stopped Latchkey Remote 0.1 (build 202609250336) that day: design how an Apple reviewer can exercise the app at all. Revised the same evening once the reviewer's message arrived (§1) |
 | **Revision** | none yet. Options B-key and C would each need one (R15; R3/R41 and the manual-entry gate) |
 | **Touches** | depends on the option: none (0, A), App Store Connect plus a host and a tailnet outside the owner's (B), `testing/harness/fake_gateway.py` (B, a demo-token rule), `TSNet/TSNetManager.swift` and a new login UI (B-key), `App/Browser/`, `App/Discovery/`, `App/Workspace/` (C) |
@@ -184,6 +184,11 @@ variants.
    - optionally some canned sessions. The fake answers auth, slots, folders
      and chat, so the reviewer sees the real KiroCrew shell with little in it.
 
+   **Built** (2026-09-25): `--demo-token`/`--demo-until` (off by default, at
+   most 90 days, sessions end at the date too), `--content`
+   (`testing/review/demo_content.json`), the service and
+   `testing/review/install.sh`. How to stand it up: `../REVIEW-GATEWAY.md`.
+
    A real KiroCrew instance is **not** an alternative. Its 300 s link window
    is a constant (§2), and it would run Claude sessions and tools for a
    stranger.
@@ -304,8 +309,9 @@ or blurred.
 **Must be true, all variants:** the review tailnet exists with approval off.
 `<GATEWAY_HOST>` is up, tagged, serving HTTPS on 443, and passes the §5.2
 check. `<DEMO_TOKEN>` redeems there and stays valid until at least
-`<TOKEN_VALID_UNTIL>`. The fake gateway needs its demo-token rule before this
-can be true.
+`<TOKEN_VALID_UNTIL>`. `../REVIEW-GATEWAY.md` §6 gives the values this work
+fixes (`<TOKEN_VALID_UNTIL>` is December 24, 2026) and the B-invite notes
+filled in as far as they go.
 
 *Sign-in required:* **checked** for B-account with `<REVIEW_LOGIN>` /
 `<REVIEW_PASSWORD>`; unchecked for B-invite and B-key (put the data in the
@@ -356,8 +362,8 @@ check the gesture on the build under review before pasting.
 
 | Option | Test | Suite | Asserts | Shown to fail by |
 |---|---|---|---|---|
-| B | review gateway check | owner-run, from a node on the review tailnet | R26's recognition pair over HTTPS with a trusted certificate; `<DEMO_TOKEN>` redeems twice | stopping the host; a self-signed certificate; an expired token |
-| B | demo-token rule | host test of `fake_gateway.py` | the demo token redeems repeatedly until its date and not after; ordinary links keep the 300 s window | removing the date check |
+| B | review gateway check | owner-run, from a node on the review tailnet: `testing/review/review_check.py` (built) | R26's recognition pair over HTTPS with a trusted certificate; `<DEMO_TOKEN>` redeems twice; `/api/ws` upgrades | stopping the host; a self-signed certificate; a wrong token (all three shown 2026-09-25, against a local fake) |
+| B | demo-token rule | host test of `fake_gateway.py`: `make demo-check` in `testing/harness` (built) | the demo token redeems repeatedly until its date and not after; off by default; its sessions and chains end at the date; ordinary links unchanged; the canned content | removing the date check (redemption or refresh), the session cap, the flag's default, the transcript route, the canned reply, or leaking the token into `/__state` (seven mutants, each failed) |
 | B-key | auth-key join | L2 | a pasted key joins the fake control plane and reaches no log or file | writing the key to the node log |
 | C | demo sealed | L1 | no workspace, node state or default-store cookie; `latchkey://` cannot enter it | the default data store |
 
@@ -386,13 +392,17 @@ Most design-changing first.
 6. **Keep claiming iPad?** Test on one, or ship iPhone-only.
 7. **For B, which step-1 variant?** B-account (credentials, challenge risk),
    B-invite (verify Tailscale's invite rules first), or B-key (a new build
-   and an R15 revision).
+   and an R15 revision). **Recommended: B-invite, B-account as the
+   fallback** (`../REVIEW-GATEWAY.md`). Tailscale's invite links are one-time
+   and expire after 30 days, on every plan, so give three. Its terms bar
+   sharing one account among several people, which counts against B-account.
 
 **Owner actions tonight:**
 
 - Option 0 or A: paste §6.0 or §6.1. Nothing else is needed.
-- Option B: create the review tailnet and host. The demo-token rule in
-  `fake_gateway.py` has to be built first; it is not yet.
+- Option B: create the review tailnet and the VM, then follow
+  `../REVIEW-GATEWAY.md` (one `install.sh` run, three invite links). The
+  demo-token rule and everything else on our side is built.
 - Either way: the share extension's privacy manifest (§3.2) before the next
   `make tf` upload.
 
@@ -415,3 +425,17 @@ Needed, "a demo QR code or AR marker"):
   data. The fake gateway can, with a demo-token rule.
 - Added B-invite, and paste-ready texts per option (§6). Option C is kept
   only as a record, since it answers "Information Needed" with a new build.
+
+2026-09-25 night, option B's own side built (`../REVIEW-GATEWAY.md`):
+
+- The fake gateway takes an opt-in demo token with a date, at most 90 days
+  out. Its sessions and refresh chains end at the date too. It also takes
+  canned content: four invented sessions, the transcript route, and empty
+  `/api/apps` and `/api/instances` so that the 0.7.1 page shows no red
+  errors. Without the flags the suites' fake is unchanged
+  (`make gateway-check` 37/37).
+- `tailscale serve` passes the Host through (read in its source). The fake
+  already sees that shape in the suites. The check through the real serve
+  runs at the end of `install.sh`, on the owner's VM. It has not run yet.
+- B-invite is recommended: invite links are one-time and last 30 days, on
+  every plan.
