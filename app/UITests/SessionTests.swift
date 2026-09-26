@@ -73,13 +73,13 @@ final class SessionTests: XCTestCase {
         defer { app.terminate() }
 
         let sheet = element(app, "token-sheet")
-        XCTAssertTrue(sheet.waitForExistence(timeout: 30), "signed out: the native sheet appears")
+        XCTAssertTrue(sheet.appears(within: 30), "signed out: the native sheet appears")
         // LabeledContent merges its label into the element: "Signing in to, <host>".
         let target = element(app, "token-sheet-target").label
         XCTAssertTrue(target.hasSuffix(Self.gatewayHost),
                       "the sheet names the gateway it will sign in to (R23); got \(target)")
         element(app, "token-sheet-close").tapWhenSettled(in: app)
-        XCTAssertTrue(element(app, "session-signin-button").waitForExistence(timeout: 5),
+        XCTAssertTrue(element(app, "session-signin-button").appears(within: 5),
                       "with the sheet closed, the app keeps a way to sign in")
         // Past the 8 s handshake watchdog, so a healthy bridge is shown not to
         // trigger the fallback (M4 review). Positive control for this query:
@@ -88,7 +88,7 @@ final class SessionTests: XCTestCase {
         XCTAssertFalse(app.webViews.textFields[Self.bannerPlaceholder].exists,
                        "the page's own banner stays hidden (CSS only), past the watchdog")
         element(app, "session-signin-button").tap()
-        XCTAssertTrue(sheet.waitForExistence(timeout: 5), "the button reopens the sheet")
+        XCTAssertTrue(sheet.appears(within: 5), "the button reopens the sheet")
     }
 
     /// R22's fallback, and the positive control for the hidden-banner check:
@@ -98,7 +98,7 @@ final class SessionTests: XCTestCase {
         let app = launch(extra: ["-UITestBreakSessionBridge"])
         defer { app.terminate() }
 
-        XCTAssertTrue(app.webViews.textFields[Self.bannerPlaceholder].waitForExistence(timeout: 40),
+        XCTAssertTrue(app.webViews.textFields[Self.bannerPlaceholder].appears(within: 40),
                       "no handshake: the page's own banner must be shown as the fallback")
         XCTAssertFalse(element(app, "token-sheet").exists, "no bridge, no native sheet")
     }
@@ -123,7 +123,7 @@ final class SessionTests: XCTestCase {
     private func signedInEverythingProxied(extra: [String] = []) async throws -> XCUIApplication {
         _ = try await Self.post("\(Self.proxyControl)/reset")
         let app = launch(extra: ["-ProxyEverything", "-UITestLogResponses"] + extra)
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
         try await Task.sleep(for: .seconds(5))
         return app
@@ -159,21 +159,15 @@ final class SessionTests: XCTestCase {
     /// `kirocrew token` prints several URLs; pasting all of them signs in to
     /// the selected gateway, and the clipboard is cleared afterwards.
     func testPastingCLIOutputSignsIn() async throws {
-        let app = launch()
-        defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
-
-        try await signIn(app, kind: "cli")
-        let state = try await gatewayState()
-        XCTAssertEqual(counter(state, "redemptions"), 1, "exactly one redemption")
-        XCTAssertGreaterThanOrEqual(counter(state, "app_auth_checks"), 1, "the app confirmed the session by API (R21, R38)")
-        XCTAssertFalse(UIPasteboard.general.hasStrings, "the pasted sign-in link is cleared from the clipboard (R23)")
-        XCTAssertFalse(element(app, "session-signin-button").exists)
+        let run = try await signedInRun()
+        XCTAssertTrue(run.sheetShown, "signed out at first")
+        XCTAssertEqual(run.redemptions, 1, "exactly one redemption")
+        XCTAssertGreaterThanOrEqual(run.authChecks, 1, "the app confirmed the session by API (R21, R38)")
+        XCTAssertFalse(run.clipboardHadStrings, "the pasted sign-in link is cleared from the clipboard (R23)")
+        XCTAssertFalse(run.signInButtonShown)
 
         // M8.2: Status shows when the session ends, from the cookies' expiry.
-        let list = app.openStatus()
-        let session = app.statusRow("diag-session-expires", in: list)
-        let access = app.statusRow("diag-access-expires", in: list)
+        let session = run.sessionExpires, access = run.accessExpires
         XCTAssertTrue(session.contains("(in 29 days)") || session.contains("(in 30 days)"),
                       "the refresh cookie's 30-day expiry: \(session)")
         XCTAssertTrue(access.contains("(in "), "the access cookie's expiry: \(access)")
@@ -184,11 +178,11 @@ final class SessionTests: XCTestCase {
     func testABadTokenSaysSoAndKeepsTheSheet() async throws {
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
 
         typeToken(app, "\(Self.gateway)/?token=fk1.not-a-link-this-gateway-made")
         let message = element(app, "token-sheet-message")
-        XCTAssertTrue(message.waitForExistence(timeout: 20), "a failed sign-in explains itself")
+        XCTAssertTrue(message.appears(within: 20), "a failed sign-in explains itself")
         XCTAssertTrue(message.label.contains("didn't work"), message.label)
         XCTAssertTrue(element(app, "token-sheet").exists, "the sheet stays up")
         let redemptions = counter(try await gatewayState(), "redemptions")
@@ -205,7 +199,7 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
         let start = try await gatewayState()
         let asked = authRequiredCount(app)
@@ -231,7 +225,7 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=4000")
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
         let asked = authRequiredCount(app)
         XCTAssertGreaterThanOrEqual(asked, 1, "the event counter is there, and counted the signed-out start")
@@ -259,7 +253,7 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
 
         // Revoke the chain but leave the access session valid, as reuse
@@ -278,7 +272,7 @@ final class SessionTests: XCTestCase {
                              "refresh_chain_revoked reloads the page (location.assign('/'))")
         // The reloaded document's bridge must be there: when its access
         // session lapses, the sheet comes from THAT document.
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 60),
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 60),
                       "a revoked chain ends in the native sheet, from the reloaded page")
 
         try await signIn(app, kind: "cli")
@@ -296,7 +290,7 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
 
         let asked = authRequiredCount(app)
@@ -320,11 +314,11 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "qr")
 
         _ = try await Self.post("\(Self.gatewayControl)/__restart")
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 45),
                       "a boot-bound session ends at a restart, and the app asks for a token")
     }
 
@@ -337,7 +331,7 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
 
         let asked = authRequiredCount(app)
@@ -368,11 +362,11 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
 
         _ = try await Self.post("\(Self.gatewayControl)/__logout-all")
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 45),
                       "signed out everywhere: the app asks for a token")
         try await signIn(app, kind: "cli")
         let redemptions = counter(try await gatewayState(), "redemptions")
@@ -387,7 +381,7 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
         let asked = authRequiredCount(app)
         XCTAssertGreaterThanOrEqual(asked, 1, "the event counter is there, and counted the signed-out start")
@@ -413,7 +407,7 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
 
         // The restart happens at the loss itself. Restarting after polling
@@ -427,7 +421,7 @@ final class SessionTests: XCTestCase {
         }
         let atLoss = try await gatewayState()
         XCTAssertEqual(counter(atLoss, "refresh_dropped"), 1, "the refresh response was lost")
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 75),
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 75),
                       "the chain is revoked by the retry; the app asks for a token")
         let afterRestart = try await gatewayState()
         XCTAssertGreaterThanOrEqual(violations(afterRestart), 1,
@@ -446,7 +440,7 @@ final class SessionTests: XCTestCase {
     /// relaunch afterwards is known to be able to.
     func testSigningOutRevokesTheSessionHereAndAtTheGateway() async throws {
         var app = launch()
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
         // The cookie store writes to disk on its own schedule; give it a
         // moment before the process goes, so the control below tests the
@@ -465,7 +459,7 @@ final class SessionTests: XCTestCase {
 
         let before = try await gatewayState()
         confirmInSettings(app, button: "signout-dashboard-button", action: "Sign out")
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 45),
                       "signed out: the fresh page asks for a token, and the native sheet shows it")
         let after = try await gatewayState()
         XCTAssertEqual(counter(after, "logouts") - counter(before, "logouts"), 1,
@@ -481,7 +475,7 @@ final class SessionTests: XCTestCase {
         // The cookies are gone from disk too: a relaunch is still signed out.
         app = launch(reset: false)
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30),
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30),
                       "after a relaunch the app still asks for a token: no cookie survived")
         let relaunched = try await gatewayState()
         XCTAssertEqual(counter(relaunched, "auth_me_ok"), counter(after, "auth_me_ok"),
@@ -508,7 +502,7 @@ final class SessionTests: XCTestCase {
     /// from a working one.)
     func testSigningOutWithTheGatewayUnreachableClearsThisDeviceAndSaysSo() async throws {
         var app = launch()
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
 
         _ = try await Self.post("\(Self.gatewayControl)/__restart?down=8")
@@ -518,15 +512,15 @@ final class SessionTests: XCTestCase {
         // Settings closes when the sign-out is done: with connections
         // refused that is at once, and never later than the page-world
         // request's timeout.
-        XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 20),
+        XCTAssertTrue(app.navigationBars["Settings"].disappears(within: 20),
                       "the sign-out does not wait on a gateway it cannot reach")
         // The fresh page's load failed the same way; the startup retry (20 s)
         // picks it up once the proxy answers and the gateway is back.
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 45),
                       "once the gateway is back, the fresh page asks for a token")
         let notice = element(app, "token-sheet-message")
-        XCTAssertTrue(notice.waitForExistence(timeout: 5), "the sheet says what happened")
+        XCTAssertTrue(notice.appears(within: 5), "the sheet says what happened")
         XCTAssertTrue(notice.label.contains("this device only"), notice.label)
         let after = try await gatewayState()
         XCTAssertEqual(counter(after, "logouts"), counter(before, "logouts"), "the gateway never heard")
@@ -542,7 +536,7 @@ final class SessionTests: XCTestCase {
         app.terminate()
         app = launch(reset: false)
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30),
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30),
                       "after a relaunch the app still asks for a token: no cookie survived the local clear")
         let relaunched = try await gatewayState()
         XCTAssertEqual(counter(relaunched, "auth_me_ok"), counter(floor, "auth_me_ok"),
@@ -565,7 +559,7 @@ final class SessionTests: XCTestCase {
     func testResetAppEndsTheSessionAndStartsOver() async throws {
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
 
         let before = try await gatewayState()
@@ -603,11 +597,11 @@ final class SessionTests: XCTestCase {
         let app = launch(extra: ["-UITestKnownGateways", "\(Self.gateway),https://\(Self.secondHost)"],
                          peers: ["gw", "dash"])
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
 
         try switchInSettings(app, to: Self.secondHost)
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30),
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30),
                       "the second gateway has no session here, so it asks")
         XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.secondHost),
                       "for itself: \(element(app, "token-sheet-target").label)")
@@ -631,7 +625,7 @@ final class SessionTests: XCTestCase {
     private func switchInSettings(_ app: XCUIApplication, to host: String,
                                   file: StaticString = #filePath, line: UInt = #line) throws {
         let gear = app.buttons["settings-button"].firstMatch
-        XCTAssertTrue(gear.waitForExistence(timeout: 10), file: file, line: line)
+        XCTAssertTrue(gear.appears(within: 10), file: file, line: line)
         // A closing sheet leaves the gear unhittable, which would read as the
         // F15 bar being hidden and pull on the sheet instead of the page.
         XCTAssertTrue(app.settles(within: 10), "nothing is sliding over the gear", file: file, line: line)
@@ -641,11 +635,11 @@ final class SessionTests: XCTestCase {
                 .press(forDuration: 0.05, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)))
         }
         gear.tapWhenSettled(in: app, file: file, line: line)
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), file: file, line: line)
+        XCTAssertTrue(app.navigationBars["Settings"].appears(within: 10), file: file, line: line)
         let row = element(app, "gateway-switch-\(host)")
-        XCTAssertTrue(row.waitForExistence(timeout: 10) && row.isEnabled, "Settings offers \(host)", file: file, line: line)
+        XCTAssertTrue(row.appears(within: 10) && row.isEnabled, "Settings offers \(host)", file: file, line: line)
         row.tapWhenSettled(in: app, file: file, line: line)
-        XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 10), "the switch closes Settings",
+        XCTAssertTrue(app.navigationBars["Settings"].disappears(within: 10), "the switch closes Settings",
                       file: file, line: line)
     }
 
@@ -656,18 +650,16 @@ final class SessionTests: XCTestCase {
     /// 404 from /api/instances puts the list-failed chip on top of `Local`
     /// and the chevron. With the app's gated rule the bar scrolls instead.
     func testTheInstanceChipsDoNotOverlapInPortrait() async throws {
-        let app = try await signedInDashboard()
-        defer { app.terminate() }
-        let bar = try await settledInstanceBar(app)
-        let chips = try instanceChips(bar)
-        let window = app.windows.firstMatch.frame
+        let run = try await signedInRun()
+        let portrait = try XCTUnwrap(run.portrait, "the page's header shows its instance bar")
+        let chips = portrait.chips
         XCTAssertTrue(chips.contains { $0.label == "Local dashboard" } && chips.contains { $0.label == "Switch instance" },
                       "the bar holds Local and the chevron: \(describe(chips))")
         XCTAssertTrue(chips.contains { $0.label.contains("Ask the agent") || $0.label.contains("remote crews") },
                       "the list failed (the fake's 404), so its chip is there too: \(describe(chips))")
-        assertLegible(chips, bar: bar.frame, window: window)
-        XCTAssertTrue(labelled(app, "Local dashboard").isHittable, "Local is hittable")
-        XCTAssertTrue(labelled(app, "Switch instance").isHittable, "the chevron is hittable")
+        assertLegible(chips, bar: portrait.bar, window: portrait.window)
+        XCTAssertTrue(portrait.localHittable, "Local is hittable")
+        XCTAssertTrue(portrait.chevronHittable, "the chevron is hittable")
     }
 
     /// Landscape too: the web view stops at the side safe areas (F9), so at
@@ -675,32 +667,138 @@ final class SessionTests: XCTestCase {
     /// and the rule applies (the bar measured 185 pt wide). The chips must
     /// still be one row, disjoint, and on screen.
     func testTheInstanceChipsStayInOneRowInLandscape() async throws {
-        let app = try await signedInDashboard()
-        defer { app.terminate() }
-        _ = try await settledInstanceBar(app)
-        try await rotate(app, to: .landscapeLeft)
-        let bar = try await settledInstanceBar(app)
-        let chips = try instanceChips(bar)
+        let run = try await signedInRun()
+        XCTAssertNotNil(run.portrait, "the page's header shows its instance bar")
+        XCTAssertTrue(run.rotated, "the window rotated to landscape")
+        let landscape = try XCTUnwrap(run.landscape, "the instance bar settles in landscape")
+        let chips = landscape.chips
         XCTAssertGreaterThanOrEqual(chips.count, 3, "Local, the chevron and the list-failed chip: \(describe(chips))")
-        assertLegible(chips, bar: bar.frame, window: app.windows.firstMatch.frame)
+        assertLegible(chips, bar: landscape.bar, window: landscape.window)
     }
 
     /// The rule touches the bar and nothing else: the page's sessions panel,
     /// which F5 §1 measured as working in portrait, still opens and works.
     func testTheSessionsPanelStillOpensInPortrait() async throws {
-        let app = try await signedInDashboard()
-        defer { app.terminate() }
-        _ = try await settledInstanceBar(app)
+        let panel = try await signedInRun().panel
+        XCTAssertTrue(panel.barShown, "the page's header shows its instance bar, back in portrait")
+        XCTAssertTrue(panel.toggleShown, "the header has Toggle sessions")
+        XCTAssertTrue(panel.toggleTapped, "Toggle sessions was tapped once the app settled and it was hittable")
+        XCTAssertTrue(panel.searchShown, "the panel opens with its search field")
+        XCTAssertTrue(panel.searchHittable, "the search field is hittable")
+        XCTAssertTrue(panel.newHittable, "the panel's New button is there and hittable")
+    }
+
+    // MARK: - F14: one signed-in run, read by the tests that only look at it
+
+    /// Everything four tests looked at after the same launch and the same CLI
+    /// sign-in, none of them changing the session: the sign-in's own traces,
+    /// the instance bar in portrait and in landscape, the sessions panel back
+    /// in portrait, and Status. Taken once (F14), in an order in which no
+    /// step disturbs what a later one reads; each test still asserts its own
+    /// claim under its own name, and a test run on its own takes its own.
+    ///
+    /// Sign-in and Status are `testPastingCLIOutputSignsIn`'s claims, and the
+    /// first test by name takes the run, so their own assertions stay where
+    /// they are. Everything else is recorded without failing, so a broken
+    /// chip row fails only the chip tests. Cached only once signed in.
+    private struct BarLook {
+        let chips: [Chip]
+        let bar: CGRect
+        let window: CGRect
+        let localHittable: Bool
+        let chevronHittable: Bool
+    }
+
+    private struct PanelLook {
+        var barShown = false, toggleShown = false, toggleTapped = false
+        var searchShown = false, searchHittable = false, newHittable = false
+    }
+
+    private struct SignedInRun {
+        let sheetShown: Bool
+        let redemptions: Int
+        let authChecks: Int
+        let clipboardHadStrings: Bool
+        let signInButtonShown: Bool
+        let portrait: BarLook?
+        let rotated: Bool
+        let landscape: BarLook?
+        let panel: PanelLook
+        let sessionExpires: String
+        let accessExpires: String
+    }
+
+    private static var signedIn: SignedInRun?
+
+    private func signedInRun() async throws -> SignedInRun {
+        if let run = Self.signedIn { return run }
+        XCUIDevice.shared.orientation = .portrait
+        let app = launch()
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        let sheetShown = element(app, "token-sheet").appears(within: 30)
+        try await signIn(app, kind: "cli")
+        let state = try await gatewayState()
+        let clipboardHadStrings = UIPasteboard.general.hasStrings
+        let signInButtonShown = element(app, "session-signin-button").exists
+
+        let portrait = try await lookAtBar(app)
+        var rotated = false, landscape: BarLook?
+        if portrait != nil {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            for _ in 0..<25 {
+                let f = app.windows.firstMatch.frame
+                if f.width > f.height { rotated = true; break }
+                try await Task.sleep(for: .milliseconds(200))
+            }
+            if rotated { landscape = try await lookAtBar(app) }
+            XCUIDevice.shared.orientation = .portrait
+            for _ in 0..<25 {
+                let f = app.windows.firstMatch.frame
+                if f.width < f.height { break }
+                try await Task.sleep(for: .milliseconds(200))
+            }
+        }
+
+        var panel = PanelLook()
+        panel.barShown = try await settledBar(app) != nil
         let toggle = app.webViews.buttons["Toggle sessions"].firstMatch
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10), "the header has Toggle sessions")
-        toggle.tap()
-        let search = app.webViews.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR placeholderValue == %@", "Search sessions…", "Search sessions…"))
-            .firstMatch
-        XCTAssertTrue(search.waitForExistence(timeout: 10), "the panel opens with its search field")
-        XCTAssertTrue(search.isHittable, "the search field is hittable")
-        let new = app.webViews.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New")).firstMatch
-        XCTAssertTrue(new.waitForExistence(timeout: 5) && new.isHittable, "the panel's New button is there and hittable")
+        panel.toggleShown = panel.barShown && toggle.appears(within: 10)
+        if panel.toggleShown, app.settles(within: 10) {
+            let deadline = Date().addingTimeInterval(2)
+            while !toggle.isHittable && Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
+            if toggle.isHittable { toggle.tap(); panel.toggleTapped = true }
+        }
+        if panel.toggleTapped {
+            let search = app.webViews.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@ OR placeholderValue == %@", "Search sessions…", "Search sessions…"))
+                .firstMatch
+            panel.searchShown = search.appears(within: 10)
+            panel.searchHittable = panel.searchShown && search.isHittable
+            let new = app.webViews.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New")).firstMatch
+            panel.newHittable = new.appears(within: 5) && new.isHittable
+        }
+
+        // Last: Settings covers the page.
+        let list = app.openStatus()
+        let run = SignedInRun(
+            sheetShown: sheetShown, redemptions: counter(state, "redemptions"),
+            authChecks: counter(state, "app_auth_checks"), clipboardHadStrings: clipboardHadStrings,
+            signInButtonShown: signInButtonShown, portrait: portrait, rotated: rotated, landscape: landscape,
+            panel: panel, sessionExpires: app.statusRow("diag-session-expires", in: list),
+            accessExpires: app.statusRow("diag-access-expires", in: list))
+        Self.signedIn = run
+        return run
+    }
+
+    /// The instance bar once settled, and its chips, read without failing.
+    private func lookAtBar(_ app: XCUIApplication) async throws -> BarLook? {
+        guard let bar = try await settledBar(app), let chips = try? instanceChips(bar) else { return nil }
+        return BarLook(chips: chips, bar: bar.frame, window: app.windows.firstMatch.frame,
+                       localHittable: labelled(app, "Local dashboard").isHittable,
+                       chevronHittable: labelled(app, "Switch instance").isHittable)
     }
 
     /// The page element labelled `label`, whatever XCUITest types it.
@@ -714,26 +812,16 @@ final class SessionTests: XCTestCase {
         let frame: CGRect
     }
 
-    /// Signed in on the real bundle, with its header rendered.
-    private func signedInDashboard() async throws -> XCUIApplication {
-        XCUIDevice.shared.orientation = .portrait
-        let app = launch()
-        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30))
-        try await signIn(app, kind: "cli")
-        return app
-    }
-
     /// The page's instance bar (`role="group"`, `aria-label="Remote
     /// instances"`), once its frame is the same across two reads 300 ms
     /// apart: the header's ResizeObserver and a rotation's relayout run
     /// after the element first appears, and so does its first paint, which
-    /// a tap must not beat (eb255cd).
-    private func settledInstanceBar(_ app: XCUIApplication,
-                                    file: StaticString = #filePath, line: UInt = #line) async throws -> XCUIElement {
+    /// a tap must not beat (eb255cd). Nil if it never shows or never settles;
+    /// the shared run records that, and the tests that read it fail on it.
+    private func settledBar(_ app: XCUIApplication) async throws -> XCUIElement? {
         let bar = app.webViews.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", "Remote instances")).firstMatch
-        XCTAssertTrue(bar.waitForExistence(timeout: 30), "the page's header shows its instance bar", file: file, line: line)
+        guard bar.appears(within: 30) else { return nil }
         var last = bar.frame
         for _ in 0..<20 {
             try await Task.sleep(for: .milliseconds(300))
@@ -741,8 +829,7 @@ final class SessionTests: XCTestCase {
             if now == last && !now.isEmpty { return bar }
             last = now
         }
-        XCTFail("the instance bar's frame did not settle: \(last)", file: file, line: line)
-        return bar
+        return nil
     }
 
     /// Every control and labelled leaf in the bar, from one snapshot, with
@@ -797,17 +884,6 @@ final class SessionTests: XCTestCase {
         }
     }
 
-    /// Rotates the device, then waits (up to 5 s) for the window to follow.
-    private func rotate(_ app: XCUIApplication, to orientation: UIDeviceOrientation) async throws {
-        XCUIDevice.shared.orientation = orientation
-        for _ in 0..<25 {
-            let f = app.windows.firstMatch.frame
-            if (f.width > f.height) == orientation.isLandscape { return }
-            try await Task.sleep(for: .milliseconds(200))
-        }
-        XCTFail("the window did not rotate: \(app.windows.firstMatch.frame)")
-    }
-
     // MARK: - Helpers
 
     /// `reset` false relaunches the SAME workspace -- its data store, cookies
@@ -832,14 +908,14 @@ final class SessionTests: XCTestCase {
     private func confirmInSettings(_ app: XCUIApplication, button id: String, action: String,
                                    file: StaticString = #filePath, line: UInt = #line) {
         app.buttons["settings-button"].firstMatch.tapWhenSettled(in: app, file: file, line: line)
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "the gear opens Settings",
+        XCTAssertTrue(app.navigationBars["Settings"].appears(within: 10), "the gear opens Settings",
                       file: file, line: line)
         let row = element(app, id)
         XCTAssertTrue(row.reveal(scrolling: app.collectionViews.firstMatch), "Settings has \(id)", file: file, line: line)
         row.tapWhenSettled(in: app, file: file, line: line)
         // The alert is a presentation too, in the tree from its first frame.
         let confirm = app.alerts.buttons[action].firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "a confirmation first: \(action)", file: file, line: line)
+        XCTAssertTrue(confirm.appears(within: 5), "a confirmation first: \(action)", file: file, line: line)
         confirm.tapWhenSettled(in: app, file: file, line: line)
     }
 
@@ -880,10 +956,10 @@ final class SessionTests: XCTestCase {
         let paste = element(app, "token-paste-button").exists
             ? element(app, "token-paste-button")
             : app.buttons["Paste"].firstMatch
-        XCTAssertTrue(paste.waitForExistence(timeout: 10), "the sheet offers Paste")
+        XCTAssertTrue(paste.appears(within: 10), "the sheet offers Paste")
         // Callers come here as soon as the sheet exists, i.e. mid-slide.
         paste.tapWhenSettled(in: app)
-        XCTAssertTrue(element(app, "token-sheet").waitForNonExistence(timeout: 30),
+        XCTAssertTrue(element(app, "token-sheet").disappears(within: 30),
                       "signing in dismisses the sheet")
         let after = try await gatewayState()
         XCTAssertGreaterThan(counter(after, "app_auth_checks"), counter(before, "app_auth_checks"),
@@ -895,13 +971,13 @@ final class SessionTests: XCTestCase {
     /// How many times the page has asked for a token in this launch.
     private func authRequiredCount(_ app: XCUIApplication) -> Int {
         let marker = element(app, "session-auth-required-count")
-        guard marker.waitForExistence(timeout: 5) else { return -1 }
+        guard marker.appears(within: 5) else { return -1 }
         return Int(marker.label) ?? -1
     }
 
     private func typeToken(_ app: XCUIApplication, _ text: String) {
         let field = element(app, "token-input")
-        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        XCTAssertTrue(field.appears(within: 10))
         field.tapWhenSettled(in: app)
         field.typeText(text)
         // A plain tap: typeText has just succeeded, so this sheet is up and

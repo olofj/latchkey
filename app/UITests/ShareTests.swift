@@ -58,7 +58,7 @@ final class ShareTests: XCTestCase {
         let app = try await launchSignedIn()
         defer { app.terminate() }
         let page = app.webViews.firstMatch
-        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        XCTAssertTrue(page.appears(within: 10))
         let frameBefore = page.frame
         XCTAssertGreaterThan(frameBefore.height, 200, "the page has a real height to begin with: \(frameBefore)")
 
@@ -82,7 +82,7 @@ final class ShareTests: XCTestCase {
         XCTAssertTrue(navs.contains { $0["sid"] as? String == "obsidian" && $0["prefill"] as? Bool == false },
                       "the dashboard was moved to the session: \(navs)")
         XCTAssertEqual(inboxCount(app), 0, "a confirmed share leaves the inbox")
-        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        XCTAssertTrue(page.appears(within: 5))
         XCTAssertEqual(page.frame, frameBefore, "the share left the page's frame as it was (F13, F15)")
     }
 
@@ -98,7 +98,7 @@ final class ShareTests: XCTestCase {
 
         share(app, "latchkey://share?url=https://example.com/two")
         let selected = element(app, "share-destination-selected")
-        XCTAssertTrue(element(app, "share-session-notes").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "share-session-notes").appears(within: 30))
         XCTAssertEqual(selected.label, "notes", "the last session is selected before any tap")
         element(app, "share-send").tap()
         let awaited3 = try await lastResult(app)
@@ -121,7 +121,7 @@ final class ShareTests: XCTestCase {
 
         _ = try await Self.post("\(Self.gatewayControl)/__slots?keys=notes,plan")
         share(app, "latchkey://share?url=https://example.com/two")
-        XCTAssertTrue(element(app, "share-session-notes").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "share-session-notes").appears(within: 30))
         XCTAssertEqual(element(app, "share-destination-selected").label, "none", "nothing preselected")
         XCTAssertTrue(element(app, "share-notice").exists, "the owner is told the session is gone")
         XCTAssertFalse(element(app, "share-session-obsidian").exists)
@@ -158,7 +158,7 @@ final class ShareTests: XCTestCase {
         try pick(app, "obsidian")
         element(app, "share-send").tap()
         let result = element(app, "share-result")
-        XCTAssertTrue(result.waitForExistence(timeout: 30))
+        XCTAssertTrue(result.appears(within: 30))
         XCTAssertEqual(result.label, "failed:refused-403")
         element(app, "share-prefill").tap()
         var navs: [[String: Any]] = []
@@ -190,9 +190,9 @@ final class ShareTests: XCTestCase {
         let before = try await gatewayState()
         _ = try await Self.post("\(Self.gatewayControl)/__app-signed-out")
         element(app, "share-send").tap()
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30), "the sign-in sheet")
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30), "the sign-in sheet")
         let waiting = element(app, "share-waiting-count")
-        XCTAssertTrue(waiting.waitForExistence(timeout: 5))
+        XCTAssertTrue(waiting.appears(within: 5))
         XCTAssertEqual(waiting.label, "1", "it says one share waits for sign-in")
         let refused = try await gatewayState()
         XCTAssertEqual(counter(refused, "share_posts"), 0)
@@ -213,12 +213,12 @@ final class ShareTests: XCTestCase {
     func testAColdLaunchKeepsTheItem() async throws {
         var app = try await launchSignedIn()
         share(app, "latchkey://share?url=https://example.com/c&title=Kept%20Title")
-        XCTAssertTrue(element(app, "share-session-obsidian").waitForExistence(timeout: 30))
+        XCTAssertTrue(element(app, "share-session-obsidian").appears(within: 30))
         app.terminate()
         app = launch(reset: false)
         defer { app.terminate() }
         let item = element(app, "share-item")
-        XCTAssertTrue(item.waitForExistence(timeout: 45), "the picker comes back after a relaunch")
+        XCTAssertTrue(item.appears(within: 45), "the picker comes back after a relaunch")
         XCTAssertTrue(item.label.contains("Kept Title"), item.label)
     }
 
@@ -275,7 +275,7 @@ final class ShareTests: XCTestCase {
         try pick(app, "obsidian")
         element(app, "share-send").tap()
         let result = element(app, "share-result")
-        XCTAssertTrue(result.waitForExistence(timeout: 60))
+        XCTAssertTrue(result.appears(within: 60))
         XCTAssertEqual(result.label, "failed:File too large (max 1MB)")
         let awaited14 = try await gatewayState()
         XCTAssertEqual(counter(awaited14, "share_posts"), 0)
@@ -287,7 +287,7 @@ final class ShareTests: XCTestCase {
         try pick(app, "obsidian")
         element(app, "share-send").tap()
         let result = element(app, "share-result")
-        XCTAssertTrue(result.waitForExistence(timeout: 30))
+        XCTAssertTrue(result.appears(within: 30))
         XCTAssertEqual(result.label, "failed:Unsupported file type: .bin")
         let awaited15 = try await gatewayState()
         XCTAssertEqual(counter(awaited15, "share_posts"), 0)
@@ -306,7 +306,7 @@ final class ShareTests: XCTestCase {
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
         element(app, "share-send").tap()
         let result = element(app, "share-result")
-        XCTAssertTrue(result.waitForExistence(timeout: 40))
+        XCTAssertTrue(result.appears(within: 40))
         XCTAssertEqual(result.label, "failed:unreachable")
         XCTAssertEqual(element(app, "share-sheet-inbox-count").label, "1", "a failed share is kept")
         let awaited16 = try await gatewayState()
@@ -340,7 +340,7 @@ final class ShareTests: XCTestCase {
         let later = element(app, "share-cancel")
         XCTAssertTrue(later.isHittable, "Later is offered while sending")
         later.tap()
-        XCTAssertTrue(element(app, "share-picker").waitForNonExistence(timeout: 5), "Later closes the sheet")
+        XCTAssertTrue(element(app, "share-picker").disappears(within: 5), "Later closes the sheet")
         let awaited = try await lastResult(app, timeout: 20)
         XCTAssertEqual(awaited, "sent:obsidian", "the late answer is recorded")
         XCTAssertEqual(inboxCount(app), 0, "a delivered share leaves the inbox")
@@ -348,7 +348,7 @@ final class ShareTests: XCTestCase {
         XCUIDevice.shared.press(.home)
         try await Task.sleep(for: .seconds(2))
         app.activate()
-        XCTAssertFalse(element(app, "share-picker").waitForExistence(timeout: 8),
+        XCTAssertFalse(element(app, "share-picker").appears(within: 8),
                        "the next foreground does not offer it again")
         let state = try await gatewayState()
         XCTAssertEqual(counter(state, "share_posts"), 1)
@@ -365,9 +365,9 @@ final class ShareTests: XCTestCase {
         try pick(app, "obsidian")
         _ = try await Self.post("\(Self.gatewayControl)/__slow?slots=4")
         element(app, "share-send").tap()
-        XCTAssertTrue(element(app, "share-progress").waitForExistence(timeout: 5), "the send has started")
-        element(app, "share-cancel").tap()
-        XCTAssertTrue(element(app, "share-picker").waitForNonExistence(timeout: 5), "Later closes the sheet")
+        XCTAssertTrue(element(app, "share-progress").appears(within: 5), "the send has started")
+        element(app, "share-cancel").tapWhenSettled(in: app)
+        XCTAssertTrue(element(app, "share-picker").disappears(within: 5), "Later closes the sheet")
         try await Task.sleep(for: .seconds(7))
         let before = try await gatewayState()
         XCTAssertEqual(counter(before, "share_posts"), 0, "nothing was posted after Later")
@@ -398,8 +398,8 @@ final class ShareTests: XCTestCase {
     func testAFreshSeedIsInTheInbox() async throws {
         let app = try await launchSignedIn(seed: "pdf:1024:age=6d")
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "share-session-obsidian").waitForExistence(timeout: 30), "the picker comes up")
-        element(app, "share-cancel").tap()
+        XCTAssertTrue(element(app, "share-session-obsidian").appears(within: 30), "the picker comes up")
+        element(app, "share-cancel").tapWhenSettled(in: app)
         XCTAssertEqual(inboxCount(app), 1, "a 6-day item stays, and the instrument sees it")
     }
 
@@ -487,24 +487,35 @@ final class ShareTests: XCTestCase {
 
     private func launchSignedIn(seed: String? = nil) async throws -> XCUIApplication {
         let app = launch(seed: seed)
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30), "signed out at first")
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30), "signed out at first")
         try await signIn(app)
         return app
     }
 
     /// Opens a share URL as another app would. The system may ask first.
+    ///
+    /// It has not asked in any run on record, so waiting out the whole 3 s for
+    /// the question cost 3 s a share (F14). Stop as soon as the app shows
+    /// the share instead: its picker, or its signed-out wait. Only when a
+    /// picker was already up, and so proves nothing, is the 3 s paid.
     private func share(_ app: XCUIApplication, _ url: String) {
+        let pickerWasUp = element(app, "share-picker").exists
         XCUIDevice.shared.system.open(URL(string: url)!)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let open = springboard.buttons["Open"]
-        if open.waitForExistence(timeout: 3) { open.tap() }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if open.exists { open.tap(); return }
+            if !pickerWasUp, element(app, "share-picker").exists || element(app, "share-waiting-count").exists { return }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
     }
 
     /// Waits for the picker's list, then picks `key`.
     private func pick(_ app: XCUIApplication, _ key: String,
                       file: StaticString = #filePath, line: UInt = #line) throws {
         let row = element(app, "share-session-\(key)")
-        XCTAssertTrue(row.waitForExistence(timeout: 30), "the picker lists \(key)", file: file, line: line)
+        XCTAssertTrue(row.appears(within: 30), "the picker lists \(key)", file: file, line: line)
         // The picker is a sheet; its rows are in the tree from its first frame.
         row.tapWhenSettled(in: app, file: file, line: line)
         XCTAssertEqual(element(app, "share-destination-selected").label, key, file: file, line: line)
@@ -541,9 +552,9 @@ final class ShareTests: XCTestCase {
         if element(app, "share-picker").exists, element(app, "share-cancel").exists {
             element(app, "share-cancel").tap()
         }
-        _ = element(app, "share-picker").waitForNonExistence(timeout: 5)
+        _ = element(app, "share-picker").disappears(within: 5)
         let marker = element(app, "share-inbox-count")
-        guard marker.waitForExistence(timeout: 5) else { return -1 }
+        guard marker.appears(within: 5) else { return -1 }
         return Int(marker.label) ?? -1
     }
 
@@ -555,10 +566,10 @@ final class ShareTests: XCTestCase {
         let paste = element(app, "token-paste-button").exists
             ? element(app, "token-paste-button")
             : app.buttons["Paste"].firstMatch
-        XCTAssertTrue(paste.waitForExistence(timeout: 10), "the sheet offers Paste")
+        XCTAssertTrue(paste.appears(within: 10), "the sheet offers Paste")
         // Callers come here as soon as the sheet exists, i.e. mid-slide.
         paste.tapWhenSettled(in: app)
-        XCTAssertTrue(element(app, "token-sheet").waitForNonExistence(timeout: 30), "signed in")
+        XCTAssertTrue(element(app, "token-sheet").disappears(within: 30), "signed in")
     }
 
     /// The element's label from one snapshot, taken as soon as it exists;
