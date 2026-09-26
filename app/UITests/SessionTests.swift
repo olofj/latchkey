@@ -26,7 +26,8 @@
 //  signed out too.
 //
 //  Needs the offline harness AND the fake gateway: scripts/test-session.sh
-//  (parent repo).
+//  (parent repo). Their ports are the harness instance's (HarnessInstance,
+//  F14), so several runs can share a host; setUp refuses another instance's.
 //
 
 import UIKit
@@ -35,12 +36,12 @@ import XCTest
 @MainActor
 final class SessionTests: XCTestCase {
 
-    static let gatewayControl = "http://127.0.0.1:8481"
-    static let proxyControl = "http://127.0.0.1:1081"
+    static let gatewayControl = "http://127.0.0.1:\(HarnessInstance.port("GW_CONTROL_PORT", default: 8481))"
+    static let proxyControl = OfflineHarnessTests.proxyControl
     static let gateway = "https://gw.tail-scale.ts.net"
     static let gatewayHost = "gw.tail-scale.ts.net"
     /// F5: a second fake gateway, answering as dash (test-session.sh).
-    static let secondControl = "http://127.0.0.1:8482"
+    static let secondControl = "http://127.0.0.1:\(HarnessInstance.port("GW2_CONTROL_PORT", default: 8482))"
     static let secondHost = "dash.tail-scale.ts.net"
 
     /// The page's own banner input; present in the tree only when visible.
@@ -56,6 +57,9 @@ final class SessionTests: XCTestCase {
             XCTFail("The fake gateway or the offline harness is not running. Use scripts/test-session.sh (parent repo).")
             return
         }
+        try await HarnessInstance.assertIsOurs("\(Self.gatewayControl)/__state")
+        try await HarnessInstance.assertIsOurs("\(Self.secondControl)/__state")
+        try await HarnessInstance.assertIsOurs("\(Self.proxyControl)/state")
         _ = try await Self.post("\(Self.gatewayControl)/__reset")
         _ = try await Self.post("\(Self.secondControl)/__reset")
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")

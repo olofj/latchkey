@@ -40,6 +40,8 @@ final class ShareTests: XCTestCase {
             XCTFail("The fake gateway or the offline harness is not running. Use scripts/test-session.sh (parent repo).")
             return
         }
+        try await HarnessInstance.assertIsOurs("\(Self.gatewayControl)/__state")
+        try await HarnessInstance.assertIsOurs("\(Self.proxyControl)/state")
         _ = try await Self.post("\(Self.gatewayControl)/__reset")
         _ = try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
         _ = try await Self.post("\(Self.proxyControl)/open")
@@ -411,7 +413,7 @@ final class ShareTests: XCTestCase {
     func testTheShareSheetSavesForTheAppAndTheAppSendsIt() async throws {
         let app = try await launchSignedIn()
         defer { app.terminate() }
-        let page = "http://127.0.0.1:8481/ext-share-probe"
+        let page = "\(Self.gatewayControl)/ext-share-probe"
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
         safari.launch()
         XCUIDevice.shared.system.open(URL(string: page)!)
