@@ -150,3 +150,49 @@ that the fast path stays quiet as more states are added to this screen.
 
 Opened 2026-09-26 from issue #4. The three-to-four screen count in §1 is
 inferred from the code; §4.0's measurement replaces it with observation.
+
+**2026-09-26, measured — and §1 is wrong.** Olof recorded a cold launch on his
+phone (8.4 s, 60 fps). Frames and per-frame mean brightness give this sequence:
+
+| Time | On screen |
+|---|---|
+| → 3.99 s | White page area, the app's own gear already visible |
+| **4.003 → ~4.27 s** | **Solid dark, ~250 ms**, gear still visible, faint dark skeleton blocks |
+| 4.27 → 4.42 s | Dark toolbar over a lightening background; the theme is switching |
+| ~4.44 s | Light empty state: "What can I do for you? / Start a new chat to begin" |
+| 4.55 → 5.7 s | Skeleton rows, "Load earlier messages", then content filling in |
+
+About **1.7 s** of churn, whose jarring element is a quarter-second of full
+black between two white states on a light-mode phone.
+
+**None of §1's three states appeared.** No gate, no connecting state, no
+unreachable banner. The app's gear is visible in every frame, so
+`DashboardRootView` was on the dashboard branch throughout. Everything that
+flashes happens **inside the web view**: the KiroCrew page paints a dark shell,
+then switches to its light theme.
+
+So §4.1's grace window — the preferred fix — would have changed nothing, and
+§4.3's held launch surface would only have hidden the first white period, not
+the dark flash that follows it. Both are superseded.
+
+**What the fix has to address instead**, in the order the evidence supports:
+
+1. **The ~250 ms dark flash.** The page paints a dark shell before its theme
+   resolves. Two candidate causes, and they need distinguishing before
+   choosing: the page defaults to dark (`prefers-color-scheme`) before reading
+   the owner's stored preference, or it paints an unstyled shell before its CSS
+   applies. Either way the *page* is doing it, not us.
+2. **Our lever, if we want one:** do not show the web view until it has painted
+   something we would be happy to show. The instrument already exists in
+   spirit — `eb255cd` added a `rendered` report to the fake dashboard for the
+   tap races — but the real bundle gives us no such signal, so this would rest
+   on `didFinishNavigation` or a first-paint heuristic plus a timeout. It
+   trades a flash for a delay, so it needs a measured threshold, not a guess.
+3. **Upstream.** The theme flash is KiroCrew's behaviour and the durable fix
+   belongs there. `docs/upstream/` already holds one such report; this is a
+   second.
+
+Not yet known: whether the dark shell is the pinned 0.7.1 bundle's behaviour in
+general or specific to this owner's stored theme. Serving the same bundle from
+the test harness and watching for the same flash would answer it without
+needing his device.
