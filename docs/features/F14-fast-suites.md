@@ -527,3 +527,94 @@ the clock and passed 38/38.
 Not done here: the 240 s budget is unchanged (§7.4 asks for it to be re-set
 once the figure settles), and `l1-durations.txt` is refreshed by hand from a
 run's `durations.txt`.
+
+**2026-09-26, the session suite sharded, and a pass for cost.** Two pieces of
+work, on the owner's instruction to "prune out low value and slow running
+tests".
+
+*The session suite, sharded like L1.* The harnesses it needs became
+per-instance (each instance gets its own second gateway), and it now runs
+across simulators through the same runner, split out of L1 so both share it:
+
+| Run | Result | Wall |
+|---|---|---|
+| serial (`--serial`, instance 0) | 39/39 | **1099 s** |
+| N = 4 | 39/39 | 319 s |
+| N = 6 | 39/39 | 276 s |
+| N = 8, the new default | 39/39 | **233 s** |
+
+Test names were diffed four ways — the serial run, N=4, N=8, and the `func
+test…` declarations — and all four lists hold the same 39 names. An induced
+run with two faults (a wrong assertion on shard 6, a stray listener on shard
+5's second-gateway control port) printed the broken test under its own name
+with file, line, shard and simulator, and listed each of the stranded shard's
+five tests as NOT RUN, counted as failures rather than skipped.
+
+**Why 8 and not more.** Fixed overhead is only 30–54 s per shard (bundle
+check, gateway self-test, harness start, install, log scans). The rest of the
+per-shard time is contention: test time runs about **1.39× at N=8**, against
+the **1.14×** the launch-only benchmark above predicted, because this suite
+drives the real KiroCrew bundle in WebKit rather than only launching. The
+curve is flattening (319 → 276 → 233 s), so 8 is near its own knee. Budget
+set to 300 s, not a figure it barely clears.
+
+*Two faults sharding exposed, both worth more than the speed.*
+
+- **A D1 check that was passing by luck.** Under XCTest the unified log is
+  mirrored to stderr, and libtailscale's filch buffer captures that mirror, so
+  shared content reached `aperture.log1.txt`. The serial run only passed
+  because its last test happens not to display the label. The scan now sets
+  aside just the `[Default]` records in that buffer — the app logs as `tsnet`,
+  `timing` and `share-extension` — and a planted `[tsnet]` line containing the
+  content is still caught.
+- **More `ShareTests` races**, visible only under eight-way load: a sheet
+  element checked, then tapped or read after the sheet had dismissed itself.
+  They now read labels from one snapshot and wait out the picker's own 2 s
+  auto-close. No assertion changed.
+
+Session builds now stamp the commit too, because both suites share one build
+folder and L1's Status test reads the commit from it.
+
+*The cost pass: no test was deleted.* All four suites were read test by test
+against what each uniquely asserts and which invariant or reported bug it
+guards. Nothing warranted deletion — tests that look duplicated (the two
+proxy-gone tests, the three routes into Safari, the two error causes) each
+guard a different path. The waste was structural, and this is the general
+lesson: **the cost is launches and polling, not assertions.**
+
+| Suite | Before | After |
+|---|---|---|
+| L1, N = 4 | 197 s | **184 s** |
+| session, N = 8 | 233 s | **200 s** |
+| discovery, serial | 323 s | **304 s** |
+| lifecycle | 162 s | unchanged, deliberately |
+
+What produced that: tests whose launch is identical now share one (three
+groups in L1, two pairs in discovery, the four read-only signed-in session
+tests), 43 discovery waits that still polled at ~1 s now poll at 100 ms, and
+`share()` no longer waits out 3 s for a prompt that never appears.
+
+**A latent defect in the packers, found while doing it.** The L1 packer
+recognised only one shared group, by matching the literal string
+`settledDefaultRun()`, and the session packer had no grouping at all — so a
+shared group could be split across shards and pay its launch on each one.
+Measured, it had cost nothing yet (the one existing group happened to match),
+but it would have cancelled part of this pass: the L1 gate pair split across
+shards 2 and 4 (~6 s) and the session signed-in group across shards 4, 2 and 7
+(~26 s). Both packers now keep every group together.
+
+**Corrections to this document:** L1 has **42** tests, not the 38 in the table
+above.
+
+Left as proposals, not done, each with the reason: deleting
+`testAGatewayOwnedByAnotherUserIsOffered` (16 s — its filter logic is
+host-tested, but nothing would then catch the app reading the wrong owner
+field from real status data); lowering lifecycle's 8 s chaos delay to 5 s
+(~12 s — it narrows exactly the kind of margin that produced this week's
+flakes); a test hook to shorten F8's 26 s retry schedule (it would keep the
+end-to-end proof but needs an app change); and ~80 s from chaining tests on
+one live app (rejected — one failure cascades into the rest, which is why the
+shared runs never keep an app alive across tests).
+
+The ranked per-test analysis behind all of this is in
+`f14-measurement/test-costs.md`.

@@ -1,52 +1,56 @@
 # L1 per-test durations in seconds, for balancing shards (F14 stage 2).
 #
-# Seeded from docs/features/F14-fast-suites.md §9, the "after" column of the
-# 609 s table. scripts/test-offline-shards.py packs tests onto simulators
-# longest first by these numbers; a test missing here is given a default and
-# named in a warning. Each sharded run writes the durations it measured to
-# durations.txt in its log directory, in this format, to refresh from.
+# Measured from app/build/offline-logs/20260926-092351-shards (42/42 in 184 s
+# on four simulators). scripts/test-offline-shards.py packs tests onto
+# simulators longest first by these numbers; a test missing here is given a
+# default and named in a warning. Each sharded run writes the durations it
+# measured to durations.txt in its log directory, in this format, to refresh
+# from.
 #
-# The four F6 observers share one launch (settledDefaultRun) and always go
-# to one shard together, so the first of them by name carries it.
-38.1 testStalledLoadShowsTheConnectingStateForItsWholeDuration
-36.0 testANodeThatCannotStartShowsAScreenInsteadOfDying
-29.9 testTheAppBarRetractsOnADeliberateScrollAndComesBack
-28.7 testTypingInThePageKeepsItOnScreen
-27.3 testInsetProbesReportWhatThePageIsTold
-26.2 testStatusNamesTheCommitTheAppWasBuiltFrom
-25.3 testStrictModeBlocksTheAllowlistedCDNs
-24.8 testNothingOfOursSitsOnThePageAndSettingsIsReachable
-16.9 testBlockedImageShowsAMarkerThatOpensSafari
-18.1 testStartingANewNodeMovesTheOldStateAsideAndKeepsIt
-17.4 testLoggingSetupFailureStopsTheNodeRatherThanStartingItBlind
-17.6 testTheErrorPageOffersRetryAndAnotherGateway
-16.5 testAnUnwritableStateDirectoryIsSurvived
-14.5 testTryNowRestartsTheNodeImmediately
-14.5 testWindowOpenToAnotherOriginStillOpensSafari
-17.5 testATappedLinkToAnotherAppAsksFirst
-16.6 testAnUntappedLinkAwayAsksOnlyOnce
-14.2 testAScriptCannotOpenAnotherAppWithoutATap
-9.7 testATapThatNavigatesByScriptStillOpensSafari
-13.0 testAnAllowlistedCDNIsFetchedAndItsLookalikesAreNot
-13.3 testAReturningUserIsNotReintroduced
-0.1 testThePageCannotWidenTheAllowlist
-12.9 testWithoutTheRuleListTheAwayOriginIsReached
-0.1 testTheFontHostsStayBlockedWhileTheCDNsAreAllowed
+# Tests that share one launch must land on one shard, or each shard pays the
+# launch again and the saving disappears — scripts/shards.py keeps each group
+# together. Within a group the carrier holds the launch cost and the others
+# read the same run, which is why they measure about 0.1 s. Do not reorder a
+# group's members expecting the cost to move with them.
+0.1 testDashboardLoadsThroughTheProxy
+9.1 testNonTailnetOriginLoadsDirectAndNeverTouchesTheProxy
+8.6 testBlackholedProxyFailsWithoutDirectFallback
+9.4 testProxyGoneFailsWithoutDirectFallback
+10.1 testProxyGoneWithoutRelayFailsWithoutDirectFallback
+10.8 testAGatewayAnswering502ShowsTheErrorPageInsteadOfABlankScreen
+38.8 testStalledLoadShowsTheConnectingStateForItsWholeDuration
+12.4 testAFastLoadDoesNotLeaveTheConnectingStateOnScreen
+18.6 testTheErrorPageOffersRetryAndAnotherGateway
+8.4 testCertificateNameMismatchShowsTheErrorPage
+8.4 testUnreachableGatewayShowsTheErrorPage
+13.8 testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard
+19.6 testATappedLinkToAnotherAppAsksFirst
+15.2 testAScriptCannotOpenAnotherAppWithoutATap
+16.7 testAnUntappedLinkAwayAsksOnlyOnce
+10.8 testATapThatNavigatesByScriptStillOpensSafari
 0.1 testOffOriginLoadsNeverReachTheAwayOrigin
-12.7 testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard
-11.8 testFailedRuleCompileLoadsNothing
-12.2 testSignInTokenIsStrippedFromTheAddress
-10.5 testTheNodeStartRetryIsVisibleAndSucceeds
-9.0 testDashboardLoadsThroughTheProxy
-9.7 testAGatewayAnswering502ShowsTheErrorPageInsteadOfABlankScreen
-9.8 testAFastLoadDoesNotLeaveTheConnectingStateOnScreen
-8.4 testProxyGoneWithoutRelayFailsWithoutDirectFallback
-9.0 testProxyGoneFailsWithoutDirectFallback
-7.9 testUnreachableGatewayShowsTheErrorPage
-8.0 testTheGatewaysOwnMachineryStillWorks
-8.2 testCertificateNameMismatchShowsTheErrorPage
-8.0 testBlackholedProxyFailsWithoutDirectFallback
-7.9 testNonTailnetOriginLoadsDirectAndNeverTouchesTheProxy
-6.5 testTheSignInButtonSurvivesItsOwnCopy
-6.5 testAFirstLaunchExplainsItself
-6.3 testTheIntroductionNamesThePostLoginSteps
+13.4 testWithoutTheRuleListTheAwayOriginIsReached
+15.7 testAnAllowlistedCDNIsFetchedAndItsLookalikesAreNot
+0.1 testTheFontHostsStayBlockedWhileTheCDNsAreAllowed
+0.1 testThePageCannotWidenTheAllowlist
+0.1 testTheGatewaysOwnMachineryStillWorks
+12.8 testFailedRuleCompileLoadsNothing
+15.8 testWindowOpenToAnotherOriginStillOpensSafari
+23.1 testBlockedImageShowsAMarkerThatOpensSafari
+31.4 testStrictModeBlocksTheAllowlistedCDNs
+10.6 testSignInTokenIsStrippedFromTheAddress
+27.6 testStatusNamesTheCommitTheAppWasBuiltFrom
+30.1 testInsetProbesReportWhatThePageIsTold
+25.4 testNothingOfOursSitsOnThePageAndSettingsIsReachable
+30.6 testTheAppBarRetractsOnADeliberateScrollAndComesBack
+31.3 testTypingInThePageKeepsItOnScreen
+8.6 testAFirstLaunchExplainsItself
+0.1 testTheIntroductionNamesThePostLoginSteps
+7.0 testTheSignInButtonSurvivesItsOwnCopy
+14.9 testAReturningUserIsNotReintroduced
+37.9 testANodeThatCannotStartShowsAScreenInsteadOfDying
+11.2 testTheNodeStartRetryIsVisibleAndSucceeds
+15.6 testTryNowRestartsTheNodeImmediately
+19.5 testStartingANewNodeMovesTheOldStateAsideAndKeepsIt
+17.5 testAnUnwritableStateDirectoryIsSurvived
+17.6 testLoggingSetupFailureStopsTheNodeRatherThanStartingItBlind

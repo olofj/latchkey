@@ -1,46 +1,56 @@
 # Session-suite (M4) per-test durations in seconds, for balancing shards
-# (F14). Seeded from the serial run app/build/session-logs/20260925-194037
-# (39/39). scripts/test-session-shards.py packs tests onto simulators longest
-# first by these numbers; a test missing here is given a default and named
-# in a warning. Each sharded run writes the durations it measured to
-# durations.txt in its log directory, in this format, to refresh from.
+# (F14). Measured from app/build/session-logs/20260926-100338-shards (39/39 in
+# 200 s on eight simulators). scripts/test-session-shards.py packs tests onto
+# simulators longest first by these numbers; a test missing here is given a
+# default and named in a warning. Each sharded run writes the durations it
+# measured to durations.txt in its log directory, in this format, to refresh
+# from.
 #
-55.3 SessionTests/testThePageRefreshesAcrossExpiriesWithoutTheSheet
-47.2 SessionTests/testSigningOutRevokesTheSessionHereAndAtTheGateway
-46.5 ShareTests/testTheShareSheetSavesForTheAppAndTheAppSendsIt
-43.2 SessionTests/testSigningOutWithTheGatewayUnreachableClearsThisDeviceAndSaysSo
-39.4 SessionTests/testResetAppEndsTheSessionAndStartsOver
-38.7 ShareTests/testLaterBeforeThePostLeftKeepsTheItem
-38.2 SessionTests/testNetworkLossDoesNotShowTheSheet
-37.5 ShareTests/testLaterAfterThePostLeftIsRecordedNotReoffered
-36.4 SessionTests/testSwitchingBackToAGatewayNeedsNoNewSignIn
-34.8 ShareTests/testUnreachableIsKeptAndRetried
-34.2 ShareTests/testOverTheLimitIsRefusedAtCaptureAndA413IsShown
-30.8 SessionTests/testACLISessionSurvivesAGatewayRestart
-28.0 ShareTests/testASharedLinkReachesTheChosenSession
-26.8 ShareTests/testAColdLaunchKeepsTheItem
-26.2 ShareTests/testSignedOutMidShareThenResumed
-25.5 ShareTests/testTheLastSessionIsPreselected
-25.0 ShareTests/testOnlyAListedSlotIsEverPosted
-24.9 SessionTests/testPastingCLIOutputSignsIn
-24.8 SessionTests/testSignedOutShowsTheNativeSheetAndHidesThePageBanner
-23.8 ShareTests/testARefusedPostOffersPrefill
-23.0 ShareTests/testABusySlotIsQueuedNotSent
-21.7 SessionTests/testALostRefreshAtARestartEndsInTheSheet
-21.5 ShareTests/testADocumentIsUploadedThenReferenced
-21.4 SessionTests/testARevokedChainShowsTheSheetAndANewTokenRecovers
-20.1 ShareTests/testFiftyMegabytesGoThroughByteForByte
-19.4 SessionTests/testALostRefreshResponseIsRecoveredByTheGraceWindow
-19.4 ShareTests/testAnUnsupportedTypeShowsTheGatewaysWords
-18.1 SessionTests/testTheSessionsPanelStillOpensInPortrait
-18.0 SessionTests/testWithoutTheRuleListTheRealDashboardReachesForGoogle
-17.9 ShareTests/testAFreshSeedIsInTheInbox
-17.9 SessionTests/testTheRealDashboardConnectsToNothingButTheGateway
-17.7 SessionTests/testABadTokenSaysSoAndKeepsTheSheet
-17.7 SessionTests/testSignOutEverywhereShowsTheSheet
-17.5 SessionTests/testABrokenBridgeLeavesThePageBannerVisible
+# Tests that share one launch must land on one shard, or each shard pays the
+# launch and the sign-in again — scripts/shards.py keeps each group together.
+# Within a group the carrier holds that cost and the others read the same run,
+# which is why they measure about 0.1 s.
+#
+# These figures are from an eight-way run, where test time runs about 1.39x
+# its serial cost because the suite drives the real KiroCrew bundle in WebKit.
+# They are the right numbers for packing an eight-way run, not an estimate of
+# any test's cost on its own.
+25.5 SessionTests/testSignedOutShowsTheNativeSheetAndHidesThePageBanner
+24.4 SessionTests/testABrokenBridgeLeavesThePageBannerVisible
+20.4 SessionTests/testTheRealDashboardConnectsToNothingButTheGateway
+20.3 SessionTests/testWithoutTheRuleListTheRealDashboardReachesForGoogle
+48.9 SessionTests/testPastingCLIOutputSignsIn
+28.4 SessionTests/testABadTokenSaysSoAndKeepsTheSheet
+55.7 SessionTests/testThePageRefreshesAcrossExpiriesWithoutTheSheet
 17.0 SessionTests/testAnExpiredSessionIsRecoveredByThePagesInterceptor
-16.4 SessionTests/testTheInstanceChipsStayInOneRowInLandscape
-15.4 ShareTests/testTheSweepRunsAtLaunch
-14.6 SessionTests/testTheInstanceChipsDoNotOverlapInPortrait
-13.8 SessionTests/testAQRSessionEndsAtAGatewayRestart
+23.3 SessionTests/testARevokedChainShowsTheSheetAndANewTokenRecovers
+40.8 SessionTests/testACLISessionSurvivesAGatewayRestart
+27.9 SessionTests/testAQRSessionEndsAtAGatewayRestart
+46.4 SessionTests/testNetworkLossDoesNotShowTheSheet
+20.8 SessionTests/testSignOutEverywhereShowsTheSheet
+34.3 SessionTests/testALostRefreshResponseIsRecoveredByTheGraceWindow
+35.1 SessionTests/testALostRefreshAtARestartEndsInTheSheet
+59.6 SessionTests/testSigningOutRevokesTheSessionHereAndAtTheGateway
+49.1 SessionTests/testSigningOutWithTheGatewayUnreachableClearsThisDeviceAndSaysSo
+46.3 SessionTests/testResetAppEndsTheSessionAndStartsOver
+39.0 SessionTests/testSwitchingBackToAGatewayNeedsNoNewSignIn
+0.1 SessionTests/testTheInstanceChipsDoNotOverlapInPortrait
+0.1 SessionTests/testTheInstanceChipsStayInOneRowInLandscape
+0.1 SessionTests/testTheSessionsPanelStillOpensInPortrait
+22.5 ShareTests/testASharedLinkReachesTheChosenSession
+27.8 ShareTests/testTheLastSessionIsPreselected
+23.8 ShareTests/testOnlyAListedSlotIsEverPosted
+22.7 ShareTests/testABusySlotIsQueuedNotSent
+25.7 ShareTests/testARefusedPostOffersPrefill
+24.5 ShareTests/testSignedOutMidShareThenResumed
+27.6 ShareTests/testAColdLaunchKeepsTheItem
+24.5 ShareTests/testADocumentIsUploadedThenReferenced
+24.4 ShareTests/testFiftyMegabytesGoThroughByteForByte
+38.8 ShareTests/testOverTheLimitIsRefusedAtCaptureAndA413IsShown
+21.4 ShareTests/testAnUnsupportedTypeShowsTheGatewaysWords
+31.9 ShareTests/testUnreachableIsKeptAndRetried
+41.9 ShareTests/testLaterAfterThePostLeftIsRecordedNotReoffered
+40.0 ShareTests/testLaterBeforeThePostLeftKeepsTheItem
+20.4 ShareTests/testTheSweepRunsAtLaunch
+24.3 ShareTests/testAFreshSeedIsInTheInbox
+53.4 ShareTests/testTheShareSheetSavesForTheAppAndTheAppSendsIt
