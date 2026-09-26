@@ -12,7 +12,8 @@ gateways on ports +100*k. How shards are booted, planned, run and judged is
 scripts/shards.py, shared with L1; what is the session suite's own:
 
   - the plan     SessionTests and ShareTests, as Class/test, longest first
-                 by scripts/session-durations.txt.
+                 by scripts/session-durations.txt. Tests that share one
+                 launch (a cached `…Run()` helper) stay together.
   - the bundle   the pinned KiroCrew wheel is fetched once, before the
                  shards start (or the desktop app's copy chosen, if it
                  passes the pin), rather than by every shard at once.
@@ -66,11 +67,13 @@ class Session(shards.Suite):
     teardown = ("gateway-down GW_NAME=gateway2", "gateway-down", "harness-down")
 
     def tests(self):
-        names = []
+        names, groups = [], []
         for cls in ("SessionTests", "ShareTests"):
-            _, tests = shards.swift_tests(os.path.join(UITESTS, f"{cls}.swift"))
+            path = os.path.join(UITESTS, f"{cls}.swift")
+            _, tests = shards.swift_tests(path)
             names += [f"{cls}/{t}" for t in tests]
-        return names, []
+            groups += [[f"{cls}/{t}" for t in g] for g in shards.shared_runs(path, tests)]
+        return names, groups
 
     def test_id(self, cls, name):
         return f"{cls}/{name}"

@@ -102,6 +102,28 @@ def swift_tests(path):
     return os.path.basename(path).removesuffix(".swift"), re.findall(r"^\s*func (test[A-Za-z0-9_]*)\(", src, re.M)
 
 
+def shared_runs(path, names):
+    """The groups of tests in one file that must share a shard: those whose
+    bodies call the same `private func …Run()` helper, which takes one launch,
+    caches what it saw, and lets every test that only reads it assert its own
+    claim on it (F14). Only the first of a group to run in a process pays the
+    launch, so splitting one across shards would pay it again on each."""
+    src = open(path).read()
+    helpers = re.findall(r"^    private func (\w+Run)\(\)", src, re.M)
+    starts = [m.start() for m in re.finditer(r"^    (?:private |static |@\w+ )*func ", src, re.M)]
+    groups = []
+    for helper in helpers:
+        group = []
+        for name in names:
+            at = src.index(f"func {name}(")
+            end = next((s for s in starts if s > at), len(src))
+            if f"{helper}()" in src[at:end]:
+                group.append(name)
+        if len(group) > 1:
+            groups.append(group)
+    return groups
+
+
 # ------------------------------------------------------------ simulators ----
 def devices():
     """name -> (udid, state) for every available simulator."""

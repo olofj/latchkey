@@ -12,7 +12,7 @@ scripts/shards.py, shared with the session suite; what is L1's own:
 
   - the plan     OfflineHarnessTests' tests, longest first by
                  scripts/l1-durations.txt. Tests that share one launch
-                 (settledDefaultRun) stay together. The sign-in test and R1's
+                 (a cached `…Run()` helper) stay together. The sign-in test and R1's
                  disk scan go to one shard, as its last pass, whose weight
                  includes that second xcodebuild pass.
   - the verdict  from each shard's suite and signin passes.
@@ -21,7 +21,6 @@ Logs: app/build/offline-logs/<stamp>-shards/ (see scripts/shards.py).
 """
 
 import os
-import re
 import sys
 
 import shards
@@ -40,19 +39,10 @@ class L1(shards.Suite):
     logs = ("suite", "signin")
 
     def tests(self):
-        """The file's test names, and the groups that must share a shard:
-        tests whose body calls settledDefaultRun() share one launch, which
-        only the first of them in a process pays."""
-        src = open(SWIFT).read()
+        """The file's test names, and the groups that must share a shard
+        (shards.shared_runs: the tests that read one launch's cached run)."""
         _, names = shards.swift_tests(SWIFT)
-        starts = [m.start() for m in re.finditer(r"^    (?:private |static |@\w+ )*func ", src, re.M)]
-        shared = []
-        for name in names:
-            at = src.index(f"func {name}(")
-            end = next((s for s in starts if s > at), len(src))
-            if "settledDefaultRun()" in src[at:end]:
-                shared.append(name)
-        return names, [shared] if len(shared) > 1 else []
+        return names, shards.shared_runs(SWIFT, names)
 
     def test_id(self, cls, name):
         return name
