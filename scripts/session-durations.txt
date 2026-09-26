@@ -1,0 +1,46 @@
+# Session-suite (M4) per-test durations in seconds, for balancing shards
+# (F14). Seeded from the serial run app/build/session-logs/20260925-194037
+# (39/39). scripts/test-session-shards.py packs tests onto simulators longest
+# first by these numbers; a test missing here is given a default and named
+# in a warning. Each sharded run writes the durations it measured to
+# durations.txt in its log directory, in this format, to refresh from.
+#
+55.3 SessionTests/testThePageRefreshesAcrossExpiriesWithoutTheSheet
+47.2 SessionTests/testSigningOutRevokesTheSessionHereAndAtTheGateway
+46.5 ShareTests/testTheShareSheetSavesForTheAppAndTheAppSendsIt
+43.2 SessionTests/testSigningOutWithTheGatewayUnreachableClearsThisDeviceAndSaysSo
+39.4 SessionTests/testResetAppEndsTheSessionAndStartsOver
+38.7 ShareTests/testLaterBeforeThePostLeftKeepsTheItem
+38.2 SessionTests/testNetworkLossDoesNotShowTheSheet
+37.5 ShareTests/testLaterAfterThePostLeftIsRecordedNotReoffered
+36.4 SessionTests/testSwitchingBackToAGatewayNeedsNoNewSignIn
+34.8 ShareTests/testUnreachableIsKeptAndRetried
+34.2 ShareTests/testOverTheLimitIsRefusedAtCaptureAndA413IsShown
+30.8 SessionTests/testACLISessionSurvivesAGatewayRestart
+28.0 ShareTests/testASharedLinkReachesTheChosenSession
+26.8 ShareTests/testAColdLaunchKeepsTheItem
+26.2 ShareTests/testSignedOutMidShareThenResumed
+25.5 ShareTests/testTheLastSessionIsPreselected
+25.0 ShareTests/testOnlyAListedSlotIsEverPosted
+24.9 SessionTests/testPastingCLIOutputSignsIn
+24.8 SessionTests/testSignedOutShowsTheNativeSheetAndHidesThePageBanner
+23.8 ShareTests/testARefusedPostOffersPrefill
+23.0 ShareTests/testABusySlotIsQueuedNotSent
+21.7 SessionTests/testALostRefreshAtARestartEndsInTheSheet
+21.5 ShareTests/testADocumentIsUploadedThenReferenced
+21.4 SessionTests/testARevokedChainShowsTheSheetAndANewTokenRecovers
+20.1 ShareTests/testFiftyMegabytesGoThroughByteForByte
+19.4 SessionTests/testALostRefreshResponseIsRecoveredByTheGraceWindow
+19.4 ShareTests/testAnUnsupportedTypeShowsTheGatewaysWords
+18.1 SessionTests/testTheSessionsPanelStillOpensInPortrait
+18.0 SessionTests/testWithoutTheRuleListTheRealDashboardReachesForGoogle
+17.9 ShareTests/testAFreshSeedIsInTheInbox
+17.9 SessionTests/testTheRealDashboardConnectsToNothingButTheGateway
+17.7 SessionTests/testABadTokenSaysSoAndKeepsTheSheet
+17.7 SessionTests/testSignOutEverywhereShowsTheSheet
+17.5 SessionTests/testABrokenBridgeLeavesThePageBannerVisible
+17.0 SessionTests/testAnExpiredSessionIsRecoveredByThePagesInterceptor
+16.4 SessionTests/testTheInstanceChipsStayInOneRowInLandscape
+15.4 ShareTests/testTheSweepRunsAtLaunch
+14.6 SessionTests/testTheInstanceChipsDoNotOverlapInPortrait
+13.8 SessionTests/testAQRSessionEndsAtAGatewayRestart

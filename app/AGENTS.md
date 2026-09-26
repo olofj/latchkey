@@ -269,6 +269,12 @@ device build.
     real frontend, served by `testing/harness/fake_gateway.py` from one
     released wheel pinned by version and sha256 (0.7.1; `make -C
     testing/harness bundle` fetches it). It refuses to run against another.
+    Like L1 it is sharded by default, across eight simulators (`Latchkey
+    Shard 1..8`, each on its own harness instance with its own two fake
+    gateways; `scripts/test-session-shards.py`), `--serial` is the
+    one-simulator path and `--shards N` picks N. Shards are balanced by
+    `scripts/session-durations.txt`. Both suites' runners are
+    `scripts/shards.py`.
   - `scripts/test-discovery.sh` — M5: gateway discovery on the L2 harness,
     with a real-looking gateway peer, a non-gateway page, a dead peer and a
     peer that never answers. It also enforces the discovery timing budget
