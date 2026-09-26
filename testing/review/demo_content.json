@@ -1,0 +1,50 @@
+{
+  "_comment": "Canned dashboard for F19's review gateway (docs/REVIEW-GATEWAY.md). Invented from start to finish: no real people, hosts, tailnets or data. 'ago' is minutes before the gateway started.",
+  "user_id": "demo",
+  "folders": [
+    {"id": "f-home", "name": "Home"},
+    {"id": "f-writing", "name": "Writing"},
+    {"id": "f-code", "name": "Code"}
+  ],
+  "slots": [
+    {
+      "key": "garden-plan",
+      "title": "Spring garden plan",
+      "folder_id": "f-home",
+      "messages": [
+        {"role": "user", "ago": 95, "content": "I have a 3 x 4 m bed that gets sun from about 10 to 4. What should go in it this spring?"},
+        {"role": "assistant", "ago": 94, "content": "Six hours of sun is plenty for most vegetables. A layout that works well in a 3 x 4 m bed:\n\n| Row | Crop | Spacing |\n|---|---|---|\n| North edge | Pole beans on a trellis | 15 cm |\n| Middle | Tomatoes (4 plants) | 60 cm |\n| Middle | Basil between the tomatoes | 25 cm |\n| South edge | Lettuce and radishes | 20 cm |\n\nPutting the tall crops on the north side keeps them from shading everything else."},
+        {"role": "user", "ago": 60, "content": "When should I start the tomatoes indoors?"},
+        {"role": "assistant", "ago": 59, "content": "About six to eight weeks before your last frost date. Sow them 5 mm deep, keep them warm (21-24 °C) until they sprout, then move them to bright light. Harden them off outside for a week before planting."}
+      ]
+    },
+    {
+      "key": "trip-notes",
+      "title": "Weekend trip checklist",
+      "folder_id": "f-home",
+      "messages": [
+        {"role": "user", "ago": 300, "content": "Make me a packing list for two nights in a city, mostly walking, maybe rain."},
+        {"role": "assistant", "ago": 299, "content": "**Clothes**\n- 2 shirts, 1 sweater\n- 1 pair of trousers, plus the ones you travel in\n- Comfortable walking shoes that are already broken in\n- Light rain jacket\n\n**Bag**\n- Phone charger and a small battery pack\n- Compact umbrella\n- Refillable water bottle\n- Copies of bookings, offline"}
+      ]
+    },
+    {
+      "key": "essay-draft",
+      "title": "Essay: why I walk to work",
+      "folder_id": "f-writing",
+      "messages": [
+        {"role": "user", "ago": 1440, "content": "Tighten this opening: \"There are many reasons why I have decided that walking to work is something that I prefer to do on most days.\""},
+        {"role": "assistant", "ago": 1439, "content": "Try: \"Most days, I walk to work.\"\n\nThen let the next sentence give the reason. A short, plain opening makes the reader want to know why."}
+      ]
+    },
+    {
+      "key": "recipe-scaler",
+      "title": "Recipe scaler script",
+      "folder_id": "f-code",
+      "messages": [
+        {"role": "user", "ago": 2880, "content": "Write a small Python function that scales a recipe's ingredient amounts from one serving count to another."},
+        {"role": "assistant", "ago": 2879, "content": "```python\ndef scale(ingredients, from_servings, to_servings):\n    factor = to_servings / from_servings\n    return {name: round(amount * factor, 2)\n            for name, amount in ingredients.items()}\n\nscale({\"flour_g\": 250, \"eggs\": 2}, 4, 6)\n# {'flour_g': 375.0, 'eggs': 3.0}\n```\n\nRound eggs up or down by hand; the function does not know that half an egg is awkward."}
+      ]
+    }
+  ],
+  "reply": "This is a demo dashboard set up for review, so no assistant is running behind it and this canned reply is all it can say. With your own Kiro Crew, your message would go to the session's agent."
+}

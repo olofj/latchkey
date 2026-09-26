@@ -13,6 +13,7 @@
 #   make gateway-up      start the fake KiroCrew gateway (real pinned bundle, M4)
 #   make gateway-down    stop it
 #   make gateway-check   its host-side contract self-test (starts and stops it)
+#   make demo-check      F19's review-gateway additions to it (demo token, content)
 #
 # The fake gateway is separate from harness-up on purpose: it refuses to start
 # unless its bundle is the pinned one, and a missing or wrong bundle must not
@@ -243,6 +244,10 @@ gateway-down:  ## Stop the fake KiroCrew gateway
 gateway-check: gateway-up  ## Host-side contract self-test of the fake gateway
 	@status=0; $(PY) gateway_check.py --port $(GW_PORT) --control-port $(GW_CONTROL_PORT) --ca ca.pem || status=$$?; \
 	$(MAKE) --no-print-directory gateway-down; exit $$status
+
+.PHONY: demo-check
+demo-check: certs  ## F19's demo token and canned content (starts its own fakes, ~20 s)
+	@$(PY) ../review/demo_token_test.py
 
 .PHONY: harness-status
 harness-status:  ## Show what is running

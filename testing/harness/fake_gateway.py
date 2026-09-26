@@ -81,6 +81,18 @@ What is emulated (server source references are to kiro_crew/dashboard/):
 R25's hazard is tracked, not just emulated: every reuse of a superseded
 refresh token outside the grace window is recorded as a LINEAGE VIOLATION.
 
+F19's review gateway (docs/REVIEW-GATEWAY.md), both OFF unless configured:
+  * `--demo-token T --demo-until DATE`: one fixed sign-in link, redeemable
+    again and again (a real link: once, within 300 s) until DATE and never
+    after. Its sessions and refresh chains end at DATE too. It is the fake's
+    own string, never a KiroCrew credential; a restart, `/__reset` and
+    `/__logout-all` keep it, and no control endpoint reveals it. DATE is at
+    most 90 days out, so there is no unexpiring token.
+  * `--content FILE`: canned sessions, folders, transcripts and a user name
+    (testing/review/demo_content.json), served as the list, the folders and
+    `GET /api/chat/slots/<key>`. A message posted to a canned session is
+    appended with the file's canned reply.
+
 Control (plain HTTP on 127.0.0.1:<control-port>):
   POST /__mint?kind=cli|qr[&ttl=S]   -> {"link", "url"}: a fresh sign-in link
                                (0.7.x fixes a real QR at 3600 s; a qr `ttl`
@@ -120,6 +132,7 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
   python3 fake_gateway.py --port 8444 --control-port 8481 --cert server.pem \\
       --key server.key --host gw.tail-scale.ts.net [--expire-in SECONDS]
   python3 fake_gateway.py --check-bundle      (the R19 pin and smoke test)
+  python3 fake_gateway.py --new-demo-token    (print a fresh demo token)
 """
 import argparse
 import base64
@@ -139,6 +152,7 @@ import sys
 import threading
 import time
 import urllib.request
+from datetime import datetime, timedelta, timezone
 import zipfile
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -208,6 +222,13 @@ QR_SESSION_TTL = 3600        # the QR default
 GRACE_SECS = 60
 RATE_LIMIT = 60              # refreshes per sliding 60 s, per remote
 LINK_SET_MAX = 50
+DEMO_TOKEN_RE = re.compile(r"fk1\.[A-Za-z0-9_-]{32,}")   # the shape mint_link gives
+DEMO_MAX_DAYS = 90           # a TestFlight build's life; renew, never unexpiring
+TRANSCRIPT_MAX = 200         # canned transcripts stop growing here
+# With --content only: empty answers where the page shows a 404 as a red
+# error ("Session controls unavailable" is GET /api/apps; the instance chip's
+# warning is GET /api/instances). Shapes from client-D5eTcPHC.js/App-*.js.
+CONTENT_EMPTY = {"/api/apps": {"apps": []}, "/api/instances": {"instances": []}}
 
 # F3: the share routes (dashboard/handlers/files.py, dashboard/chat_handlers.py).
 MAX_UPLOAD = 50 * 1024 * 1024
@@ -344,13 +365,69 @@ def check_bundle(dist):
 
 
 # ------------------------------------------------------------------ state --
+# ------------------------------------------------- the review gateway (F19) --
+def parse_demo_until(s, now=None):
+    """`--demo-until`: a date (the demo ends at the END of that day, UTC) or
+    an ISO date-time with a zone. -> epoch seconds. Refuses the past and
+    anything more than DEMO_MAX_DAYS out."""
+    now = time.time() if now is None else now
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+        else:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                raise ValueError("no time zone")
+    except ValueError as e:
+        raise SystemExit("error: --demo-until %r: %s (YYYY-MM-DD, or ISO with a zone)" % (s, e))
+    until = dt.timestamp()
+    if until <= now:
+        raise SystemExit("error: --demo-until %s is already past" % s)
+    if until > now + DEMO_MAX_DAYS * 86400 + 86400:
+        raise SystemExit("error: --demo-until %s is more than %d days out" % (s, DEMO_MAX_DAYS))
+    return until
+
+
+def load_content(path):
+    """`--content`: the canned dashboard, checked here so a typo fails at
+    start rather than as a blank page in front of a reviewer."""
+    with open(path, encoding="utf-8") as f:
+        c = json.load(f)
+    folders = [{"id": d["id"], "name": d["name"], "history_count": 0} for d in c.get("folders", [])]
+    ids = {d["id"] for d in folders}
+    slots = []
+    for s in c["slots"]:
+        if not re.fullmatch(r"[a-z0-9-]+", s["key"]) or s["key"].startswith("member-"):
+            raise SystemExit("error: %s: slot key %r" % (path, s["key"]))
+        if s.get("folder_id") not in ids | {None}:
+            raise SystemExit("error: %s: slot %s names folder %r" % (path, s["key"], s.get("folder_id")))
+        msgs = s.get("messages", [])
+        for m in msgs:
+            if m.get("role") not in ("user", "assistant") or not isinstance(m.get("content"), str):
+                raise SystemExit("error: %s: slot %s: a message needs role user|assistant and content"
+                                 % (path, s["key"]))
+        slots.append({"key": s["key"], "title": s["title"], "folder_id": s.get("folder_id"), "messages": msgs})
+    if not slots or len({s["key"] for s in slots}) != len(slots):
+        raise SystemExit("error: %s: no slots, or a key twice" % path)
+    return {"user_id": c.get("user_id", "demo"), "folders": folders, "slots": slots,
+            "reply": c.get("reply", "")}
+
+
+def iso(t):
+    return datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 class Gateway:
     """All server-side auth state. One lock; every method takes it."""
 
-    def __init__(self, expire_in, cookie_port):
+    def __init__(self, expire_in, cookie_port, demo=None, content=None):
         self.lock = threading.Lock()
         self.default_expire_in = expire_in
         self.cookie_port = cookie_port
+        # F19: (token, until) or None. Configuration, not state: a restart,
+        # /__reset and /__logout-all keep it.
+        self.demo = demo
+        self.content = content
         self.connections = set()     # open client sockets, dropped by a restart
         self.reset()
 
@@ -387,8 +464,28 @@ class Gateway:
         self.posts = []          # {"slot", "message", "item", "at"}
         self.navigations = []    # {"sid", "prefill"} for GET /chat?...
         for k in ("slot_lists", "share_posts", "share_uploads", "upload_bytes", "share_denials",
-                  "app_signed_out_denials"):
+                  "app_signed_out_denials", "demo_redemptions"):
             self.counters[k] = 0
+        # The dashboard's contents: the suites' three sessions, or F19's
+        # canned ones. Transcripts exist only with --content.
+        self.user_id = "olof"
+        self.slot_info = dict(SLOT_INFO)
+        self.folders = FOLDERS
+        self.transcripts = {}    # key -> [{"role", "content", "ts", "cls"}]
+        if self.content:
+            now = time.time()
+            self.user_id = self.content["user_id"]
+            self.folders = self.content["folders"]
+            self.slot_keys = [s["key"] for s in self.content["slots"]]
+            self.busy = set()
+            self.slot_info = {s["key"]: (s["title"], s["folder_id"]) for s in self.content["slots"]}
+            for s in self.content["slots"]:
+                # "ago" (minutes) keeps a months-old file looking like last night's work.
+                self.transcripts[s["key"]] = [
+                    {"role": m["role"], "content": m["content"],
+                     "ts": iso(now - 60 * m.get("ago", 0)),
+                     "cls": "msg msg-u" if m["role"] == "user" else "msg msg-a"}
+                    for m in s["messages"]]
 
     def count(self, name):
         with self.lock:
@@ -419,6 +516,14 @@ class Gateway:
         now = time.time()
         with self.lock:
             rec = self.links.get(link)
+            until = None
+            if self.demo and secrets.compare_digest(link.encode(), self.demo[0].encode()):
+                # F19's demo token: a CLI link minted at every redemption,
+                # so the 300 s window never runs out -- but the date does.
+                until = self.demo[1]
+                if now > until:
+                    return None, "token expired"
+                rec = {"mint": now, "ttl": ACCESS_TTL, "kind": "cli", "gen": self.gen}
             if rec is None:
                 return None, "no active sessions" if link.startswith("fk1.") else "malformed token"
             if now > rec["mint"] + min(LINK_WINDOW, rec["ttl"]):
@@ -427,8 +532,12 @@ class Gateway:
                 return None, "session revoked"
             boot = self.boot if rec["kind"] == "qr" else None
             chain = secrets.token_hex(8)
-            self.chains[chain] = {"revoked": False, "consumed": set(), "head": None, "last": None}
+            self.chains[chain] = {"revoked": False, "consumed": set(), "head": None, "last": None,
+                                  "until": until}
             exp = now + self.expire_in if self.expire_in else rec["mint"] + rec["ttl"]
+            if until:
+                exp = min(exp, until)
+                self.counters["demo_redemptions"] += 1
             access = self._new_session(boot, chain, exp, self.gen)
             rt = self._new_refresh(boot, chain, self.gen)
             self.counters["redemptions"] += 1
@@ -482,6 +591,11 @@ class Gateway:
             if rec["gen"] < self.gen or (rec["boot"] and rec["boot"] != self.boot):
                 self.counters["refresh_401"] += 1
                 return 401, {"error": "invalid_refresh"}, None, False, False
+            until = chain.get("until")
+            if until and now > until:
+                # A demo chain ends with its token's date (F19).
+                self.counters["refresh_401"] += 1
+                return 401, {"error": "invalid_refresh"}, None, False, False
             if rt in chain["consumed"]:
                 last = chain["last"]
                 if (rt == chain["head"] and last and last["remote"] == remote
@@ -497,6 +611,8 @@ class Gateway:
             chain["consumed"].add(rt)
             chain["head"] = rt
             ttl = self.expire_in or ACCESS_TTL
+            if until:
+                ttl = min(ttl, until - now)
             access = self._new_session(rec["boot"], rec["chain"], now + ttl, rec["gen"])
             rt2 = self._new_refresh(rec["boot"], rec["chain"], rec["gen"])
             body = {"refreshed_at": now, "session_exp": now + ttl, "refresh_exp": now + REFRESH_TTL}
@@ -569,21 +685,51 @@ class Gateway:
                     "posts": list(self.posts), "navigations": list(self.navigations),
                     "slots": list(self.slot_keys), "busy": sorted(self.busy),
                     "uploads": dict(self.uploads),
-                    "cookie_port": self.cookie_port}
+                    "cookie_port": self.cookie_port,
+                    # When the demo token stops, never the token itself.
+                    "demo_until": self.demo[1] if self.demo else None}
 
     def slots(self):
         """serialize_slots' shape (state.py:7515 in 0.7.1), newest first."""
         with self.lock:
-            keys, busy = list(self.slot_keys), set(self.busy)
+            keys, busy, info = list(self.slot_keys), set(self.busy), dict(self.slot_info)
+            last = {k: t[-1] for k, t in self.transcripts.items() if t}
         now = time.time()
         out = []
         for i, k in enumerate(keys):
-            title, folder = SLOT_INFO.get(k, (k.capitalize(), None))
+            title, folder = info.get(k, (k.capitalize(), None))
+            at = now - 60 * (i + 1)
+            if k in last:
+                at = datetime.fromisoformat(last[k]["ts"].replace("Z", "+00:00")).timestamp()
             out.append({"key": k, "title": title, "folder_id": folder, "agent": "kiro", "mode": "",
                         "surface": "", "running": k in busy, "queue_depth": 1 if k in busy else 0,
-                        "last_activity_ts": now - 60 * (i + 1), "last_message": "", "memory_mode": "global",
-                        "pinned": False, "subagents_running": 0})
+                        "last_activity_ts": at, "last_message": k in last and last[k]["content"][:120] or "",
+                        "memory_mode": "global", "pinned": False, "subagents_running": 0})
         return out
+
+    def transcript(self, key):
+        """`GET /api/chat/slots/<key>`'s shape (chat_handlers.py:2650-2672), or
+        None: only --content's sessions have one."""
+        with self.lock:
+            msgs = list(self.transcripts.get(key) or [])
+            title = self.slot_info.get(key, (key, None))[0]
+        if not msgs:
+            return None
+        return {"key": key, "title": title, "running": False, "stopping": False, "messages": msgs,
+                "queue": [], "total": len(msgs), "has_more": False, "next_before": 0}
+
+    def converse(self, key, message):
+        """A message posted to a canned session, and the file's canned reply."""
+        now = time.time()
+        with self.lock:
+            t = self.transcripts.get(key)
+            if t is None:
+                return
+            t.append({"role": "user", "content": message, "ts": iso(now), "cls": "msg msg-u"})
+            if self.content.get("reply"):
+                t.append({"role": "assistant", "content": self.content["reply"], "ts": iso(now),
+                          "cls": "msg msg-a"})
+            del t[:-TRANSCRIPT_MAX]
 
     def violation(self, why, **kw):
         with self.lock:
@@ -817,7 +963,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             # authenticated it (a redemption sets new cookies; a failed link
             # that fell back to the cookie does not); owner_ok is true for
             # the owner's own browser session (auth_refresh.py:418-436).
-            return self.json(200, {"user_id": "olof", "session_exp": session["exp"],
+            return self.json(200, {"user_id": self.gw.user_id, "session_exp": session["exp"],
                                    "refresh_exp": self.gw.refresh_exp(cookies.get("mc_refresh_%s" % port)),
                                    "token_accepted": bool(new_cookies), "owner_ok": True},
                              cookies=new_cookies)
@@ -861,7 +1007,14 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
                 time.sleep(self.gw.slow_slots)
             return self.json(200, self.gw.slots(), cookies=new_cookies)
         if path == "/api/chat/folders" and m == "GET":
-            return self.json(200, FOLDERS, cookies=new_cookies)
+            return self.json(200, self.gw.folders, cookies=new_cookies)
+        if path.startswith("/api/chat/slots/") and m == "GET":
+            # F19's canned transcripts; without --content this stays a 404.
+            detail = self.gw.transcript(path[len("/api/chat/slots/"):])
+            if detail is not None:
+                return self.json(200, detail, cookies=new_cookies)
+        if self.gw.content and m == "GET" and path in CONTENT_EMPTY:
+            return self.json(200, CONTENT_EMPTY[path], cookies=new_cookies)
         if path == "/api/upload/file" and m == "POST":
             return self.upload()
         if path == "/api/chat" and m == "POST":
@@ -939,6 +1092,7 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             self.gw.posts.append({"slot": slot, "message": message, "item": item, "at": time.time()})
             if item:
                 self.gw.counters["share_posts"] += 1
+        self.gw.converse(slot, message)
         time.sleep(self.gw.slow_post)
         if busy:
             return self.json(200, {"ok": True, "queued": True, "queue_id": "q-" + secrets.token_hex(4)})
@@ -1109,7 +1263,27 @@ def main():
     ap.add_argument("--fetch", action="store_true", help="download the pinned wheel (verified) and exit")
     ap.add_argument("--check-bundle", action="store_true", help="run the pin/smoke test and exit")
     ap.add_argument("--print-pins", action="store_true", help="print the bundle's file hashes and exit")
+    # F19's review gateway. The token may come from the environment, so a
+    # service's command line (and `ps`) does not carry it.
+    ap.add_argument("--demo-token", default=os.environ.get("FAKE_GATEWAY_DEMO_TOKEN") or None,
+                    help="a reusable sign-in link (fk1.<32+ chars>; or $FAKE_GATEWAY_DEMO_TOKEN)")
+    ap.add_argument("--demo-until", help="the demo token's last day, YYYY-MM-DD (UTC), at most %d days out"
+                    % DEMO_MAX_DAYS)
+    ap.add_argument("--new-demo-token", action="store_true", help="print a fresh demo token and exit")
+    ap.add_argument("--content", help="canned sessions and transcripts (testing/review/demo_content.json)")
     a = ap.parse_args()
+
+    if a.new_demo_token:
+        print("fk1." + secrets.token_urlsafe(24))
+        return
+    demo = None
+    if a.demo_token or a.demo_until:
+        if not (a.demo_token and a.demo_until):
+            ap.error("--demo-token and --demo-until go together")
+        if not DEMO_TOKEN_RE.fullmatch(a.demo_token):
+            ap.error("the demo token must look like fk1.<32 or more of A-Z a-z 0-9 _ -> (--new-demo-token)")
+        demo = (a.demo_token, parse_demo_until(a.demo_until))
+    content = load_content(a.content) if a.content else None
 
     if a.fetch:
         print("pinned wheel: %s (KiroCrew %s, sha256 %s)" % (fetch_wheel(), PINNED_VERSION, PINNED_WHEEL_SHA256[:12]))
@@ -1136,7 +1310,7 @@ def main():
     if not (a.cert and a.key):
         ap.error("--cert and --key are required")
 
-    gw = Gateway(a.expire_in, a.cookie_port)
+    gw = Gateway(a.expire_in, a.cookie_port, demo, content)
     Page.gw = Control.gw = gw
     Page.bundle = Bundle(a.dist)
     Page.allowed_hosts = {a.host, "127.0.0.1", "localhost", "[::1]"}
@@ -1161,6 +1335,8 @@ def main():
         threading.Thread(target=s.serve_forever, daemon=True).start()
     print("fake gateway (KiroCrew %s) https://%s -> 127.0.0.1:%d, control :%d, cookies mc_*_%d, expire-in %s"
           % (PINNED_VERSION, a.host, a.port, a.control_port, a.cookie_port, a.expire_in or "default"), flush=True)
+    if demo:
+        print("demo token on, until %s; content %s" % (iso(demo[1]), a.content or "none"), flush=True)
     try:
         while True:
             time.sleep(3600)
