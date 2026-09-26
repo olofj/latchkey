@@ -128,6 +128,12 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
                                for S seconds AFTER it is recorded (the
                                gateway has the message; the answer is late)
   GET  /__state                counters, violations, recent requests, unknown paths
+  `--no-control` leaves the control port out entirely (the review gateway).
+
+Socket activation (F19's review gateway): when systemd passes listening
+sockets (LISTEN_PID is this process, LISTEN_FDS=n, fds 3..3+n-1), the page is
+served on those and on nothing else; --port only names the origin then.
+Without them it binds 127.0.0.1 and ::1 itself, as the suites expect.
 
   python3 fake_gateway.py --port 8444 --control-port 8481 --cert server.pem \\
       --key server.key --host gw.tail-scale.ts.net [--expire-in SECONDS]
@@ -1248,10 +1254,49 @@ class V6Server(ThreadingHTTPServer):
     address_family = socket.AF_INET6
 
 
+SD_LISTEN_FDS_START = 3
+
+
+def inherited_listeners():
+    """The listening sockets systemd passed (sd_listen_fds(3)), or [].
+
+    Only when LISTEN_PID is this process: the variables leak to anything a
+    service execs, and a child must not take its parent's sockets. They are
+    unset either way, as sd_listen_fds(unset_environment=1) does."""
+    pid, n = os.environ.pop("LISTEN_PID", ""), os.environ.pop("LISTEN_FDS", "")
+    os.environ.pop("LISTEN_FDNAMES", None)
+    if not (pid.isdigit() and int(pid) == os.getpid() and n.isdigit()):
+        return []
+    socks = []
+    for fd in range(SD_LISTEN_FDS_START, SD_LISTEN_FDS_START + int(n)):
+        os.set_inheritable(fd, False)
+        s = socket.socket(fileno=fd)   # family and type from the fd itself
+        try:
+            listens = s.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 0
+        except OSError:   # macOS has no SO_ACCEPTCONN (the tests); bound will do
+            listens = s.family in (socket.AF_INET, socket.AF_INET6) and s.getsockname()[1] != 0
+        if s.type != socket.SOCK_STREAM or not listens:
+            sys.exit("fake_gateway: inherited fd %d is not a listening stream socket (Accept=no, ListenStream=)" % fd)
+        socks.append(s)
+    return socks
+
+
+def server_on(sock, handler):
+    """A ThreadingHTTPServer on an already bound and listening socket."""
+    srv = ThreadingHTTPServer(sock.getsockname()[:2], handler, bind_and_activate=False)
+    srv.socket.close()
+    srv.socket = sock
+    srv.server_address = sock.getsockname()
+    srv.server_name, srv.server_port = srv.server_address[0], srv.server_address[1]
+    return srv
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--port", type=int, default=8444)
     ap.add_argument("--control-port", type=int, default=8481)
+    ap.add_argument("--no-control", action="store_true",
+                    help="no control port at all (the review gateway: it is a test affordance)")
     ap.add_argument("--cert")
     ap.add_argument("--key")
     ap.add_argument("--host", default="gw.tail-scale.ts.net", help="the gateway's public host name")
@@ -1309,6 +1354,9 @@ def main():
         sys.exit(2)
     if not (a.cert and a.key):
         ap.error("--cert and --key are required")
+    inherited = inherited_listeners()
+    if inherited:
+        a.port = inherited[0].getsockname()[1]   # the origin is where systemd listens
 
     gw = Gateway(a.expire_in, a.cookie_port, demo, content)
     Page.gw = Control.gw = gw
@@ -1321,20 +1369,27 @@ def main():
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(a.cert, a.key)
     servers = []
-    v4 = ThreadingHTTPServer(("127.0.0.1", a.port), Page)
-    v4.socket = wrap_listener(ctx, v4.socket)   # handshake per connection (tls_accept)
-    servers.append(v4)
-    try:
-        v6 = V6Server(("::1", a.port), Page)
-        v6.socket = wrap_listener(ctx, v6.socket)
-        servers.append(v6)
-    except OSError:
-        pass
-    servers.append(ThreadingHTTPServer(("127.0.0.1", a.control_port), Control))
+    if inherited:
+        pages = [server_on(s, Page) for s in inherited]
+    else:
+        pages = [ThreadingHTTPServer(("127.0.0.1", a.port), Page)]
+        try:
+            pages.append(V6Server(("::1", a.port), Page))
+        except OSError:
+            pass
+    for s in pages:
+        s.socket = wrap_listener(ctx, s.socket)   # handshake per connection (tls_accept)
+        servers.append(s)
+    if not a.no_control:
+        servers.append(ThreadingHTTPServer(("127.0.0.1", a.control_port), Control))
     for s in servers:
         threading.Thread(target=s.serve_forever, daemon=True).start()
-    print("fake gateway (KiroCrew %s) https://%s -> 127.0.0.1:%d, control :%d, cookies mc_*_%d, expire-in %s"
-          % (PINNED_VERSION, a.host, a.port, a.control_port, a.cookie_port, a.expire_in or "default"), flush=True)
+    print("fake gateway (KiroCrew %s) https://%s -> %s, control %s, cookies mc_*_%d, expire-in %s"
+          % (PINNED_VERSION, a.host,
+             ", ".join("%s:%d%s" % (s.server_address[0], s.server_address[1], " (from systemd)" if inherited else "")
+                       for s in pages),
+             "off" if a.no_control else ":%d" % a.control_port, a.cookie_port, a.expire_in or "default"),
+          flush=True)
     if demo:
         print("demo token on, until %s; content %s" % (iso(demo[1]), a.content or "none"), flush=True)
     try:
