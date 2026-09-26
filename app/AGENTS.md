@@ -206,6 +206,15 @@ add its name. This costs people an hour every time.
 Info.plist, assets and other non-source files are ordinary pbxproj references
 and do need a project edit.
 
+A hand edit must be in the form Xcode writes, or Xcode rewrites the file the
+next time it saves (opening the project, or building in it), and the diff
+turns up in someone's tree. Two rules have bitten: objects sit in ID order
+within each section, and a synchronized folder's `membershipExceptions` never
+names an `.entitlements` file. No build phase takes one, so Xcode drops the
+exception as a no-op; `CODE_SIGN_ENTITLEMENTS` still reads it and it is not
+copied into the bundle. `Info.plist` keeps its exception, and Xcode keeps it
+too.
+
 ## Building
 
 ```bash

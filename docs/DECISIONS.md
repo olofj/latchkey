@@ -3416,3 +3416,30 @@ gear) and both suites' `signIn` (Paste on an existing sheet). Moving
 the shared helpers (`openStatus`, `signIn`, `pick`, `switchInSettings`,
 `openSettings`, `confirmInSettings`) onto `tapWhenSettled` covers most
 of them. Not yet done, because each suite then needs its own runs.
+
+## 2026-09-25 — project.pbxproj is kept in the form Xcode writes
+
+Three times today a build or opening the project rewrote
+`project.pbxproj`: the two ShareExtension exception sets swapped places
+and `ShareExtension.entitlements` left the ShareExtension folder's
+`membershipExceptions`. The writer is Xcode.app, which has the project
+open, not xcodebuild: `make app` and `make tf UPLOAD=0`
+(`-allowProvisioningUpdates`) both left the tree clean. `098ef5f` wrote
+those objects by hand in a form Xcode does not write, so Xcode's next
+save normalised them. The exception sets were the one section not in
+object-ID order, which is the reorder. The entitlements exception
+excludes a file no build phase takes, so Xcode drops it as a no-op.
+
+The file is now committed in that form. Moving the entitlements out of
+`ShareExtension/` would have dropped the exception, but the reorder
+would still have come back.
+
+**Evidence:** without the exception, a clean Debug build (fresh derived
+data) reads the file only in `ProcessProductPackaging`, to sign, with no
+resource step, and the appex holds `Info.plist` and binaries. The same
+holds in `make tf UPLOAD=0`: no `.entitlements` in the exported .ipa;
+the extension is signed Apple Distribution (DX33PQ7J4A) with
+`group.net.lixom.latchkey`, and `codesign --verify --deep --strict`
+passes. Xcode reloaded the new file (its UI state was rewritten after
+the edit) and left it unchanged. Not seen: Xcode saving it after an
+edit in the IDE, which is the next thing to watch.

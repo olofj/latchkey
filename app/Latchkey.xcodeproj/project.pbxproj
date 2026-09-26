@@ -77,6 +77,13 @@
 			);
 			target = C20F24732EF19A5900F57D67 /* Latchkey */;
 		};
+		F3000008000000000000F308 /* Exceptions for "ShareExtension" folder in "ShareExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = F3000001000000000000F301 /* ShareExtension */;
+		};
 		F3000009000000000000F309 /* Exceptions for "App" folder in "ShareExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -85,14 +92,6 @@
 				Share/Inbox/ShareItem.swift,
 				Share/ShareURL.swift,
 				Workspace/BackupExclusion.swift,
-			);
-			target = F3000001000000000000F301 /* ShareExtension */;
-		};
-		F3000008000000000000F308 /* Exceptions for "ShareExtension" folder in "ShareExtension" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Info.plist,
-				ShareExtension.entitlements,
 			);
 			target = F3000001000000000000F301 /* ShareExtension */;
 		};
