@@ -449,8 +449,9 @@ final class ShareTests: XCTestCase {
         XCTAssertTrue(save.waitForExistence(timeout: 15), "the extension's sheet offers Save for Latchkey")
         save.tap()
         let saved = safari.descendants(matching: .any)["share-capture-saved"]
-        XCTAssertTrue(saved.waitForExistence(timeout: 10), "it says Saved. Open Latchkey to send it.")
-        XCTAssertTrue(saved.label.contains("Open Latchkey"), saved.label)
+        let savedLabel = snapshotLabel(saved, within: 10)
+        XCTAssertNotNil(savedLabel, "it says Saved. Open Latchkey to send it.")
+        XCTAssertTrue(savedLabel?.contains("Open Latchkey") == true, savedLabel ?? "<never shown>")
         let before = try await gatewayState()
         XCTAssertEqual(counter(before, "share_posts"), 0, "the extension sent nothing")
         _ = saved.waitForNonExistence(timeout: 5)
@@ -513,12 +514,11 @@ final class ShareTests: XCTestCase {
     /// else the counted instrument once the sheet has gone.
     private func lastResult(_ app: XCUIApplication, timeout: Double = 40) async throws -> String {
         let deadline = Date().addingTimeInterval(timeout)
-        let before = element(app, "share-last-result").exists ? element(app, "share-last-result").label : "none"
+        let before = (try? element(app, "share-last-result").snapshot())?.label ?? "none"
         while Date() < deadline {
-            let r = element(app, "share-result")
-            if r.exists, !r.label.isEmpty { return r.label }
-            let last = element(app, "share-last-result")
-            if !element(app, "share-picker").exists, last.exists, last.label != "none", last.label != before {
+            if let r = try? element(app, "share-result").snapshot(), !r.label.isEmpty { return r.label }
+            if !element(app, "share-picker").exists, let last = try? element(app, "share-last-result").snapshot(),
+               last.label != "none", last.label != before {
                 return last.label
             }
             try await Task.sleep(for: .milliseconds(200))
@@ -528,6 +528,16 @@ final class ShareTests: XCTestCase {
 
     /// The inbox count, read with no sheet up (a sheet hides what is under it).
     private func inboxCount(_ app: XCUIApplication) -> Int {
+        // After a sent or queued result the sheet closes itself 2 s later
+        // (ShareDelivery.finish). A Cancel tap aimed at it then can find it in
+        // the tree and gone by the tap, which fails the test (seen under the
+        // load of eight shards, F14): wait that close out instead, and let
+        // presentations settle before looking.
+        if let r = try? element(app, "share-result").snapshot(),
+           r.label.hasPrefix("sent:") || r.label.hasPrefix("queued:") {
+            _ = element(app, "share-picker").disappears(within: 10)
+        }
+        _ = app.settles(within: 10)
         if element(app, "share-picker").exists, element(app, "share-cancel").exists {
             element(app, "share-cancel").tap()
         }
@@ -549,6 +559,19 @@ final class ShareTests: XCTestCase {
         // Callers come here as soon as the sheet exists, i.e. mid-slide.
         paste.tapWhenSettled(in: app)
         XCTAssertTrue(element(app, "token-sheet").waitForNonExistence(timeout: 30), "signed in")
+    }
+
+    /// The element's label from one snapshot, taken as soon as it exists;
+    /// nil if it never did. `exists` and then `.label` are two queries, and
+    /// a sheet that dismisses itself between them fails the test on the
+    /// second; `snapshot()` throws instead (F14: seen under shard load).
+    private func snapshotLabel(_ e: XCUIElement, within timeout: TimeInterval) -> String? {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let s = try? e.snapshot() { return s.label }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while Date() < deadline
+        return nil
     }
 
     private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {
