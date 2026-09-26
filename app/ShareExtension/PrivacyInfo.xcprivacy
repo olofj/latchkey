@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The share extension is its own bundle, and App Store Connect checks
+         each bundle's binary against that bundle's manifest (ITMS-91053 names
+         PlugIns/<ext>.appex/<ext>); the app's manifest does not cover it.
+         The extension's use, from its sources and the App/ files it compiles
+         (project.pbxproj exception set), checked against the archived
+         binary's imports: ShareInboxStore.sweep reads the modification dates
+         of staging directories in the App Group container. File sizes are
+         read too, which no category covers. No UserDefaults, disk-space,
+         boot-time or keyboard APIs. -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <!-- Share inbox staging directories in the App Group container. -->
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
