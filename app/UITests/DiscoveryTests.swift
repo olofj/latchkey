@@ -62,9 +62,7 @@ final class DiscoveryTests: XCTestCase {
     /// chooses it (the only one), and the dashboard loads it over the tailnet
     /// — reaching the session layer, which asks for a token.
     func testFirstRunFindsExactlyTheGatewayAndLoadsIt() async throws {
-        try await resetHarness()
-        let app = launch()
-        defer { app.terminate() }
+        let run = try await firstRunThenRelaunch()
 
         // The picker is up only for the sweep (~1.5 s), too briefly to catch
         // reliably. What proves the result is what follows it: the app
@@ -72,25 +70,24 @@ final class DiscoveryTests: XCTestCase {
         // sweep's timing is R26's app-logged instrument, which
         // scripts/test-discovery.sh enforces from the unified log.
         // Chosen automatically, loaded, and the page asks for a token.
-        let sheet = element(app, "token-sheet")
-        XCTAssertTrue(sheet.waitForExistence(timeout: 75),
+        XCTAssertTrue(run.firstLoaded,
                       "exactly one gateway found, chosen by itself, loaded, and asking for a token")
-        XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.gatewayHost))
+        XCTAssertTrue(run.firstTarget.hasSuffix(Self.gatewayHost), "the sheet names \(run.firstTarget)")
 
         // The probes really went out: the gateway answered both fingerprint
         // requests, and the non-gateway page was asked too.
         // The probe, in order, before anything else: the manifest, then the
         // unauthenticated /api/auth/me (the page's own calls come after).
-        let requests = try await gatewayState()["requests"] as? [String] ?? []
+        let requests = run.firstRequests
         XCTAssertEqual(Array(requests.prefix(2)), ["GET /manifest.json", "GET /api/auth/me"],
                        "the fingerprint probe came first: \(requests.prefix(6))")
-        let dashPaths = try await dashboardState()["paths"] as? [String] ?? []
+        let dashPaths = run.firstDashPaths
         XCTAssertTrue(dashPaths.contains { $0.hasPrefix("dash.tail-scale.ts.net GET /manifest.json") },
                       "dash was probed and rejected: \(dashPaths.prefix(5))")
         // The peer that never answers was probed too (its accepts are
         // journaled); plain's refusal shows only in the app's own sweep log,
         // which scripts/test-discovery.sh checks.
-        let journal = try await harnessState()["journal"] as? [[String: Any]] ?? []
+        let journal = run.journal
         XCTAssertTrue(journal.contains { $0["peer"] as? String == "slow" },
                       "the slow peer was probed: \(journal.prefix(5))")
     }
@@ -102,8 +99,8 @@ final class DiscoveryTests: XCTestCase {
         let app = launch()
         defer { app.terminate() }
 
-        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
-        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 15), "no gateway found, and it says so")
+        XCTAssertTrue(element(app, "gateway-picker").appears(within: 60))
+        XCTAssertTrue(element(app, "gateway-none").appears(within: 15), "no gateway found, and it says so")
         // The marker gained answered/unanswered fields (F4 §4.8). Read by field
         // rather than by whole-string equality, which is what it was: F4 claimed
         // "existing tests read only the first field and keep working" and this
@@ -135,7 +132,7 @@ final class DiscoveryTests: XCTestCase {
         field.tap()
         field.typeText("example.com")
         element(app, "gateway-manual-use").tap()
-        XCTAssertTrue(element(app, "gateway-manual-error").waitForExistence(timeout: 5),
+        XCTAssertTrue(element(app, "gateway-manual-error").appears(within: 5),
                       "a public host is refused, with a reason")
         XCTAssertTrue(element(app, "gateway-picker").exists, "and the picker stays")
         field.tap()
@@ -156,29 +153,20 @@ final class DiscoveryTests: XCTestCase {
     /// The choice persists: a relaunch goes straight to the gateway, with no
     /// picker.
     func testTheChosenGatewayPersistsAcrossRelaunch() async throws {
-        try await resetHarness()
-        let app = launch()
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 75), "first run: chosen and loaded")
-        app.terminate()
-
-        try await resetFakes()
-        let again = XCUIApplication()
-        again.launchArguments = ["-TestControlURL", Self.controlURL]   // no reset this time
-        again.launch()
-        defer { again.terminate() }
-        XCTAssertTrue(element(again, "token-sheet").waitForExistence(timeout: 60),
-                      "the saved gateway loads")
+        let run = try await firstRunThenRelaunch()
+        XCTAssertTrue(run.firstLoaded, "first run: chosen and loaded")
+        XCTAssertTrue(run.relaunchLoaded, "the saved gateway loads")
         // Proof it was the SAVED choice: no discovery ran. A sweep would have
         // probed the web-page peer and asked the gateway for its manifest
         // first; re-discovering and auto-choosing gw would otherwise look
         // exactly like persistence (M5 review).
-        let dashPaths = try await dashboardState()["paths"] as? [String] ?? []
+        let dashPaths = run.relaunchDashPaths
         XCTAssertFalse(dashPaths.contains { $0.contains("/manifest.json") },
                        "no sweep on a relaunch: dash was probed \(dashPaths.prefix(5))")
         // The page itself fetches /manifest.json (index.html links it), so
         // the mark of a probe is ORDER: a probe asks for the manifest before
         // anything else, a page load starts with GET /.
-        let requests = try await gatewayState()["requests"] as? [String] ?? []
+        let requests = run.relaunchRequests
         XCTAssertEqual(requests.first, "GET /",
                        "the saved gateway was loaded directly, not probed first: \(requests.prefix(6))")
     }
@@ -196,12 +184,12 @@ final class DiscoveryTests: XCTestCase {
         defer { app.terminate() }
 
         let find = element(app, "gateway-unreachable-find-button")
-        XCTAssertTrue(find.waitForExistence(timeout: 60), "a gateway not in the tailnet: the banner offers Find")
-        find.tap()
+        XCTAssertTrue(find.appears(within: 60), "a gateway not in the tailnet: the banner offers Find")
+        find.tapWhenSettled(in: app)
         let gw = element(app, "gateway-\(Self.gatewayHost)")
-        XCTAssertTrue(gw.waitForExistence(timeout: 15), "Find sweeps and lists the gateway")
-        gw.tap()
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45),
+        XCTAssertTrue(gw.appears(within: 15), "Find sweeps and lists the gateway")
+        gw.tapWhenSettled(in: app)
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 45),
                       "the new gateway loads, and its token sheet appears after the picker has gone")
         XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.gatewayHost))
     }
@@ -223,10 +211,10 @@ final class DiscoveryTests: XCTestCase {
         // 1. In purgatory: the sweep ends, in bounded time, with nothing.
         // The wait here spans the node's start-up too; the sweep's own
         // timing is R26's app-logged instrument, which the script enforces.
-        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60), "the first-run picker")
+        XCTAssertTrue(element(app, "gateway-picker").appears(within: 60), "the first-run picker")
         let shown = ContinuousClock.now
         let none = element(app, "gateway-none")
-        XCTAssertTrue(none.waitForExistence(timeout: 20),
+        XCTAssertTrue(none.appears(within: 20),
                       "the sweep finishes with no gateway; it must not hang on dropped SYNs")
         let waited = ContinuousClock.now - shown
         let message = none.label
@@ -290,7 +278,7 @@ final class DiscoveryTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(250))
             }
         } while !listed && taps < 2 && element(app, "gateway-refresh").exists
-        XCTAssertTrue(sheet.waitForExistence(timeout: 45),
+        XCTAssertTrue(sheet.appears(within: 45),
                       "after the move, Search again finds the gateway, it loads over the tailnet, and asks for a token")
         XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.gatewayHost))
         XCTAssertFalse(element(app, "nav-error-overlay").exists, "no navigation error after the address change")
@@ -340,8 +328,8 @@ final class DiscoveryTests: XCTestCase {
 
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
-        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40),
+        XCTAssertTrue(element(app, "gateway-picker").appears(within: 60))
+        XCTAssertTrue(element(app, "gateway-none").appears(within: 40),
                       "the sweep finished and found nothing")
 
         let text = element(app, "gateway-none").label
@@ -373,8 +361,8 @@ final class DiscoveryTests: XCTestCase {
 
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
-        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40))
+        XCTAssertTrue(element(app, "gateway-picker").appears(within: 60))
+        XCTAssertTrue(element(app, "gateway-none").appears(within: 40))
 
         let text = element(app, "gateway-none").label
         XCTAssertFalse(text.contains("ran out of time"),
@@ -418,8 +406,8 @@ final class DiscoveryTests: XCTestCase {
 
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
-        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40),
+        XCTAssertTrue(element(app, "gateway-picker").appears(within: 60))
+        XCTAssertTrue(element(app, "gateway-none").appears(within: 40),
                       "the first sweep runs out of time")
         let first = element(app, "gateway-none").label
         XCTAssertTrue(first.contains("ran out of time"), "got: \(first)")
@@ -481,25 +469,25 @@ final class DiscoveryTests: XCTestCase {
 
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
-        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40),
+        XCTAssertTrue(element(app, "gateway-picker").appears(within: 60))
+        XCTAssertTrue(element(app, "gateway-none").appears(within: 40),
                       "the sweep finds nothing, because the only gateway was filtered out")
 
         let summary = element(app, "gateway-skipped-summary")
-        XCTAssertTrue(summary.waitForExistence(timeout: 5), "the declined peer is offered, not hidden")
+        XCTAssertTrue(summary.appears(within: 5), "the declined peer is offered, not hidden")
         XCTAssertEqual(summary.label, "1 computer was not checked")
         summary.tap()
 
         let row = element(app, "gateway-skipped-\(Self.gatewayHost)")
-        XCTAssertTrue(row.waitForExistence(timeout: 5), "and it names the host")
+        XCTAssertTrue(row.appears(within: 5), "and it names the host")
         XCTAssertTrue(row.label.contains("OS synology"), "with the reason: \(row.label)")
         row.tap()
 
         // Probed anyway, it answers, and it is a gateway like any other.
         let found = element(app, "gateway-\(Self.gatewayHost)")
-        XCTAssertTrue(found.waitForExistence(timeout: 30), "one tap probes it and it answers")
-        found.tap()
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 75),
+        XCTAssertTrue(found.appears(within: 30), "one tap probes it and it answers")
+        found.tapWhenSettled(in: app)
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 75),
                       "and choosing it loads the gateway")
     }
 
@@ -512,17 +500,17 @@ final class DiscoveryTests: XCTestCase {
 
         let app = launch()
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "gateway-picker").waitForExistence(timeout: 60))
-        XCTAssertTrue(element(app, "gateway-none").waitForExistence(timeout: 40))
+        XCTAssertTrue(element(app, "gateway-picker").appears(within: 60))
+        XCTAssertTrue(element(app, "gateway-none").appears(within: 40))
 
         let summary = element(app, "gateway-skipped-summary")
-        XCTAssertTrue(summary.waitForExistence(timeout: 5))
-        summary.tap()
+        XCTAssertTrue(summary.appears(within: 5))
+        summary.tapWhenSettled(in: app)
         let row = element(app, "gateway-skipped-\(Self.gatewayHost)")
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.appears(within: 5))
         XCTAssertTrue(row.label.contains("another owner"), "with the reason: \(row.label)")
         row.tap()
-        XCTAssertTrue(element(app, "gateway-\(Self.gatewayHost)").waitForExistence(timeout: 30),
+        XCTAssertTrue(element(app, "gateway-\(Self.gatewayHost)").appears(within: 30),
                       "probed anyway, a colleague's gateway answers like any other")
     }
 
@@ -538,20 +526,15 @@ final class DiscoveryTests: XCTestCase {
     /// work" of 2026-09-24. The exact "Status request abandoned after 3 s" log
     /// line is checked by scripts/test-discovery.sh from the unified log.
     func testAStalledLoopbackEndsTheSearchWithinSeconds() async throws {
-        try await resetHarness()
-        let app = launch(extra: ["-UITestStallLoopback", "-UITestTCPChaosDelay", "0"])
-        defer { app.terminate() }
-
-        XCTAssertTrue(element(app, "gateway-searching").waitForExistence(timeout: 60), "the sweep starts")
-        let searchingAt = Date()
-        XCTAssertTrue(element(app, "gateway-proxy-unhealthy").waitForExistence(timeout: 30),
-                      "the sweep ends in P6: nothing answered, and neither did the node's own proxy")
-        let took = Date().timeIntervalSince(searchingAt)
+        let run = try await stalledLoopbackRun()
+        XCTAssertTrue(run.searched, "the sweep starts")
+        let took = try XCTUnwrap(run.unhealthyAfter,
+                                 "the sweep ends in P6: nothing answered, and neither did the node's own proxy")
         XCTAssertLessThanOrEqual(took, 16, "P6 within 16 s of the search starting, not about a minute (\(took) s)")
-        XCTAssertNotEqual(element(app, "gateway-refresh").label, "Searching…", "and the button no longer says so")
+        XCTAssertNotEqual(run.buttonAtP6, "Searching…", "and the button no longer says so")
         // Not vacuous: the stall came before the sweep, so no probe got an
         // answer. A probe that got through would make this a different test.
-        let done = try sweepDone(app)
+        let done = try XCTUnwrap(Self.parseSweepDone(run.sweepDoneAtP6), "unreadable sweep marker: \(run.sweepDoneAtP6)")
         XCTAssertEqual(done.answered, 0, "no probe crossed a silent loopback: \(done)")
         XCTAssertEqual(done.unanswered, 4, "all four peers were tried: \(done)")
         print("F16 DISCOVERY: searching -> P6 \(String(format: "%.1f", took)) s")
@@ -564,37 +547,135 @@ final class DiscoveryTests: XCTestCase {
     /// unmarked, so it is the recovery that makes the next search work, and
     /// the gateway is found, chosen by itself and loaded.
     func testAStalledLoopbackIsReplacedAndTheSearchThenFindsTheGateway() async throws {
+        let run = try await stalledLoopbackRun()
+        XCTAssertTrue(run.searched, "the sweep starts")
+        XCTAssertNotNil(run.unhealthyAfter, "the stalled sweep ends in P6")
+
+        // "recovered" is set by the loopback recovery and nothing else.
+        let recovered = try XCTUnwrap(run.recoveredAfter,
+            "the loopback is replaced with nothing tapped (status: \(run.chaosStatus))")
+        XCTAssertLessThanOrEqual(recovered, 25, "within 25 s of the search starting (\(recovered) s)")
+
+        let target = try XCTUnwrap(run.foundTarget,
+                                   "the search over the replaced loopback finds the gateway, chooses it and loads it")
+        XCTAssertTrue(target.hasSuffix(Self.gatewayHost), "the sheet names \(target)")
+        let requests = run.requestsAfterRecovery
+        XCTAssertEqual(requests.first, "GET /manifest.json", "the gateway was probed after the recovery: \(requests.prefix(3))")
+        print("F16 DISCOVERY: searching -> loopback recovered \(String(format: "%.1f", recovered)) s")
+    }
+
+    // MARK: - F14: runs shared by the tests that only read them
+
+    /// A first run, then a relaunch without resetting the workspaces, with
+    /// what the harness saw of each. `testFirstRunFindsExactlyTheGatewayAndLoadsIt`
+    /// launched exactly as the first half does and only read it afterwards,
+    /// so one run serves both, and each asserts its own claim under its own
+    /// name. Cached only if the first launch reached the token sheet, so a
+    /// failed first run fails only the test that took it; a test run on its
+    /// own takes its own.
+    private struct FirstRunThenRelaunch {
+        let firstLoaded: Bool
+        let firstTarget: String
+        let firstRequests: [String]
+        let firstDashPaths: [String]
+        let journal: [[String: Any]]
+        let relaunchLoaded: Bool
+        let relaunchDashPaths: [String]
+        let relaunchRequests: [String]
+    }
+
+    private static var firstRun: FirstRunThenRelaunch?
+
+    private func firstRunThenRelaunch() async throws -> FirstRunThenRelaunch {
+        if let run = Self.firstRun { return run }
+        try await resetHarness()
+        let app = launch()
+        let firstLoaded = element(app, "token-sheet").appears(within: 75)
+        let firstTarget = firstLoaded ? element(app, "token-sheet-target").label : ""
+        let firstRequests = try await gatewayState()["requests"] as? [String] ?? []
+        let firstDashPaths = try await dashboardState()["paths"] as? [String] ?? []
+        let journal = try await harnessState()["journal"] as? [[String: Any]] ?? []
+        app.terminate()
+
+        var relaunchLoaded = false, relaunchDashPaths: [String] = [], relaunchRequests: [String] = []
+        if firstLoaded {
+            try await resetFakes()
+            let again = XCUIApplication()
+            again.launchArguments = ["-TestControlURL", Self.controlURL]   // no reset this time
+            again.launch()
+            relaunchLoaded = element(again, "token-sheet").appears(within: 60)
+            relaunchDashPaths = try await dashboardState()["paths"] as? [String] ?? []
+            relaunchRequests = try await gatewayState()["requests"] as? [String] ?? []
+            again.terminate()
+        }
+        let run = FirstRunThenRelaunch(
+            firstLoaded: firstLoaded, firstTarget: firstTarget, firstRequests: firstRequests,
+            firstDashPaths: firstDashPaths, journal: journal, relaunchLoaded: relaunchLoaded,
+            relaunchDashPaths: relaunchDashPaths, relaunchRequests: relaunchRequests)
+        if firstLoaded { Self.firstRun = run }
+        return run
+    }
+
+    /// One launch over a loopback that goes silent before the first sweep
+    /// (F16), watched through P6, the recovery and the search after it.
+    /// `testAStalledLoopbackEndsTheSearchWithinSeconds` launched exactly this
+    /// way and only read the first phase, so one run serves both. Cached only
+    /// if the sweep reached P6.
+    private struct StalledLoopbackRun {
+        let searched: Bool
+        let unhealthyAfter: TimeInterval?     // search start to P6
+        let buttonAtP6: String
+        let sweepDoneAtP6: String
+        let recoveredAfter: TimeInterval?     // search start to "recovered"
+        let chaosStatus: String
+        let foundTarget: String?              // the token sheet's target after the new search
+        let requestsAfterRecovery: [String]
+    }
+
+    private static var stalledRun: StalledLoopbackRun?
+
+    private func stalledLoopbackRun() async throws -> StalledLoopbackRun {
+        if let run = Self.stalledRun { return run }
         try await resetHarness()
         let app = launch(extra: ["-UITestStallLoopback", "-UITestTCPChaosDelay", "0"])
         defer { app.terminate() }
 
-        XCTAssertTrue(element(app, "gateway-searching").waitForExistence(timeout: 60), "the sweep starts")
+        let searched = element(app, "gateway-searching").appears(within: 60)
         let searchingAt = Date()
-        XCTAssertTrue(element(app, "gateway-proxy-unhealthy").waitForExistence(timeout: 30), "the stalled sweep ends in P6")
+        var unhealthyAfter: TimeInterval?, button = "", marker = ""
+        if searched, element(app, "gateway-proxy-unhealthy").appears(within: 30) {
+            unhealthyAfter = Date().timeIntervalSince(searchingAt)
+            button = element(app, "gateway-refresh").label
+            marker = element(app, "gateway-sweep-done").label
+        }
 
         // "recovered" is set by the loopback recovery and nothing else.
         let chaos = element(app, "tcp-chaos-test-status")
         var recoveredAfter: TimeInterval?
-        while Date().timeIntervalSince(searchingAt) < 30 {
+        while unhealthyAfter != nil && Date().timeIntervalSince(searchingAt) < 30 {
             if chaos.exists, chaos.label == "recovered" {
                 recoveredAfter = Date().timeIntervalSince(searchingAt)
                 break
             }
             try await Task.sleep(for: .milliseconds(250))
         }
-        let recovered = try XCTUnwrap(recoveredAfter,
-            "the loopback is replaced with nothing tapped (status: \(chaos.exists ? chaos.label : "absent"))")
-        XCTAssertLessThanOrEqual(recovered, 25, "within 25 s of the search starting (\(recovered) s)")
+        let chaosStatus = chaos.exists ? chaos.label : "absent"
 
-        try await resetFakes()
-        element(app, "gateway-refresh").tap()
-        let sheet = element(app, "token-sheet")
-        XCTAssertTrue(sheet.waitForExistence(timeout: 75),
-                      "the search over the replaced loopback finds the gateway, chooses it and loads it")
-        XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.gatewayHost))
-        let requests = try await gatewayState()["requests"] as? [String] ?? []
-        XCTAssertEqual(requests.first, "GET /manifest.json", "the gateway was probed after the recovery: \(requests.prefix(3))")
-        print("F16 DISCOVERY: searching -> loopback recovered \(String(format: "%.1f", recovered)) s")
+        var foundTarget: String?, requests: [String] = []
+        if recoveredAfter != nil {
+            try await resetFakes()
+            element(app, "gateway-refresh").tap()
+            if element(app, "token-sheet").appears(within: 75) {
+                foundTarget = element(app, "token-sheet-target").label
+            }
+            requests = try await gatewayState()["requests"] as? [String] ?? []
+        }
+        let run = StalledLoopbackRun(
+            searched: searched, unhealthyAfter: unhealthyAfter, buttonAtP6: button, sweepDoneAtP6: marker,
+            recoveredAfter: recoveredAfter, chaosStatus: chaosStatus, foundTarget: foundTarget,
+            requestsAfterRecovery: requests)
+        if unhealthyAfter != nil { Self.stalledRun = run }
+        return run
     }
 
     // MARK: - F5 §7: the gateway switcher in Settings
@@ -612,15 +693,15 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertEqual(element(app, "gateway-current").value as? String, "dash.tail-scale.ts.net",
                        "Settings names the gateway in use")
         let row = element(app, "gateway-switch-\(Self.gatewayHost)")
-        XCTAssertTrue(row.waitForExistence(timeout: 5), "the other known gateway has a row")
+        XCTAssertTrue(row.appears(within: 5), "the other known gateway has a row")
         let shown = ContinuousClock.now
         XCTAssertTrue(waitForValue(row, "answering", timeout: 15), "gw is labelled answering: \(row.value ?? "nil")")
         XCTAssertLessThanOrEqual(ContinuousClock.now - shown, .seconds(5), "within R39's first-result budget")
 
         try await resetFakes()
         row.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 10), "a switch closes Settings")
-        XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 45), "gw loads and asks for a token")
+        XCTAssertTrue(app.navigationBars["Settings"].disappears(within: 10), "a switch closes Settings")
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 45), "gw loads and asks for a token")
         let requests = try await gatewayState()["requests"] as? [String] ?? []
         XCTAssertTrue(requests.contains("GET /"), "gw's own log has the page load: \(requests.prefix(6))")
         app.terminate()
@@ -637,7 +718,7 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertTrue(sheet.disappears(within: 10), "Close closes the token sheet")
         try openSettings(again)
         XCTAssertEqual(element(again, "gateway-current").value as? String, Self.gatewayHost, "gw is current after a relaunch")
-        XCTAssertTrue(element(again, "gateway-switch-dash.tail-scale.ts.net").waitForExistence(timeout: 5),
+        XCTAssertTrue(element(again, "gateway-switch-dash.tail-scale.ts.net").appears(within: 5),
                       "and dash is remembered")
     }
 
@@ -652,11 +733,11 @@ final class DiscoveryTests: XCTestCase {
         try await waitForDashPage()
         try openSettings(app)
         let row = element(app, "gateway-switch-plain.tail-scale.ts.net")
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.appears(within: 5))
         XCTAssertTrue(waitForValue(row, "not answering", timeout: 20), "labelled once the sweep ends: \(row.value ?? "nil")")
         XCTAssertTrue(row.isEnabled, "and still tappable")
         row.tap()
-        XCTAssertTrue(element(app, "nav-error-overlay").waitForExistence(timeout: 45), "F4: the failed load is shown")
+        XCTAssertTrue(element(app, "nav-error-overlay").appears(within: 45), "F4: the failed load is shown")
         XCTAssertTrue(element(app, "nav-error-choose-gateway").exists, "with a way to another gateway")
     }
 
@@ -670,7 +751,7 @@ final class DiscoveryTests: XCTestCase {
         try await waitForDashPage()
         try openSettings(app)
         let row = element(app, "gateway-switch-gateway.example.com")
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.appears(within: 5))
         XCTAssertEqual(row.value as? String, "not on this tailnet")
         XCTAssertFalse(row.isEnabled, "the row is disabled")
         row.tap()
@@ -692,7 +773,7 @@ final class DiscoveryTests: XCTestCase {
     /// The gear, then Settings; the app bar may need a pull to show it (F15).
     private func openSettings(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) throws {
         let gear = app.buttons["settings-button"].firstMatch
-        XCTAssertTrue(gear.waitForExistence(timeout: 10), "the gear exists", file: file, line: line)
+        XCTAssertTrue(gear.appears(within: 10), "the gear exists", file: file, line: line)
         XCTAssertTrue(app.settles(within: 10), "nothing is sliding over the gear", file: file, line: line)
         if !gear.isHittable {
             let web = app.webViews.firstMatch
@@ -700,14 +781,18 @@ final class DiscoveryTests: XCTestCase {
                 .press(forDuration: 0.05, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)))
         }
         gear.tapWhenSettled(in: app, file: file, line: line)
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "Settings opens", file: file, line: line)
+        XCTAssertTrue(app.navigationBars["Settings"].appears(within: 10), "Settings opens", file: file, line: line)
     }
 
-    /// Polls an element's accessibility value.
+    /// Polls an element's accessibility value every 100 ms, as `appears` does
+    /// (an `XCTNSPredicateExpectation` looks about once a second, F14 §9).
     private func waitForValue(_ element: XCUIElement, _ want: String, timeout: TimeInterval) -> Bool {
-        let predicate = NSPredicate(format: "value == %@", want)
-        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
-                                timeout: timeout) == .completed
+        let deadline = Date().addingTimeInterval(timeout)
+        while !(element.exists && element.value as? String == want) {
+            if Date() >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return true
     }
 
     // MARK: - Helpers
@@ -782,13 +867,18 @@ final class DiscoveryTests: XCTestCase {
     /// The hidden `sweep-done:<gateways>:<answered>:<unanswered>` marker.
     private func sweepDone(_ app: XCUIApplication) throws -> SweepDone {
         let label = element(app, "gateway-sweep-done").label
-        let f = label.split(separator: ":").map(String.init)
-        guard f.count == 4, f[0] == "sweep-done",
-              let g = Int(f[1]), let a = Int(f[2]), let u = Int(f[3])
-        else {
+        guard let done = Self.parseSweepDone(label) else {
             XCTFail("unreadable sweep marker: \(label)")
             return SweepDone(gateways: 0, answered: 0, unanswered: 0)
         }
+        return done
+    }
+
+    private static func parseSweepDone(_ label: String) -> SweepDone? {
+        let f = label.split(separator: ":").map(String.init)
+        guard f.count == 4, f[0] == "sweep-done",
+              let g = Int(f[1]), let a = Int(f[2]), let u = Int(f[3])
+        else { return nil }
         return SweepDone(gateways: g, answered: a, unanswered: u)
     }
 

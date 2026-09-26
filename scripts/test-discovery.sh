@@ -177,10 +177,10 @@ expected = {(4, 4, 1, 2, 2), (3, 3, 0, 1, 2), (3, 4, 0, 1, 2), purgatory_sig}
 # listener accepts and never answers, so every probe fails and none answers --
 # the same signature as purgatory. It is told apart by what only a silent
 # loopback logs inside the sweep's window, the bounded status request being
-# abandoned, and counted on its own: exactly one per F16 test. The purgatory
-# count stays exactly one.
+# abandoned, and counted on its own: exactly one, since the two F16 tests read
+# one shared launch (F14). The purgatory count stays exactly one.
 stalled_sig = purgatory_sig
-STALLED_SWEEPS = 2
+STALLED_SWEEPS = 1
 abandoned_re = re.compile(r"Status request abandoned after 3 s \(([12]) of 2 before loopback recovery\)$")
 # F7's large-tailnet tests present 40+ synthetic peers, and how many of those a
 # 12 s sweep reaches varies by a dozen from run to run. Enumerating those
@@ -288,7 +288,7 @@ if purgatory != 1:
 # F16 §4.1's instrument, by the app's own words: each stalled sweep ended on an
 # abandoned status request, and the two-strike trigger replaced the loopback.
 if stalled != STALLED_SWEEPS:
-    print("error: %d stalled-loopback sweeps (every probe failed, a status request abandoned); expected %d, one per F16 test"
+    print("error: %d stalled-loopback sweeps (every probe failed, a status request abandoned); expected %d, the F16 tests' shared run"
           % (stalled, STALLED_SWEEPS))
     sys.exit(1)
 if recoveries < 1:
