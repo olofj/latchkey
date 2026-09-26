@@ -63,6 +63,14 @@ struct LatchkeyApp: App {
                 }
 #endif
             }
+#if LATCHKEY_TEST_HOOKS && canImport(UIKit)
+            // The UI tests' "nothing is sliding" (`PresentationProbe`). It
+            // reads the window, so where it sits does not matter.
+            .background(alignment: .topLeading) {
+                PresentationProbe().frame(width: 1, height: 1).opacity(0.01)
+                    .allowsHitTesting(false).ignoresSafeArea()
+            }
+#endif
             // F3 §4.2: `latchkey://share?…`. Captured into the inbox, never
             // sent from here; the picker comes up once the page is signed in.
             .onOpenURL { url in

@@ -630,8 +630,11 @@ final class DiscoveryTests: XCTestCase {
         again.launch()
         defer { again.terminate() }
         let sheet = element(again, "token-sheet")
-        XCTAssertTrue(sheet.waitForExistence(timeout: 60), "the relaunch opens gw")
-        element(again, "token-sheet-close").tap()
+        XCTAssertTrue(sheet.appears(within: 60), "the relaunch opens gw")
+        // The sheet is in the tree from the first frame of its slide, when a
+        // tap on Close reaches nothing and the sheet stays over the gear.
+        element(again, "token-sheet-close").tapWhenSettled(in: again)
+        XCTAssertTrue(sheet.disappears(within: 10), "Close closes the token sheet")
         try openSettings(again)
         XCTAssertEqual(element(again, "gateway-current").value as? String, Self.gatewayHost, "gw is current after a relaunch")
         XCTAssertTrue(element(again, "gateway-switch-dash.tail-scale.ts.net").waitForExistence(timeout: 5),
@@ -690,12 +693,13 @@ final class DiscoveryTests: XCTestCase {
     private func openSettings(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) throws {
         let gear = app.buttons["settings-button"].firstMatch
         XCTAssertTrue(gear.waitForExistence(timeout: 10), "the gear exists", file: file, line: line)
+        XCTAssertTrue(app.settles(within: 10), "nothing is sliding over the gear", file: file, line: line)
         if !gear.isHittable {
             let web = app.webViews.firstMatch
             web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
                 .press(forDuration: 0.05, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)))
         }
-        gear.tap()
+        gear.tapWhenSettled(in: app, file: file, line: line)
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "Settings opens", file: file, line: line)
     }
 

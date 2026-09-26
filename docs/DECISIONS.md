@@ -3376,3 +3376,43 @@ in F5 §13. A (the upstream report) is not filed.
   12:46). The "about 6 min" (341 s) figure is from an earlier tier
   measurement and is stale. Where the growth since then came from was not
   investigated.
+
+## 2026-09-25 — UI tests tap only once no presentation is moving
+
+The discovery failure above has its cause found, and it is the F17
+class again: an element in the tree is not yet an element that takes a
+tap. After the relaunch the test waited for the token sheet to exist
+and tapped Close. The sheet is in the tree from the first frame of its
+slide, and UIKit drops touches until the transition completes. The
+xcresult's recording shows the sheet still sliding at the tap
+(t 28.19 s), and still presented at the failure. The gear was under it:
+not hittable, so the test pulled (onto the sheet), and XCUITest's tap
+"computed hit point {-1, -1}" and reported nothing. The failure surfaced
+two steps on, at "Settings opens". Neither suspect was it: the F15 bar
+was shown throughout, and the gear was tapped after the sheet should
+have closed, not while it closed.
+
+Testing builds now carry `PresentationProbe` (`ui-presentation`): it
+reads, live when asked, `moving` while any view controller in the
+window's presentation chain, or a child's navigation, is transitioning.
+`tapWhenSettled` (UITestSupport) taps once the element exists, the
+probe reads `settled`, and the element is hittable, and fails the test
+otherwise, so a covered target is an error at the tap. The switcher
+test uses it for Close and the gear, and now asserts that Close closes
+the sheet. SwiftUI's own animations (the F15 bar's 0.2 s) are not
+transitions and are not covered, and hit-test at their end state.
+
+**Evidence:** unfixed, `REPEAT=12` of the test failed on iteration 2
+with the same log (pull, then hit point {-1, -1}). `-test-iterations`
+stops at the first failure. Fixed: 12/12 and, after a rebuild, 3/3. In
+each, 3–4 probe reads (~0.45 s) sat between Close appearing and the
+tap, so the probe held the tap through the slide. Discovery suite 15/15
+with R26 timing, 336 s. With `63789dd`'s app code reversed, the test
+fails at `gateway-current`: Settings has no switcher.
+
+**Not done:** the same shape is elsewhere, most exactly in
+`SessionTests` F5 switch-back (a Close tap on an existing sheet, then the
+gear) and both suites' `signIn` (Paste on an existing sheet). Moving
+the shared helpers (`openStatus`, `signIn`, `pick`, `switchInSettings`,
+`openSettings`, `confirmInSettings`) onto `tapWhenSettled` covers most
+of them. Not yet done, because each suite then needs its own runs.

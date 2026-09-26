@@ -118,6 +118,36 @@ extension XCUIElement {
         return true
     }
 
+    /// Taps this element once it exists, the app has no presentation or
+    /// dismissal in progress, and it is hittable; fails the test otherwise.
+    ///
+    /// `tap()` alone is not enough, twice over. An element is in the tree from
+    /// the first frame of the sheet it is on, while UIKit still drops touches,
+    /// so a tap straight after `appears` can reach nothing. And a tap on an
+    /// element that is covered (a sheet still over it) synthesizes a touch at
+    /// {-1, -1} and reports no error, so the failure shows up steps later.
+    @MainActor
+    func tapWhenSettled(in app: XCUIApplication, timeout: TimeInterval = 10,
+                        file: StaticString = #filePath, line: UInt = #line) {
+        guard appears(within: timeout) else {
+            XCTFail("\(self) never appeared", file: file, line: line)
+            return
+        }
+        guard app.settles(within: timeout) else {
+            XCTFail("a presentation was still moving after \(timeout) s; not tapping \(self)", file: file, line: line)
+            return
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while !isHittable {
+            if Date() >= deadline {
+                XCTFail("\(self) is not hittable once settled (covered?)", file: file, line: line)
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        tap()
+    }
+
     /// Scrolls `container` until this element is on screen. Settings opens as
     /// a half sheet, and Forms and Lists build their rows lazily: a row below
     /// the fold is not in the tree until it is scrolled to. Slow swipes, and
@@ -141,6 +171,21 @@ extension XCUIElement {
 }
 
 extension XCUIApplication {
+    /// Whether no view controller is being presented or dismissed (the app's
+    /// `ui-presentation` probe, Testing builds), polled every 100 ms. Pair it
+    /// with an element's `appears`: the element proves the sheet began,
+    /// `settled` that it finished.
+    @MainActor
+    func settles(within timeout: TimeInterval) -> Bool {
+        let probe = otherElements["ui-presentation"].firstMatch
+        let deadline = Date().addingTimeInterval(timeout)
+        while !(probe.exists && probe.value as? String == "settled") {
+            if Date() >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return true
+    }
+
     /// Settings → Status, from the dashboard's gear.
     @MainActor
     func openStatus(file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {

@@ -53,6 +53,15 @@ if [[ -n "${ONLY_TESTS:-}" ]]; then
     ONLY_ARGS=()
     for t in "${PICKED[@]}"; do ONLY_ARGS+=("-only-testing:LatchkeyUITests/DiscoveryTests/$t"); done
 fi
+# REPEAT=N runs each chosen test N times, for chasing a flake; every
+# iteration must pass. With ONLY_TESTS only, for the same reason.
+REPEAT_ARGS=()
+if [[ -n "${REPEAT:-}" ]]; then
+    [[ -n "${ONLY_TESTS:-}" && "$REPEAT" =~ ^[1-9][0-9]*$ ]] \
+        || { echo "error: REPEAT=N needs ONLY_TESTS and N >= 1" >&2; exit 1; }
+    REPEAT_ARGS=(-test-iterations "$REPEAT")
+    EXPECTED=$(( EXPECTED * REPEAT ))
+fi
 
 # ------------------------------------------------------------------ harness --
 teardown() {
@@ -107,7 +116,7 @@ set +e
     -derivedDataPath build/DerivedData -resultBundlePath "$LOG_DIR/tests.xcresult" \
     -parallel-testing-enabled NO -test-timeouts-enabled YES \
     -default-test-execution-time-allowance 180 \
-    "${ONLY_ARGS[@]}") > "$LOG_DIR/test.log" 2>&1
+    "${ONLY_ARGS[@]}" ${REPEAT_ARGS[@]+"${REPEAT_ARGS[@]}"}) > "$LOG_DIR/test.log" 2>&1
 TEST_RC=$?
 set -e
 grep -E "Test Case .*(passed|failed)" "$LOG_DIR/test.log" | sed 's/^/    /' || true
