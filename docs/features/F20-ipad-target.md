@@ -132,6 +132,32 @@ Opened 2026-09-26, from the owner's question "can't you just run the tests on an
 iPad simulator in addition to the iPhone one?" — prompted by F19 §3 finding the
 iPad claim unevidenced.
 
-First measurement in flight at the time of writing: L1 serially on an iPad Pro
-11-inch (M5), iOS 27. Its pass/fail list is the input to §4 and is recorded here
-when it completes.
+**First measurement, 2026-09-26: L1 on an iPad Pro 11-inch (M5), iOS 27, one
+failure.** `SIM_NAME="iPad Pro 11-inch (M5)" scripts/test-offline.sh --serial
+--build`, 950 s serial, logs in `app/build/offline-logs/20260926-133354`.
+
+- **39 passed** in the main pass, the sign-in pass passed, **1 failed.**
+- The failure is `testStatusNamesTheCommitTheAppWasBuiltFrom`, at
+  `OfflineHarnessTests.swift:1027`: `XCTAssertTrue failed - Settings has a
+  Status entry`. The test opened Settings and could not find `status-button`
+  after ~30 s of polling.
+
+**This changes §4's expected shape.** Every layout invariant passed on a tablet
+— the safe-area probes, the app bar's retraction, the instance chips in both
+orientations, the keyboard not blanking the page. The prediction in §1 that the
+phone-specific geometry would break was wrong, and the surviving problem is
+narrower and different in kind: **Settings navigates differently on iPad**, so
+the Status entry is not where the test looks for it. On a tablet SwiftUI gives a
+form or split layout where a phone gives a pushed list, which is the most likely
+cause; that needs confirming against `failure.png` in the log directory before
+§4 is written.
+
+So the honest read is that iPad support may be close to free, and the work is
+one navigation difference rather than a layout programme. That also answers §7
+criterion 4 provisionally in the encouraging direction: if this is Settings
+presentation rather than page layout, iPhone Duo would inherit very little of
+it, because there is little to inherit.
+
+Not yet done: the same run on an iPad mini (closest to phone width) and a
+13-inch (furthest), which would tell us whether the one failure is
+size-dependent or applies to every iPad.
