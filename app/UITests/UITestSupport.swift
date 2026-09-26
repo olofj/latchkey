@@ -189,13 +189,16 @@ extension XCUIApplication {
     /// Settings → Status, from the dashboard's gear.
     @MainActor
     func openStatus(file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
-        buttons["settings-button"].firstMatch.tap()
+        // Callers often come here straight from closing a sheet, which may
+        // still be sliding over the gear.
+        buttons["settings-button"].firstMatch.tapWhenSettled(in: self, file: file, line: line)
         XCTAssertTrue(navigationBars["Settings"].appears(within: 10), "the gear opens Settings",
                       file: file, line: line)
         let status = buttons["status-button"]
         XCTAssertTrue(status.reveal(scrolling: collectionViews.firstMatch), "Settings has a Status entry",
                       file: file, line: line)
-        status.tap()
+        // `reveal` settles for hittable, which the row already is mid-slide.
+        status.tapWhenSettled(in: self, file: file, line: line)
         let list = collectionViews["diagnostics-list"]
         XCTAssertTrue(list.appears(within: 10), "Status opens", file: file, line: line)
         return list

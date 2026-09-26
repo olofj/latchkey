@@ -74,7 +74,7 @@ final class SessionTests: XCTestCase {
         let target = element(app, "token-sheet-target").label
         XCTAssertTrue(target.hasSuffix(Self.gatewayHost),
                       "the sheet names the gateway it will sign in to (R23); got \(target)")
-        element(app, "token-sheet-close").tap()
+        element(app, "token-sheet-close").tapWhenSettled(in: app)
         XCTAssertTrue(element(app, "session-signin-button").waitForExistence(timeout: 5),
                       "with the sheet closed, the app keeps a way to sign in")
         // Past the 8 s handshake watchdog, so a healthy bridge is shown not to
@@ -607,7 +607,10 @@ final class SessionTests: XCTestCase {
                       "the second gateway has no session here, so it asks")
         XCTAssertTrue(element(app, "token-sheet-target").label.hasSuffix(Self.secondHost),
                       "for itself: \(element(app, "token-sheet-target").label)")
-        element(app, "token-sheet-close").tap()
+        // Straight after the sheet appears, as in the discovery switcher test:
+        // a Close tap mid-slide reaches nothing and the sheet stays over the gear.
+        element(app, "token-sheet-close").tapWhenSettled(in: app)
+        XCTAssertTrue(element(app, "token-sheet").disappears(within: 10), "Close closes the token sheet")
 
         let before = try await gatewayState()
         try switchInSettings(app, to: Self.gatewayHost)
@@ -625,16 +628,19 @@ final class SessionTests: XCTestCase {
                                   file: StaticString = #filePath, line: UInt = #line) throws {
         let gear = app.buttons["settings-button"].firstMatch
         XCTAssertTrue(gear.waitForExistence(timeout: 10), file: file, line: line)
+        // A closing sheet leaves the gear unhittable, which would read as the
+        // F15 bar being hidden and pull on the sheet instead of the page.
+        XCTAssertTrue(app.settles(within: 10), "nothing is sliding over the gear", file: file, line: line)
         if !gear.isHittable {
             let web = app.webViews.firstMatch
             web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
                 .press(forDuration: 0.05, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)))
         }
-        gear.tap()
+        gear.tapWhenSettled(in: app, file: file, line: line)
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), file: file, line: line)
         let row = element(app, "gateway-switch-\(host)")
         XCTAssertTrue(row.waitForExistence(timeout: 10) && row.isEnabled, "Settings offers \(host)", file: file, line: line)
-        row.tap()
+        row.tapWhenSettled(in: app, file: file, line: line)
         XCTAssertTrue(app.navigationBars["Settings"].waitForNonExistence(timeout: 10), "the switch closes Settings",
                       file: file, line: line)
     }
@@ -821,15 +827,16 @@ final class SessionTests: XCTestCase {
     /// scrolled to) → its confirmation alert's destructive button (R32).
     private func confirmInSettings(_ app: XCUIApplication, button id: String, action: String,
                                    file: StaticString = #filePath, line: UInt = #line) {
-        app.buttons["settings-button"].firstMatch.tap()
+        app.buttons["settings-button"].firstMatch.tapWhenSettled(in: app, file: file, line: line)
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "the gear opens Settings",
                       file: file, line: line)
         let row = element(app, id)
         XCTAssertTrue(row.reveal(scrolling: app.collectionViews.firstMatch), "Settings has \(id)", file: file, line: line)
-        row.tap()
+        row.tapWhenSettled(in: app, file: file, line: line)
+        // The alert is a presentation too, in the tree from its first frame.
         let confirm = app.alerts.buttons[action].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "a confirmation first: \(action)", file: file, line: line)
-        confirm.tap()
+        confirm.tapWhenSettled(in: app, file: file, line: line)
     }
 
     /// Polls the gateway until `name` exceeds `floor`.
@@ -870,7 +877,8 @@ final class SessionTests: XCTestCase {
             ? element(app, "token-paste-button")
             : app.buttons["Paste"].firstMatch
         XCTAssertTrue(paste.waitForExistence(timeout: 10), "the sheet offers Paste")
-        paste.tap()
+        // Callers come here as soon as the sheet exists, i.e. mid-slide.
+        paste.tapWhenSettled(in: app)
         XCTAssertTrue(element(app, "token-sheet").waitForNonExistence(timeout: 30),
                       "signing in dismisses the sheet")
         let after = try await gatewayState()
@@ -890,8 +898,10 @@ final class SessionTests: XCTestCase {
     private func typeToken(_ app: XCUIApplication, _ text: String) {
         let field = element(app, "token-input")
         XCTAssertTrue(field.waitForExistence(timeout: 10))
-        field.tap()
+        field.tapWhenSettled(in: app)
         field.typeText(text)
+        // A plain tap: typeText has just succeeded, so this sheet is up and
+        // taking touches, and nothing has been presented over it since.
         element(app, "token-submit").tap()
     }
 

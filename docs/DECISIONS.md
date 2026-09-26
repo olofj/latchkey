@@ -3443,3 +3443,29 @@ the extension is signed Apple Distribution (DX33PQ7J4A) with
 passes. Xcode reloaded the new file (its UI state was rewritten after
 the edit) and left it unchanged. Not seen: Xcode saving it after an
 edit in the IDE, which is the next thing to watch.
+
+## 2026-09-25 — the remaining UI taps wait for the sheet to settle
+
+The "Not done" of the entry before last. On `tapWhenSettled` now:
+`openStatus` (gear, Status row), SessionTests' `switchInSettings` (gear,
+after the same settle check as discovery's `openSettings`, then the row),
+`confirmInSettings` (gear, row, alert button), both suites' `signIn`
+(Paste), ShareTests' `pick`, the F5 switch-back test's Close (which now
+asserts that the sheet closes), the R22 test's Close, and `typeToken`'s
+field. Left plain, each with its reason at the call: `token-submit`
+straight after `typeText` into the same sheet has succeeded, and one
+`pick`.
+
+That one is `testSignedOutMidShareThenResumed`, which races the page.
+After `__expire`/`__revoke` the page's own next request, about 6 s after
+the picker lists, finds the session gone and puts the sign-in sheet over
+Send, and Send's request must reach the gateway first. The margin was
+about 0.35 s and the settle wait costs about 0.45 s. Settled, it failed
+4 of 4 (twice with no resume after sign-in, twice with Send covered);
+plain, it passed 8 of 8. The test still races with 0.35 s to spare, so a
+slower run can lose it. The robust fix is a fake control that refuses
+the app's share request alone, leaving the page out of the race; not
+done here.
+
+**Evidence:** L1 42/42 in 191 s (budget 240); discovery 15/15, 340 s;
+session 39/39, 1074 s; L2 202 s and lifecycle 172 s, both passing.

@@ -178,7 +178,14 @@ final class ShareTests: XCTestCase {
         let app = try await launchSignedIn()
         defer { app.terminate() }
         share(app, "latchkey://share?url=https://example.com/s")
-        try pick(app, "obsidian")
+        // Not settled: this test races the page. After __expire/__revoke the
+        // page's own next request (about 6 s after the picker lists) finds the
+        // session gone and brings the sign-in sheet up over Send; Send's
+        // request must reach the gateway first. That margin was about 0.35 s,
+        // and the settle wait costs about 0.45 s: settled, it failed 4 of 4,
+        // plain it passed 8 of 8. The row's own tap is checked on the next
+        // line (share-destination-selected), so a lost tap still fails here.
+        try pick(app, "obsidian", settled: false)
         _ = try await Self.post("\(Self.gatewayControl)/__expire")
         _ = try await Self.post("\(Self.gatewayControl)/__revoke")
         element(app, "share-send").tap()
@@ -486,11 +493,19 @@ final class ShareTests: XCTestCase {
         if open.waitForExistence(timeout: 3) { open.tap() }
     }
 
-    /// Waits for the picker's list, then picks `key`.
-    private func pick(_ app: XCUIApplication, _ key: String, file: StaticString = #filePath, line: UInt = #line) throws {
+    /// Waits for the picker's list, then picks `key`. `settled: false` taps
+    /// without waiting for the sheet to settle, for the one test that cannot
+    /// spare the wait (testSignedOutMidShareThenResumed).
+    private func pick(_ app: XCUIApplication, _ key: String, settled: Bool = true,
+                      file: StaticString = #filePath, line: UInt = #line) throws {
         let row = element(app, "share-session-\(key)")
         XCTAssertTrue(row.waitForExistence(timeout: 30), "the picker lists \(key)", file: file, line: line)
-        row.tap()
+        // The picker is a sheet; its rows are in the tree from its first frame.
+        if settled {
+            row.tapWhenSettled(in: app, file: file, line: line)
+        } else {
+            row.tap()
+        }
         XCTAssertEqual(element(app, "share-destination-selected").label, key, file: file, line: line)
     }
 
@@ -531,7 +546,8 @@ final class ShareTests: XCTestCase {
             ? element(app, "token-paste-button")
             : app.buttons["Paste"].firstMatch
         XCTAssertTrue(paste.waitForExistence(timeout: 10), "the sheet offers Paste")
-        paste.tap()
+        // Callers come here as soon as the sheet exists, i.e. mid-slide.
+        paste.tapWhenSettled(in: app)
         XCTAssertTrue(element(app, "token-sheet").waitForNonExistence(timeout: 30), "signed in")
     }
 
