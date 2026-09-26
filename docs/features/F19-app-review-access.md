@@ -392,9 +392,14 @@ Most design-changing first.
 4. **Is the App Store on the horizon?** If yes, B pays for itself twice: App
    Store review asks the same question more strictly.
 5. ~~**May KiroCrew's frontend be served to Apple?**~~ **Settled 2026-09-26**:
-   yes. Olof's reading is that the licence terms govern actual product usage,
-   not a reviewer being shown the interface, so option B may serve the pinned
-   wheel's frontend to App Review.
+   yes, and verified rather than assumed. The pinned wheel is **Apache License
+   2.0**, Copyright Amazon.com, Inc. — read from
+   `kirocrew-0.7.1.dist-info/licenses/LICENSE` (201 lines, standard Apache 2.0)
+   and its `NOTICE`. Apache 2.0 §4 does govern redistribution; it grants the
+   right to reproduce, publicly display and distribute, so serving the frontend
+   to a reviewer is permitted outright. Its conditions (retain the notices,
+   include the licence, preserve `NOTICE`) are already met because the fake
+   gateway serves files out of the wheel in place and strips nothing.
 6. **Keep claiming iPad?** Test on one, or ship iPhone-only.
 7. **For B, which step-1 variant?** B-account (credentials, challenge risk),
    B-invite (verify Tailscale's invite rules first), or B-key (a new build
