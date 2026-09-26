@@ -8,9 +8,15 @@
 #                Default: kept from the last install, else today + 89 days.
 #   --new-token  mint a new demo token (the old one stops working).
 #
-# Idempotent: re-running it updates the files and restarts the service, and
-# keeps the token and date unless told otherwise. It never publishes anything
-# outside the tailnet (serve, not funnel).
+# Idempotent: re-running it updates the files and the units, and keeps the
+# token and date unless told otherwise. It never publishes anything outside
+# the tailnet (serve, not funnel).
+#
+# The gateway is socket-activated: latchkey-review-gateway.socket holds
+# 127.0.0.1:8444 and the service starts on the first connection, then stays
+# up. This script's own check through serve is such a connection, so it
+# stops the service afterwards: it leaves nothing running until a reviewer
+# (or the owner's step-4 check) connects.
 set -eu
 
 UNTIL=""
@@ -29,6 +35,7 @@ OPT=/opt/latchkey-review
 ETC=/etc/latchkey-review
 ENV="$ETC/env"
 UNIT=latchkey-review-gateway.service
+SOCKET=latchkey-review-gateway.socket
 
 die() { echo "error: $*" >&2; exit 1; }
 say() { echo "::: $*"; }
@@ -97,17 +104,17 @@ EOF
 mv "$ENV.new" "$ENV"
 umask 022
 
-# -- the service ------------------------------------------------------------------
-install -m 0644 "$HERE/$UNIT" "/etc/systemd/system/$UNIT"
+# -- the units: a socket that starts the service on the first connection -----------
+# Stop the service (it may be an earlier install's, bound to 8444 itself) and
+# disable it: only the socket is enabled, so the service never starts at boot.
+systemctl stop "$UNIT" "$SOCKET" 2>/dev/null || true
+systemctl disable "$UNIT" >/dev/null 2>&1 || true
+install -m 0644 "$HERE/$UNIT" "$HERE/$SOCKET" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable "$UNIT" >/dev/null 2>&1
-systemctl restart "$UNIT"
-i=0
-until python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8444), 1)' 2>/dev/null; do
-    i=$((i + 1)); [ $i -lt 50 ] || { journalctl -u "$UNIT" -n 20 --no-pager >&2; die "the service did not start"; }
-    sleep 0.2
-done
-say "service up on 127.0.0.1:8444"
+systemctl enable --now "$SOCKET" >/dev/null 2>&1 || { journalctl -u "$SOCKET" -n 20 --no-pager >&2; die "the socket did not start"; }
+systemctl is-active --quiet "$SOCKET" || die "$SOCKET is not listening"
+systemctl is-active --quiet "$UNIT" && die "$UNIT is running before anything connected"
+say "socket listening on 127.0.0.1:8444; the gateway starts on the first connection"
 
 # -- on the tailnet, HTTPS with a ts.net certificate ----------------------------------
 tailscale serve --bg --https=443 https+insecure://127.0.0.1:8444 \
@@ -123,6 +130,14 @@ for i in 1 2 3 4 5 6; do
 done
 [ $ok -eq 1 ] || echo "warning: the check failed from this node. Run it from another node on the review tailnet before relying on it:
     REVIEW_DEMO_TOKEN=<token> python3 testing/review/review_check.py $GATEWAY_HOST" >&2
+if [ $ok -eq 1 ]; then
+    systemctl is-active --quiet "$UNIT" || die "the check passed but $UNIT is not running: what answered it?"
+    say "the first connection started $UNIT"
+fi
+# Back to idle: the next connection starts it again.
+systemctl stop "$UNIT"
+systemctl is-active --quiet "$SOCKET" || die "$SOCKET stopped with the service"
+say "stopped $UNIT again; nothing runs until the next connection"
 
 echo
 echo "For F19 §6.2 (docs/REVIEW-GATEWAY.md, step 6):"

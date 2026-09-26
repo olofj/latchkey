@@ -2,10 +2,15 @@
 # fake_gateway.py) on loopback, with the demo token and canned content.
 # `tailscale serve` puts it on the review tailnet with a ts.net certificate.
 # Installed by testing/review/install.sh; see docs/REVIEW-GATEWAY.md.
+#
+# Socket-activated: latchkey-review-gateway.socket listens on
+# 127.0.0.1:8444 and starts this on the first connection, passing the
+# listening socket (LISTEN_FDS). It is not enabled on its own, so it does
+# not start at boot; once started it stays up until stopped.
 [Unit]
 Description=Latchkey review gateway (fake Kiro Crew dashboard for App Review)
-After=network-online.target tailscaled.service
-Wants=network-online.target
+Requires=latchkey-review-gateway.socket
+After=latchkey-review-gateway.socket
 
 [Service]
 User=latchkey-review
@@ -13,15 +18,19 @@ Group=latchkey-review
 # GATEWAY_HOST, DEMO_UNTIL and FAKE_GATEWAY_DEMO_TOKEN (read by the fake
 # itself, so the token is not on its command line).
 EnvironmentFile=/etc/latchkey-review/env
+# --port only names the origin: the page is served on the socket systemd
+# passes. --no-control: the suites' control port (reset, mint, expire...)
+# is a test affordance, and is not opened at all here.
 ExecStart=/usr/bin/python3 /opt/latchkey-review/fake_gateway.py \
-    --port 8444 --control-port 8481 --host ${GATEWAY_HOST} \
+    --port 8444 --no-control --host ${GATEWAY_HOST} \
     --cert /etc/latchkey-review/loopback.pem --key /etc/latchkey-review/loopback.key \
     --dist /opt/latchkey-review/.cache/kirocrew-0.7.1-py3-none-any.whl \
     --demo-until ${DEMO_UNTIL} --content /opt/latchkey-review/demo_content.json
 Restart=always
 RestartSec=2
 
-# It reads its files and listens on 127.0.0.1/::1; it writes nothing.
+# It reads its files and serves on the socket it is given; it writes
+# nothing and binds nothing.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -32,6 +41,3 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 MemoryMax=256M
-
-[Install]
-WantedBy=multi-user.target

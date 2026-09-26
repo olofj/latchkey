@@ -123,14 +123,41 @@ directories side by side.)
 4. writes `/etc/latchkey-review/env` (mode 0600): the host, the date, and a
    fresh demo token. Re-runs keep both token and date, unless given
    `--new-token` or `--until`;
-5. installs and starts `latchkey-review-gateway.service` as the system user
-   `latchkey-review`: loopback only, read-only filesystem, restart on
-   failure. The token reaches the fake through the environment, not its
-   command line;
+5. installs two units and enables only the socket (below). The service
+   runs as the system user `latchkey-review`, on a read-only filesystem,
+   restarting on failure. The token reaches the fake through the
+   environment, not its command line;
 6. runs `tailscale serve --bg --https=443 https+insecure://127.0.0.1:8444`, and
    refuses if funnel is on;
-7. runs the review check through serve (below), and prints the three values
-   for §6.
+7. runs the review check through serve (below). That is the gateway's first
+   connection, so it starts the service, and `install.sh` confirms that it
+   did. It then stops the service again and prints the three values for §6.
+
+**On demand: the socket and the service.** Nothing of the gateway runs until
+someone connects:
+
+- `latchkey-review-gateway.socket` is enabled. systemd holds
+  `127.0.0.1:8444` (loopback only) with `Accept=no`.
+- `latchkey-review-gateway.service` is not enabled, so it never starts at
+  boot. The first connection starts it. systemd hands it the listening
+  socket, and the connection that started it is answered.
+- Once started, it **stays up** until stopped or the VM reboots. There is no
+  idle timeout. The reviewer's first action in Latchkey is a probe of the
+  tailnet's nodes, and a probe that waits on a cold start (Python plus
+  reading the 0.7.1 wheel) can read as "no gateway on your tailnet". Nor is
+  there a process per connection (`Accept=yes`), because the demo
+  sessions and refresh chains live in the one process's memory.
+- The fake is started with `--no-control`. The suites' control port (mint,
+  reset, expire, `/__state`) is a test affordance, so on the VM it is not
+  opened at all, not even on loopback.
+
+`tailscale serve` does not start it early. It dials the backend only when
+a request arrives: nothing connects when serve is configured, and there is
+no health check (`getTransport` in
+[ipn/ipnlocal/serve.go](https://github.com/tailscale/tailscale/blob/main/ipn/ipnlocal/serve.go),
+read 2026-09-25). After a request it keeps idle connections to the backend
+for up to 90 s (`IdleConnTimeout`). Since the service never stops on idle,
+those make no difference. `systemctl stop` closes them.
 
 ## 4. Check it, before every submission
 
@@ -160,6 +187,14 @@ review from TestFlight. Sign Latchkey in to Tailscale with a spare account
 that accepted one of the invites (or as the admin). The picker should list
 `<GATEWAY_HOST>`. Paste the token. Afterwards, **Reset app** in Latchkey's
 settings (R32 logs the node out), and remove the node in the admin console.
+
+Both checks start the gateway, and it stays up. To go back to nothing
+running until the reviewer connects (it also clears your test sessions):
+
+```sh
+sudo systemctl stop latchkey-review-gateway.service   # the socket stays; the next connection starts it
+systemctl status latchkey-review-gateway.socket latchkey-review-gateway.service
+```
 
 ## 5. Invites (B-invite)
 
@@ -221,13 +256,16 @@ review before pasting.
 | a new submission | step 4's check; new invite links |
 | a new build or a later date | `sudo testing/review/install.sh --until <date>` (at most 90 days out) |
 | the token may have leaked | `sudo testing/review/install.sh --new-token`, and update the notes |
-| logs | `journalctl -u latchkey-review-gateway`. The fake logs no requests and no message text |
+| logs | `journalctl -u latchkey-review-gateway.socket -u latchkey-review-gateway.service`. The fake logs no requests and no message text |
+| is it running? | `systemctl status latchkey-review-gateway.socket latchkey-review-gateway.service`: the socket *active (listening)*; the service *inactive* until the first connection, then *active (running)* |
+| idle again | `sudo systemctl stop latchkey-review-gateway.service` (the socket stays and starts it on the next connection) |
 | after a review | remove the reviewers' nodes and users in the admin console |
-| done with external testing | `sudo tailscale serve reset`; `sudo systemctl disable --now latchkey-review-gateway`; delete the VM and the account |
+| done with external testing | `sudo tailscale serve reset`; `sudo systemctl disable --now latchkey-review-gateway.socket latchkey-review-gateway.service`; delete the VM and the account |
 
-A restart of the service (or the VM) forgets the sessions and anything a
-reviewer typed. The token keeps working, so the reviewer only pastes it
-again. Nothing is written to disk.
+A restart of the service (or the VM), or a stop, forgets the sessions and
+anything a reviewer typed. The token keeps working, so the reviewer only
+pastes it again. Nothing is written to disk. So do not stop the service
+while a review is under way.
 
 ## What was verified, and where
 
@@ -245,7 +283,22 @@ On the development Mac, 2026-09-25:
   checked against the system store, on a wrong token, and on a stopped host.
 - **The unit's `ExecStart`**, fed the env file `install.sh` writes, serves
   the recognition pair, the sign-in and the content to requests shaped like
-  `serve`'s.
+  `serve`'s. Rerun after the socket change with the listening socket passed
+  on fd 3 as systemd does: it serves on that socket, listens on nothing
+  else, and has no control port.
+- **Socket activation** (`testing/review/socket_activation_test.py`, 6 checks,
+  part of `make demo-check`). There is no systemd on the Mac, so an `sh`
+  puts a pre-bound listening socket on fd 3, sets `LISTEN_PID=$$` and
+  `LISTEN_FDS=1`, and execs the fake. A connection made **before** the fake
+  starts is answered. The demo token redeems, and the session survives
+  later connections. The fake listens only on the inherited socket and
+  opens no control port. A `LISTEN_PID` naming another process is ignored.
+  A non-listening fd is refused. Started directly with `--no-control`, it
+  serves and opens no control port. Each check was shown to fail against a
+  mutant (five: no inheritance, no PID check, control port opened anyway,
+  `::1` bound as well, no listening check). `make gateway-check` (37/37)
+  and `contract_test.py --fake-only` pass unchanged: the suites start the
+  fake directly, and it binds as before.
 - **The content in the real 0.7.1 frontend** (simulator Safari): the
   sessions and transcripts render without error banners. This needed two
   empty answers in content mode (`/api/apps`, `/api/instances`), which the
@@ -266,7 +319,9 @@ one of those passes, treat "works through serve" as unverified.
 `install.sh` as a whole has not run on Linux: there was no VM, and the
 sandbox blocked Docker. Its parts were run separately: the status parsing,
 the date guard, the certificate command and the unit's command line. It
-passes `sh -n` and `dash -n`.
+passes `sh -n` and `dash -n`. **systemd has not run the two units either.**
+On the VM, `install.sh` checks for itself that only the socket is up before
+the first connection, and that the check through serve started the service.
 
 ## Open
 

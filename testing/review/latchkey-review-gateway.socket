@@ -1,0 +1,22 @@
+# F19's review gateway, on demand: systemd holds 127.0.0.1:8444 and starts
+# latchkey-review-gateway.service on the first connection (from `tailscale
+# serve`, when a reviewer's Latchkey first probes the node). Until then
+# nothing of the gateway runs. See docs/REVIEW-GATEWAY.md.
+#
+# Accept=no: the one listening socket is handed to one long-lived process,
+# which then stays up (no idle exit). Accept=yes (a process per connection)
+# would lose the fake's in-memory state -- the demo token's sessions and
+# refresh chains -- between the reviewer's requests.
+[Unit]
+Description=Latchkey review gateway socket (starts the gateway on first connection)
+
+[Socket]
+# Loopback only: `tailscale serve` is the one client. No [::1]: serve
+# proxies to 127.0.0.1:8444, and the fake binds nothing of its own when
+# systemd passes a socket.
+ListenStream=127.0.0.1:8444
+Accept=no
+NoDelay=yes
+
+[Install]
+WantedBy=sockets.target

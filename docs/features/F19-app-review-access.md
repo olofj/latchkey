@@ -188,6 +188,10 @@ variants.
    most 90 days, sessions end at the date too), `--content`
    (`testing/review/demo_content.json`), the service and
    `testing/review/install.sh`. How to stand it up: `../REVIEW-GATEWAY.md`.
+   The VM stays on, but the gateway is **socket-activated**: nothing of it
+   runs until the reviewer's first connection starts it, and it then stays
+   up (one process, so sessions and refresh chains live on). It opens no
+   control port.
 
    A real KiroCrew instance is **not** an alternative. Its 300 s link window
    is a constant (§2), and it would run Claude sessions and tools for a
@@ -439,3 +443,18 @@ Needed, "a demo QR code or AR marker"):
   runs at the end of `install.sh`, on the owner's VM. It has not run yet.
 - B-invite is recommended: invite links are one-time and last 30 days, on
   every plan.
+
+2026-09-25 late, the review gateway made socket-activated (owner's request):
+
+- `latchkey-review-gateway.socket` (`Accept=no`) holds 127.0.0.1:8444; the
+  service is not enabled on its own and starts on the first connection, then
+  stays up. Not `Accept=yes` (a process per connection loses the in-memory
+  sessions), and no idle stop (the reviewer's first probe would pay a cold
+  start, and a slow probe reads as "no gateway on your tailnet").
+- The fake serves on the socket systemd passes (`LISTEN_FDS`/`LISTEN_PID`)
+  and binds as before when none is passed, so the suites are unchanged
+  (`make gateway-check` 37/37, contract `--fake-only` ok). On the VM it runs
+  with `--no-control`: no control port at all, not even on loopback.
+- `make demo-check` now includes `socket_activation_test.py` (6 checks, each
+  shown to fail against a mutant). It simulates systemd with a pre-bound
+  socket on fd 3. systemd itself has not run it: there is still no Linux VM.
