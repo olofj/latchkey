@@ -1,0 +1,37 @@
+# F19's review gateway: the fake KiroCrew gateway (testing/harness/
+# fake_gateway.py) on loopback, with the demo token and canned content.
+# `tailscale serve` puts it on the review tailnet with a ts.net certificate.
+# Installed by testing/review/install.sh; see docs/REVIEW-GATEWAY.md.
+[Unit]
+Description=Latchkey review gateway (fake Kiro Crew dashboard for App Review)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=latchkey-review
+Group=latchkey-review
+# GATEWAY_HOST, DEMO_UNTIL and FAKE_GATEWAY_DEMO_TOKEN (read by the fake
+# itself, so the token is not on its command line).
+EnvironmentFile=/etc/latchkey-review/env
+ExecStart=/usr/bin/python3 /opt/latchkey-review/fake_gateway.py \
+    --port 8444 --control-port 8481 --host ${GATEWAY_HOST} \
+    --cert /etc/latchkey-review/loopback.pem --key /etc/latchkey-review/loopback.key \
+    --dist /opt/latchkey-review/.cache/kirocrew-0.7.1-py3-none-any.whl \
+    --demo-until ${DEMO_UNTIL} --content /opt/latchkey-review/demo_content.json
+Restart=always
+RestartSec=2
+
+# It reads its files and listens on 127.0.0.1/::1; it writes nothing.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
