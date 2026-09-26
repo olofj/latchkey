@@ -2,442 +2,416 @@
 
 | | |
 |---|---|
-| **Status** | **options, not decided** (§4). Nothing is built. The reviewer's message is not in hand yet |
-| **Requested** | 2026-09-25, by Olof, after Apple rejected Latchkey Remote 0.1 (build 202609250336) for TestFlight beta testing that day: design how an Apple reviewer can exercise the app at all. The reviewer's text is only in App Store Connect and will be pasted later |
-| **Revision** | none yet. Options C and B2 below would each need one (they change R15, R3/R41 or the manual-entry gate) |
-| **Touches** | depends on the option: none (0, A), App Store Connect and a host outside the owner's tailnet (B), `App/Browser/`, `App/Discovery/`, `App/Workspace/`, `TSNet/TSNetManager.swift` (B2, C) |
+| **Status** | **options, not decided** (§5). Nothing is built. Paste-ready texts per option in §6 |
+| **Requested** | 2026-09-25, by Olof, after Beta App Review stopped Latchkey Remote 0.1 (build 202609250336) that day: design how an Apple reviewer can exercise the app at all. Revised the same evening once the reviewer's message arrived (§1) |
+| **Revision** | none yet. Options B-key and C would each need one (R15; R3/R41 and the manual-entry gate) |
+| **Touches** | depends on the option: none (0, A), App Store Connect plus a host and a tailnet outside the owner's (B), `testing/harness/fake_gateway.py` (B, a demo-token rule), `TSNet/TSNetManager.swift` and a new login UI (B-key), `App/Browser/`, `App/Discovery/`, `App/Workspace/` (C) |
 
-## 1. Why
+## 1. What Apple said
 
-Latchkey opens one thing: the owner's self-hosted KiroCrew dashboard, reached
-through its own embedded Tailscale node on the owner's tailnet (PLAN §1.2). A
-reviewer has no account on that tailnet and nothing to reach on any other.
-Every screen past the first depends on things only the owner has:
+> Guideline 2.1 - Information Needed. We have started your beta app's review,
+> but we couldn't access all or part of the app because we need a demo QR
+> code or AR marker. Next Steps: Please provide the code/markers in the Beta
+> App Review Information section for the app in App Store Connect or reply to
+> this message with the requested demo information. Make sure that the
+> information includes any data necessary to use the app's features and
+> functionality.
 
-1. **A tailnet identity.** Sign-in is Tailscale's browser login. Tailscale
-   has no username/password accounts of its own. It signs in through an
-   identity provider (Google, Microsoft, GitHub, Apple, a custom OIDC
-   provider, or a passkey for invited users). That list is from memory and
-   was not re-checked today; §8 Q5 depends on it.
-2. **A gateway on that tailnet.** Discovery (R26) considers only `Online`,
-   non-expired, non-sharee peers owned by the same user or tagged
-   (`GatewayCandidates.exclusion`, `app/App/Discovery/GatewayCandidates.swift:64-70`),
-   and accepts one only if `/manifest.json` names "Kiro Crew" and `/api/auth/me`
-   answers 403 with `X-Auth-Required`. A typed gateway passes only if the live
-   split-tunnel rule set covers it (`manualGateway`, `:188-194`). **Fails
-   closed:** an off-tailnet host is refused, because it would load direct and
-   become the origin a pasted token is sent to (M5 review).
-3. **A dashboard token.** `kirocrew token` or the dashboard's QR code. A link
-   is single-use and valid for 300 s (`LINK_WINDOW_SECS`, PLAN §3.3), so it
-   cannot be written into review notes. The durable credential is the 30-day
-   refresh cookie in the web view's data store. It is excluded from backup
-   (R5) and destroyed by sign-out and Reset (R32).
+**This asks for information, not a code change.** Apple wants demo data. The
+camera string and the scanner are fine (`INFOPLIST_KEY_NSCameraUsageDescription`
+in all three configurations; `app/App/Session/TokenEntrySheet.swift`). The
+reviewer saw the QR scanner, or the camera string that describes it, and asked
+for a code to point it at.
 
-### 1.1 What the reviewer of 0.1 actually saw
+**A QR image is not needed.** The same sheet accepts a pasted sign-in URL or a
+bare token (`docs/DEVICE-CHECK.md:123`; `TokenInput.parse`,
+`app/App/Session/TokenInput.swift:55`). So the demo data can be text.
 
-The build number is a UTC timestamp (`testflight.sh`). 202609250336 is
-2026-09-24 20:36 PDT, one minute after `42af25db4` ("F13: with the keyboard
-up…", 20:35:51). **Inferred, not proven:** the archive is gone (`app/build/`
-now holds 202609260029). Built from that commit:
+**But a QR code or token is the *last* thing the reviewer needs, and the easy
+one.** It only works against a dashboard the reviewer can reach, and reaching
+one needs a tailnet identity and a gateway on that tailnet first. The last
+sentence of Apple's message, "any data necessary to use the app's features",
+is the real requirement. §2 walks the chain.
 
-- **F11 was not in it.** The introduction landed later, in `5e78558d4`
-  (2026-09-25 00:33). The reviewer saw the pre-F11 gate: the brand header,
-  "Tailscale Status", a status line and a button labelled `Login`
-  (`StatusView.swift:89` at `42af25db4`). No sentence said what the app is
-  or that it needs the user's own server.
-- **Most likely path:** tap `Login` and sign in with their own Google or Apple
-  ID. Tailscale then creates a new, empty tailnet for them. The node joins it.
-  Discovery finds no candidates and the picker says "No computer on your
-  tailnet could be a gateway…" (`GatewayPickerView.swift:88`). A dead end,
-  and to someone who has not read the notes it looks like a broken app. The
-  alternative is not signing in at all, which is a dead end one screen
-  earlier.
-- **No share extension and no App Group.** Both arrived in `098ef5ff3`
-  (2026-09-24 23:17). Build 0.1 had no entitlements file at all.
+### 1.1 Which build the reviewer has
 
-**So whatever the message says, the structural problem is real.** The usual
-outcome for an app like this is guideline 2.1 (App Completeness): "we were
-unable to review your app… provide a demo account or a fully-featured demo
-mode". That is only the most likely message, not the one received. §8 Q2
-asks for the real text.
+- **202609250336 (the one reviewed).** Built one minute after `42af25db4`
+  (2026-09-24 20:35 PDT; inferred from the UTC build number, the archive is
+  gone). It is **before F11** (`5e78558d4`), so its first screen says only
+  "Tailscale Status" and `Login`, not what the app is. It is also before the
+  share extension (`098ef5ff3`).
+- **202609251549 (newer, already available to test).** 08:49 PDT, just after
+  `009dbbbdd`. It has F11's introduction (`GateIntroduction` present at that
+  commit) and the share extension.
 
-### 1.2 Beta App Review may not be needed at all
+**Replying to the message resumes review of 202609250336**, the build without
+F11. Filling in Beta App Review Information and submitting 202609251549
+instead puts the introduction in front of the reviewer, at the cost of
+starting a new review. That is a choice for Olof (§8 Q2).
 
-`docs/TESTFLIGHT.md` → Testers: **internal testing needs no Beta App Review.**
-Internal testers are members of the App Store Connect team, up to 100. Only a
-build offered to an *external* group (by email or public link) goes to review.
-PLAN §1.3 still lists App Store distribution as a non-goal, and TestFlight
-was added "for the owner's own installs". If external testers are not the
-goal, the rejection has cost nothing, and option 0 is the whole fix. That is
-why §8 Q1 comes first.
+## 2. From a fresh install to a working dashboard: what each step needs
 
-## 2. Two checks that are often the real rejection
+In the order the app goes through it. "Owner" is what Olof has; "Reviewer"
+is what must be supplied for someone with no account on his tailnet.
 
-Both were checked against the project and the latest archive on 2026-09-25.
+| # | Step | Code | Owner has | Reviewer needs | Hard? |
+|---|---|---|---|---|---|
+| 1 | **Tailscale sign-in.** `Sign in to Tailscale` opens Tailscale's login in an `ASWebAuthenticationSession` sheet (`StatusView.swift:116`, `StatusViewModel` / `TSNetModel.browseToURL`) | node at `NeedsLogin` | his identity provider account on his tailnet | **an identity on a tailnet that holds a gateway.** Tailscale has no passwords of its own: sign-in goes through Google, Microsoft, GitHub, Apple, OIDC or a passkey (from memory, not re-checked today). The only non-interactive route, an auth key (`TSNetManager.launchAuthKey`, `:273`), exists only in Testing builds (R15) | **hard** |
+| 2 | **Node approval.** A new node may sit at `NeedsMachineAuth`; the app shows the waiting screen and cannot do anything about it (`DashboardRootView.swift:388`, `:554`) | — | D5's purgatory: an admin approves and moves the address | a tailnet with device approval **off** and no tailnet lock | easy on a tailnet built for this; impossible on Olof's |
+| 3 | **Access to the gateway.** The node needs a grant that reaches the gateway's HTTPS port | — | `kiro-clients` → gateway:443 | a policy that allows it (a fresh tailnet's default allow-all does) | easy on a tailnet built for this |
+| 4 | **Gateway discovery.** Peers filtered to online, not expired, not a sharee, OS linux/macOS/windows, same owner **or tagged** (`GatewayCandidates.exclusion`, `app/App/Discovery/GatewayCandidates.swift:64-72`). Each is probed over HTTPS through the node: `/manifest.json` named "Kiro Crew" **and** `/api/auth/me` answering 403 with `X-Auth-Required` (R26). Fallback: *Enter manually*, which accepts a name only if the live split-tunnel rules carry it, i.e. a peer on this tailnet (`manualGateway`, `:188-194`) | picker | byskebox / chonk / box behind `tailscale serve` | **a running dashboard, reachable on that tailnet, HTTPS with a publicly trusted certificate** (ATS, R28), owned by the reviewer's user or tagged. If it is off when the reviewer looks, the picker says so and nothing else works | **hard: it is a server that must stay up** |
+| 5 | **Dashboard token.** The token sheet opens by itself when the page reports no session. Paste a link or bare token, or scan a QR. A pasted link's host must be the selected gateway (`SessionManager.swift:402`). A bare token avoids that check. The app loads `<gateway>/?token=<token>` (`TokenInput.signInURL`) | sheet | `kirocrew token` (5-minute link) | **a token that is still redeemable whenever the reviewer gets there**, which may be days after submission | **hard with a real KiroCrew; easy with a harness change** (below) |
+| 6 | **Session.** The page keeps itself signed in (R20). Sign-out and Reset destroy it (R32) | page | cookies | nothing more | — |
 
-### 2.1 Export compliance: consistent, not the cause
+**Step 5 in detail, because it is the one Apple named.** Real KiroCrew caps a
+sign-in link at five minutes with a constant, `LINK_WINDOW_SECS = 300`
+(`kiro_crew/dashboard/token_auth.py:704` in the pinned 0.7.1 wheel), and
+consumes it on redemption. A real dashboard therefore cannot give Apple a
+token that works tomorrow, and no QR code can be printed for it. The fake
+gateway that the suites use (`testing/harness/fake_gateway.py`, the real
+0.7.1 frontend byte for byte, D10/R19) caps links at the same 300 s
+(`LINK_WINDOW`, `:204`) but does not consume them. A **demo-token rule** there,
+one fixed link redeemable for weeks, is a small harness change. It ships
+nothing in the app. Any fake token (`fk1.` + 32 characters) passes
+`TokenInput`'s 16-character minimum as a bare token.
+
+**So the hard parts are steps 1 and 4**, a tailnet identity for a stranger
+and a dashboard that stays reachable. Step 5 is hard only as long as the
+dashboard is a real KiroCrew. Steps 2 and 3 are free on a tailnet made for
+review.
+
+## 3. Checks that are often the real rejection
+
+### 3.1 Export compliance: correct, not the cause
 
 - `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO` is set in all three app
-  configurations (Debug, Testing, Release) of the Latchkey target in
-  `project.pbxproj`, and was at `42af25db4` too. The latest archive's
-  `Info.plist` has `ITSAppUsesNonExemptEncryption = false`. The share
-  extension does not carry the key; the app bundle's key is the one App Store
-  Connect reads.
-- **Is NO right for an app that ships Tailscale?** The key means "no
-  encryption, or only encryption exempt from documentation". Latchkey uses
-  plenty: WireGuard, Noise and TLS in TailscaleKit, plus system HTTPS. All of
-  it is standard, published cryptography in mass-market software. The owner
-  answered the App Store Connect questionnaire on 2026-09-24: uses
-  encryption, Category 5 Part 2 exemption, no proprietary algorithms, not
-  distributed in France. App Store Connect concluded **no documentation is
-  required** (`docs/TESTFLIGHT.md` → Export compliance; DECISIONS
-  2026-09-24). NO is the value that matches that answer, so the declaration
-  and the binary agree.
-- **Why it is not the rejection:** a wrong or missing encryption answer shows
-  up as a "Missing Compliance" build status that blocks testing. It is not a
-  Beta App Review rejection. Revisit the answer only if something
-  non-standard or a French release is ever added.
+  configurations at `42af25db4` (the reviewed build) and at `009dbbbdd`
+  (202609251549). The latest local archive's `Info.plist` has it as `false`.
+  The share extension does not carry the key; the app bundle's key is the one
+  that counts.
+- **Right for an app that ships Tailscale?** Yes. The app uses WireGuard,
+  Noise and TLS (TailscaleKit) and system HTTPS, all standard, published
+  cryptography in mass-market software. The owner's 2026-09-24 questionnaire
+  answers were: uses encryption, Category 5 Part 2 exemption, no proprietary
+  algorithms, not distributed in France. App Store Connect concluded no
+  documentation is required (`docs/TESTFLIGHT.md` → Export compliance). `NO`
+  ("none, or only exempt") matches that answer.
+- The rejection is 2.1 Information Needed. An encryption problem shows up as a
+  "Missing Compliance" build status, which this was not.
 
-### 2.2 Claimed capabilities: every claim is used, with one gap for the next upload
+### 3.2 Claimed capabilities: all used, with one gap for the next upload
 
-| Claim | Where | Used by | Verdict |
-|---|---|---|---|
-| `NSCameraUsageDescription` ("only to scan the sign-in QR code") | build settings, all configs | `App/Session/TokenEntrySheet.swift:169-211`, `AVCaptureSession` QR scanner | used, and the string is accurate |
-| `NSLocalNetworkUsageDescription` (direct peer paths) | build settings | tsnet's direct UDP to LAN peers | used. The prompt can appear before the reviewer knows what the app is (a copy question, not a rejection) |
-| App Group `group.net.lixom.latchkey` | `Latchkey.entitlements`, `ShareExtension.entitlements`, since `098ef5ff3` | `ShareInboxStore.swift:178`, `ShareCaptureModel.swift:65` | used by both targets. **Not in 0.1**, so it cannot be 0.1's problem |
-| URL scheme `latchkey` | `Latchkey/Info.plist`, since F3 | `LatchkeyApp.swift:76` `.onOpenURL`, `App/Share/ShareURL.swift` | used |
-| `UIBackgroundModes` | — | — | none claimed, correctly |
-| `UIDeviceFamily` 1, 2 (**iPad**) | `TARGETED_DEVICE_FAMILY = "1,2"` | no suite runs on an iPad; L1 uses `iPhone 17`. PLAN calls iPad "secondary" | **claimed, not tested.** Reviewers often run the app on an iPad. It is not a capability, but it is a promise the build makes and nothing checks (§8 Q7) |
+| Claim | Used by | Verdict |
+|---|---|---|
+| Camera usage string | `TokenEntrySheet.swift` QR scanner | used, and the string is accurate. It is what prompted Apple's question |
+| Local network usage string | tsnet's direct peer paths | used |
+| App Group `group.net.lixom.latchkey` (202609251549 on; not in the reviewed build) | `ShareInboxStore.swift:178`, `ShareCaptureModel.swift:65` | used by both targets |
+| URL scheme `latchkey` | `LatchkeyApp.swift:76` | used |
+| Background modes | — | none claimed |
+| iPad (`TARGETED_DEVICE_FAMILY = "1,2"`) | no suite runs on an iPad | **claimed, untested.** Reviewers often test on iPads (§8 Q6) |
 
-**Found, for the next upload, not 0.1:** `ShareExtension.appex` compiles
-`App/Share/Inbox/ShareInboxStore.swift` (the ShareExtension exception set in
-`project.pbxproj`). That file calls `FileManager.attributesOfItem` for
-`.modificationDate` (`:156`), which is a FileTimestamp required-reason API.
-The extension has **no `PrivacyInfo.xcprivacy`**. The app's manifest
-declares `C617.1`, but its comment lists only `NodeLog.swift`. Whether App
-Store Connect wants an extension's own manifest was not verified. The fault
-would surface as an ITMS-91053 email after upload, not as a review
-rejection. The cheap fix is a manifest in `ShareExtension/` declaring
-`C617.1`, checked by `make tf` the way the other two are. Recorded here
-because this check found it. It belongs in its own commit.
+**Gap:** the share extension compiles `ShareInboxStore.swift`, whose
+`attributesOfItem(...)[.modificationDate]` (`:156`) is a FileTimestamp
+required-reason API. The extension has no `PrivacyInfo.xcprivacy` of its own.
+Whether one is required was not verified. If it is, the result is an
+ITMS-91053 email at upload, not a review rejection. The fix is its own commit.
 
-### 2.3 Other guidelines this app can trip, whatever the fix
+## 4. Non-goals
 
-These are unverified. They are listed so the reviewer's text can be matched
-quickly when it arrives:
+- **Not picking an option.** §5 costs them, and Olof picks.
+- **Not App Store distribution** (PLAN §1.3), unless §8 Q4 says otherwise.
+- **No invariant weakened quietly.** The split tunnel, `allowFailover`, ATS,
+  D1, R3/R41, R15 and R32 are named per option. Changing any of them needs a
+  revision in `../PLAN-REVISIONS.md`.
 
-- **4.2 Minimum Functionality.** A reviewer who gets through sees a web page
-  in a web view. The native half, a private tailnet node with no VPN profile,
-  is invisible unless the notes explain it.
-- **5.2.2 Third-party services.** The app displays content from KiroCrew (an
-  official Kiro project) and signs in through Tailscale. Apple can ask for
-  authorisation to access a third-party service. KiroCrew is self-hosted by
-  the user, which is the answer, but it has to be said.
-- **2.3.1 Hidden features.** This is a constraint on option C, not a current
-  fault. A demo path must not be hidden or dormant.
+## 5. Options
 
-## 3. Non-goals
-
-- **Not deciding.** §4 costs the routes. Olof picks.
-- **Not writing the reply to Apple.** Its wording depends on the message.
-- **Not App Store distribution.** PLAN §1.3 stands unless §8 Q3 changes it.
-  App Store review is stricter than Beta App Review, and a route that passes
-  one may not pass the other. §4 says where that matters.
-- **Not weakening any invariant as a side effect.** The split tunnel,
-  `allowFailover = false`, ATS without exceptions, D1, R3/R41's single
-  destination, R15's test-hooks-only-in-Testing rule, and R32's sign-out and
-  Reset semantics are listed per option below. An option that would change
-  one says so and needs a revision in `../PLAN-REVISIONS.md`. It never
-  changes one quietly.
-
-## 4. Options
-
-Summary first, detail after. "Reviewer sees" means what they can reach in the
-app, not what the notes say.
-
-| | Reviewer sees | Build cost | Upkeep | Ships in the product | Invariant conflict |
+| | Reviewer reaches | Must be stood up | Ships in the app | Conflicts | Actionable tonight? |
 |---|---|---|---|---|---|
-| **0. Internal testers only** | nothing; no review | none | none | nothing | none |
-| **A. Notes only** (+ video) | the gate and F11's intro; a dead end after sign-in | an hour of writing | re-check per submission | nothing | none |
-| **B1. Review tailnet, reviewer signs in with a given SSO identity** | the whole real app against a demo gateway | 1–2 days | a host that stays up; the SSO login is the fragile part | nothing | none |
-| **B2. Review tailnet, reviewer pastes an auth key** | the whole real app | B1 plus a new login path | rotate the key ≤ 90 days | an auth-key login in Release | **R15** (promotes a test hook) |
-| **C1. In-app demo, no network** | the chrome (gate, picker, app bar, Settings) around a canned page | 2–4 days | follows every UI change | a permanent, visible demo entry | R15 in spirit; KiroCrew bundle licence if the real frontend ships |
-| **C2. In-app demo against a public demo gateway** | the real frontend over the internet, not the tailnet | C1 plus a public host | a public service to run | a path that loads an off-tailnet origin | **R3/R41, the manual-entry gate**; split tunnel in spirit |
+| **0. Internal testers only** | nothing; no review | nothing | nothing | none | **yes** |
+| **A. Explain, no demo** | the gate; a dead end after sign-in | nothing | nothing | none | **yes**, but it does not give Apple what it asked for |
+| **B. Review tailnet + demo gateway** | everything, steps 1–6 | a tailnet, an always-on host, a demo-token rule in the fake gateway, a way in for step 1 | nothing (B-account, B-invite); an auth-key login (B-key) | none, or R15 for B-key | no: hours of setup first |
+| **C. In-app demo** | the UI around a canned page | a new build | a permanent, visible demo entry | R15 in spirit; R3/R41 if it goes online | no: a code change and a new build |
 
-### 4.0 Option 0 — Do not submit for Beta App Review
+### 5.0 Option 0: do not go through Beta App Review
 
-Use internal testing only. Anyone who should install the app is added as an
-App Store Connect user with a role, and then as an internal tester.
+Internal testing needs no review (`docs/TESTFLIGHT.md` → Testers). Anyone who
+should install the app becomes an App Store Connect user with a role, then an
+internal tester (up to 100). Leave the rejected submission, or reply that the
+build is withdrawn from external testing.
 
-- **Reviewer sees:** nothing; there is no review.
-- **Cost:** none to build. Each tester needs an App Store Connect login and
-  can see the team's App Store Connect (with a limited role). Up to 100 people.
-- **Product risk:** none.
-- **Conflicts:** none. It is the reading of PLAN §1.3 as written.
-- **Unknown:** whether a build rejected for external testing can still go to
-  internal testers. Believed yes (internal groups never needed the review);
-  check the build's page in App Store Connect before relying on it.
-- **Stops working if:** Olof wants a public link, testers outside his App
-  Store Connect team, or the App Store.
+- To stand up: nothing.
+- Stops working if Olof wants a public link, testers outside his App Store
+  Connect team, or the App Store.
+- Unknown: whether a build stopped in Beta App Review stays installable for
+  internal groups. It is believed so, but check the build's page first.
 
-### 4.1 Option A — Reviewer notes alone
+### 5.1 Option A: explain why no demo data can exist
 
-Fill in App Review Information (Beta App Review Information → Review Notes).
-Say that Latchkey is a client for a server the user runs themselves, that it
-cannot reach anything without that server, what the app does once connected,
-and why no demo account can exist: the dashboard's links are single-use and
-last five minutes, and the tailnet is private. Optionally attach or link a
-screen recording of the full flow on the owner's phone. Whether Beta App
-Review takes attachments, as App Store review does, was not verified.
+Tell Apple the app is a client for a server the user hosts on their own
+private network, and that no shareable QR code or token exists because each
+one is minted by the user's own server and expires in five minutes. Attach or
+link a screen recording of the full flow. Whether Beta App Review takes
+attachments was not verified; a link to an unlisted video works either way.
 
-- **Reviewer sees:** from the next build, F11's introduction, which now says
-  what the app is and what it needs (0.1 lacked even that, §1.1). After
-  sign-in, the same dead end.
-- **Build cost:** writing the notes and recording a video. The recording must
-  not show the owner's real tailnet names, node names or sessions (D5's
-  policy names, gateway hosts). Use a demo tailnet, or blur it.
-- **Upkeep:** keep the notes true as the app changes, and re-record when the
-  UI changes enough to mislead.
-- **Product risk:** none. Nothing ships.
-- **Conflicts:** none.
-- **Honest odds:** the lowest of the non-zero options. 2.1 asks for "a demo
-  account or a fully-featured demo mode", and reviewers routinely reject
-  client apps for self-hosted servers until they get one. It is cheap enough
-  to try first, but plan for a second rejection. Worse for App Store review
-  than for beta review.
+- To stand up: a recording made on a **demo** tailnet, or blurred. It must
+  not show D5's policy names, Olof's gateway hosts or real sessions.
+- Honest odds: low. Apple asked for demo data, and this says there is none.
+  2.1 exists precisely to reject that. It fits better as the covering
+  explanation for B than on its own.
 
-### 4.2 Option B — A dedicated review tailnet with a demo gateway
+### 5.2 Option B: a review tailnet with a demo gateway
 
-A separate tailnet that belongs to a throwaway identity and holds nothing of
-the owner's. It has one always-on node serving a demo dashboard over HTTPS
-with a valid certificate. The reviewer's Latchkey joins it, discovers the
-gateway, and opens it. **The shipped app is unchanged in B1.** That is this
-route's defining property.
+A separate tailnet that holds nothing of Olof's, with one node serving a demo
+dashboard. The shipped app is unchanged (except in B-key). Steps 2 and 3 are
+set up once. Step 4 is the host. Step 5 is the demo token. Step 1 has three
+variants.
 
-**The demo gateway.** A real KiroCrew instance is the wrong thing to hand a
-stranger: it runs Claude sessions on a machine, spends tokens and executes
-tools. The better candidate is `testing/harness/fake_gateway.py`. It already
-serves KiroCrew's real 0.7.1 frontend byte for byte and emulates the whole
-auth contract (D10, R19). It would need:
+**Common to all B variants, to stand up:**
 
-- a **long-lived demo token**, redeemable more than once, or re-minted
-  per visit (the fake invents its own credentials, so this is its own
-  rule, not KiroCrew's);
-- **canned content** worth looking at. The fake is built to exercise auth,
-  not to look lived-in, so this is real work;
-- **HTTPS with a publicly trusted certificate** (ATS, R28). The easiest is
-  `tailscale serve` on a small host on the review tailnet (MagicDNS and HTTPS
-  enabled there). It could instead be a tsnet listener with `ListenTLS`. The
-  owner's machines are on his tailnet, so the host is a separate VM or
-  container, or a tsnet process on chonk that joins the second tailnet;
-- node key expiry **disabled** on that host, so it does not lapse between
-  submissions (D8 applies to the phone, not to this).
+1. **The review tailnet.** A new Tailscale account under a throwaway identity
+   (`<REVIEW_TAILNET_OWNER>`). MagicDNS and HTTPS certificates on. Device
+   approval off. No tailnet lock. The default allow-all policy.
+2. **The gateway host.** A small always-on Linux VM or container on that
+   tailnet, **tagged** (e.g. `tag:demo`) so discovery accepts it whoever the
+   reviewer signs in as (`GatewayCandidates.swift:70`). Key expiry disabled.
+   Its MagicDNS name is `<GATEWAY_HOST>`, e.g.
+   `demo.<tailnet>.ts.net`.
+3. **The demo dashboard.** `fake_gateway.py` behind `tailscale serve` on 443
+   (a publicly trusted `ts.net` certificate, as ATS requires). It needs:
+   - a `--demo-token <DEMO_TOKEN>` rule, redeemable repeatedly until a date;
+   - its `allowed_hosts` set to `<GATEWAY_HOST>`;
+   - optionally some canned sessions. The fake answers auth, slots, folders
+     and chat, so the reviewer sees the real KiroCrew shell with little in it.
 
-Discovery's same-user rule passes if the gateway is tagged or owned by the
-same user the reviewer signs in as (`GatewayCandidates.swift:70`). The review
-tailnet needs no device approval and no tailnet lock, so the reviewer's node
-works on first sign-in. That is the opposite of D5's purgatory, and correct
-only because this tailnet holds nothing.
+   A real KiroCrew instance is **not** an alternative. Its 300 s link window
+   is a constant (§2), and it would run Claude sessions and tools for a
+   stranger.
+4. **Before each submission,** check from any node on the review tailnet that
+   `https://<GATEWAY_HOST>/manifest.json` names "Kiro Crew", that
+   `/api/auth/me` answers 403 with `X-Auth-Required`, and that the demo token
+   redeems. `testing/harness/gateway_check.py` is the model.
+5. **Redistribution:** this serves KiroCrew's frontend to Apple. Check the
+   wheel's licence (§8 Q5).
 
-**B1: the reviewer signs in with an identity given in App Review Information.**
-This is the fragile part. Tailscale sign-in goes through an identity
-provider, and the big ones challenge a login from a new device in a new
-place: Google and Microsoft with verification prompts, GitHub with an
-emailed device code, Apple ID with mandatory two-factor. A reviewer in
-Cupertino cannot answer a code sent to Olof's phone. Ways around it, each
-with its own cost:
+**Step 1 variants:**
 
-- a Google or GitHub account made for this, with the challenge contact
-  pointed at a mailbox Olof watches, and being on hand during the review
-  window. Brittle, and a known cause of repeat rejections;
-- a **custom OIDC provider** for the review tailnet (username and password,
-  no 2FA). It needs a domain Olof controls, WebFinger, and an IdP to run.
-  The most robust login, and the most to maintain.
+- **B-account: give Apple an identity.** A Google or GitHub account made for
+  review, `<REVIEW_LOGIN>` / `<REVIEW_PASSWORD>`, that is a **member** (not the
+  admin) of the review tailnet. The risk is the identity provider's
+  new-location challenge (a code to a phone or mailbox Apple does not have).
+  Point the recovery contact at a mailbox Olof watches, turn off every
+  optional second factor the provider allows, and be available during the
+  review window. This is the most common cause of a second 2.1. A custom OIDC
+  provider with a plain username and password avoids the challenge, but
+  needs a domain, WebFinger and an identity provider to run.
+- **B-invite: the reviewer uses their own identity.** An invite link to the
+  review tailnet, `<INVITE_LINK>`, which the reviewer accepts with any
+  account. Then they sign in to Latchkey with that account and pick the
+  review tailnet. Nothing secret is handed over. **Unverified:** that
+  Tailscale's invite links allow any identity provider on this plan, how many
+  times one can be used, and how long it lives. Check before relying on it.
+- **B-key: the reviewer pastes an auth key.** A reusable, pre-approved,
+  tagged auth key, `<AUTH_KEY>`. This needs a **new build** with a
+  user-visible "join with an auth key" path in Release: today it exists only
+  under `LATCHKEY_TEST_HOOKS` (R15). Keys last at most 90 days. The key must
+  never be persisted or logged (R2's rule). The key is also an attack
+  surface: a user talked into joining someone else's tailnet hands that
+  tailnet's "gateway" whatever token they paste next. Of the step-1 variants,
+  it is the most reliable login for Apple and the most expensive for the
+  product.
 
-Both give Apple a credential. It must reach nothing but the review tailnet.
-Make the reviewer's identity a **member**, not the tailnet's admin, so the
-credential does not open the admin console.
+Invariants: B-account and B-invite conflict with nothing. D1 holds, since the
+reviewer's logs stay on the reviewer's device. R32 is exercised as designed.
+B-key conflicts with R15.
 
-**B2: the reviewer pastes a tailnet auth key.** This skips the identity
-provider entirely. A reusable, pre-approved auth key goes in the notes, and
-the app joins with it. The app can already log in with an auth key
-(`TSNetManager.launchAuthKey`, `TSNet/TSNetManager.swift:273`), but only under
-`LATCHKEY_TEST_HOOKS` (R15). B2 means a **user-visible "join with an auth
-key" path in Release**: new UI, a new login route to test, and an R15
-revision. Auth keys last at most 90 days, so each submission needs a fresh
-one. The attack surface is modest but real. A user can be talked into
-joining someone else's tailnet, whose "gateway" then receives the dashboard
-token they paste. The manual-entry gate does not help, because the attacker's
-host *is* on the tailnet the app just joined.
+Upkeep: the host is up during every review window. Remove the expired review
+nodes from time to time (Reset logs them out, R32). Renew the demo token
+before its date, and the auth key before 90 days.
 
-- **Reviewer sees:** everything. Gate, sign-in, discovery finding a gateway,
-  the token sheet (a demo token in the notes), the real frontend, the app bar,
-  Settings, sign-out and Reset.
-- **Build cost:** B1 is 1–2 days (host, tailnet, fake-gateway changes,
-  canned content, notes), plus the OIDC provider if chosen. B2 is B1 plus
-  about a day of app work, with tests.
-- **Upkeep:** the host must be up whenever a build is in review. Rejections
-  often come from "server unreachable". Each review sign-in leaves a node on
-  the review tailnet; Reset logs it out (R32), but expired nodes pile up
-  until they are removed. The fake gateway's pinned bundle (0.7.1) ages;
-  that is fine for review, since it is what is shown, not what is tested.
-- **Product risk:** B1 ships nothing. B2 ships the auth-key path.
-- **Conflicts:** B1 none. D1 is untouched (the reviewer's logs stay on the
-  reviewer's device). R32 works as designed and even gets exercised. B2
-  conflicts with R15.
-- **Open:** redistribution. The demo gateway serves KiroCrew's frontend to
-  Apple. The harness downloads it for local tests, and serving it to a third
-  party is a different act. Check the KiroCrew wheel's licence (§8 Q6).
+### 5.3 Option C: a demo mode in the app
 
-### 4.3 Option C — A demo mode inside the app
+A visible "look around without a server" entry on the gate. It must be
+visible to every user (guideline 2.3.1 forbids hidden features), and it
+needs a new build. It answers "Information Needed" with an app change, which
+is the opposite of what was asked. Its costs were set out in the first
+version of this spec and are unchanged:
 
-A visible entry on the gate ("Look around without a server", or similar)
-that runs the real UI against something that is not the owner's tailnet.
-Guideline 2.3.1 rules out a hidden or reviewer-only switch, so **every owner
-sees this entry, on the one screen F11 just made careful**, and keeps seeing
-it. The learned rule about permanent UI costs applies: weigh what it costs
-the screen when it is always there.
+- a permanent entry on the gate;
+- a separate, non-persistent data store so R32 still holds;
+- no `latchkey://` route into it;
+- effectively R11's fixture shipped in Release (R15);
+- if it loads a public demo gateway, a hole through R3/R41 and the
+  manual-entry gate.
 
-**C1: no network.** The demo loads a canned page from inside the app, through
-a `WKURLSchemeHandler` or a bundled file. That keeps the tailnet node,
-discovery and the network out of it entirely.
+No paste text is given for it, because it cannot be answered tonight.
 
-- Reviewer sees: the gate, a faked picker, the app bar, Settings and a page.
-  The page is either Latchkey's own mock-up (honest, but it shows a
-  dashboard that is not KiroCrew's) or **KiroCrew's real bundle shipped
-  inside the app**. The second is a licence question (§8 Q6), goes stale with
-  every KiroCrew release, and feeds 4.2 ("a bundled web page").
-- Cost: 2–4 days, plus a lasting tax. Every change to the gate, picker, app
-  bar or Settings has to keep the demo working, with its own L1 tests.
-- **Attack surface:** a code path in Release where the app shows a gateway
-  UI without a gateway. It must be impossible to reach from outside. The
-  `latchkey://` scheme exists (`LatchkeyApp.swift:76`), so no URL may enter
-  demo mode. The demo's web view gets a **separate, non-persistent**
-  `WKWebsiteDataStore`, so it can never read or write a workspace's
-  cookies. That keeps R32's "sign-out and Reset destroy the session" true,
-  and R5's backup exclusion irrelevant. It is effectively R11's status
-  fixture promoted to Release, which R15 exists to prevent. That needs a
-  revision, or a demo built separately from the fixture so the fixture
-  stays test-only.
+## 6. What to paste
 
-**C2: against a public demo gateway.** The demo loads a real (fake-backed)
-dashboard hosted on the public internet.
+Fields are App Store Connect → TestFlight → **Test Information** → *Beta App
+Review Information* (contact details, **Sign-in required** with user name and
+password, **Review Notes**), and a **reply** to the message in App Review.
+Placeholders in `<ANGLE_BRACKETS>` are things only Olof can supply. Each
+option says what must be true first.
 
-- Reviewer sees: the real frontend, live, without any tailnet.
-- **Conflicts, the most of any option.** The app would load an off-tailnet
-  origin, the exact thing `manualGateway` fails closed on, because an
-  off-tailnet origin is where a pasted token would be sent. It crosses R3's
-  main-frame lock and R41's single destination, which are now scoped to one
-  hard-coded extra origin. The split tunnel is untouched in mechanism (the
-  host just loads direct), but "only tailnet gateways" stops being true of
-  the product. If anything ever lets the demo origin be configured, or lets
-  the token sheet appear against it, it becomes a phishing primitive.
-- Cost: C1's app work, plus a public host that must stay up and be hardened.
-  It is internet-facing, unlike B's.
+### 6.0 Option 0
 
-### 4.4 Combinations
+**Must be true:** nobody outside the App Store Connect team needs the build.
 
-Listed without a pick:
+*Beta App Review Information:* leave as is.
 
-- **0 now, and A or B only if external testers are wanted.** Zero cost until
-  the question is real.
-- **A with the F11 build, then B1 if it is rejected again.** Try the cheap
-  route first, and keep B's cost for when the message proves it is needed.
-  The downside is a second review cycle, about a day each.
-- **B1 + A.** The notes explain what the app is (for 4.2 and 5.2.2), and B1
-  gives the reviewer something to reach. This is the combination most likely
-  to pass both beta and App Store review without shipping anything.
-- **C1 + A.** Self-contained. There is no host to keep up, but it ships a
-  permanent demo entry and carries C1's attack-surface and R15 costs.
-- Whatever is chosen, **the next submission should be a build with F11 in
-  it.** 0.1's gate did not say what the app is, and that alone invites 2.1.
+*Reply:*
 
-## 5. State and migration
+> Thank you. We are withdrawing this build from external testing and will
+> distribute it to internal testers only for now. No further review is needed
+> at this time.
 
-- **0, A:** nothing.
-- **B1:** nothing in the app. State lives outside it: the review tailnet, its
-  identity or OIDC provider, the host and the demo token. These need a
-  runbook entry in `docs/TESTFLIGHT.md` (what to check is up before
-  submitting).
-- **B2:** an auth-key login writes the same node state as an interactive
-  login. There is no new persisted value, but the entry UI must not persist
-  the key (the same rule as R2 for sign-in URLs).
-- **C:** the demo must persist nothing. It gets its own non-persistent data
-  store, no workspace record and no `hasEverConnected` write (F11 §5). If a
-  demo flag were ever persisted, a later real sign-in must not inherit it.
+### 6.1 Option A
 
-## 6. End-to-end tests
+**Must be true:** a recording exists at `<VIDEO_URL>`, made on a demo tailnet
+or blurred.
 
-Per option. Each must be shown able to fail, per the README.
+*Sign-in required:* unchecked.
+
+*Review Notes:*
+
+> Latchkey is a client for Kiro Crew, a dashboard that each user runs on
+> their own computer and keeps on their own private Tailscale network. It is
+> never on the public internet. Latchkey carries its own Tailscale
+> connection (no VPN profile is installed) and opens that one dashboard.
+>
+> The QR code the app can scan is a single-use sign-in link. The user's own
+> dashboard shows it, and it expires after five minutes. Because it is minted
+> per user by their own server, there is no QR code or AR marker we can
+> provide that would work later. Pasting the same link as text works the same
+> way.
+>
+> A recording of the complete flow, from Tailscale sign-in to the dashboard, is
+> here: <VIDEO_URL>
+
+*Reply:*
+
+> Thank you for the review. Latchkey does not use AR markers, and its QR
+> code is a sign-in link that each user's own server generates and that
+> expires after five minutes, so there is no fixed code we can supply. The
+> app connects to a dashboard the user runs on their own private network. We
+> have added an explanation and a recording of the full flow to the Beta App
+> Review Information: <VIDEO_URL>. We are happy to provide anything else that
+> helps.
+
+### 6.2 Option B (fill in the variant's lines)
+
+**Must be true, all variants:** the review tailnet exists with approval off.
+`<GATEWAY_HOST>` is up, tagged, serving HTTPS on 443, and passes the §5.2
+check. `<DEMO_TOKEN>` redeems there and stays valid until at least
+`<TOKEN_VALID_UNTIL>`. The fake gateway needs its demo-token rule before this
+can be true.
+
+*Sign-in required:* **checked** for B-account with `<REVIEW_LOGIN>` /
+`<REVIEW_PASSWORD>`; unchecked for B-invite and B-key (put the data in the
+notes).
+
+*Review Notes:*
+
+> Latchkey is a client for Kiro Crew, a dashboard that each user runs on
+> their own computer on their own private Tailscale network. We have set up a
+> demo network and a demo dashboard for review. No QR code is needed: the
+> sign-in code can be pasted as text.
+>
+> 1. Open Latchkey and tap "Sign in to Tailscale".
+>    [B-account] Choose "Sign in with <PROVIDER>" and use the demo account
+>    in the Sign-in fields: <REVIEW_LOGIN> / <REVIEW_PASSWORD>.
+>    [B-invite] First open this invite in Safari and accept it with any
+>    account: <INVITE_LINK>. Then sign in to Latchkey with that same
+>    account and choose the network "<REVIEW_TAILNET_NAME>".
+>    [B-key] Tap "Join with an auth key" and paste: <AUTH_KEY>
+> 2. Latchkey searches the network and lists the demo dashboard,
+>    <GATEWAY_HOST>. Tap it. (If it is not listed, tap "Enter manually" and
+>    type <GATEWAY_HOST>.)
+> 3. A "Sign in" sheet opens. Tap Paste after copying this code, or type it:
+>    <DEMO_TOKEN>
+>    (The app can also scan it as a QR code, but pasting is the same.)
+> 4. The dashboard opens. Settings (pull down at the top) shows the
+>    connection. "Sign out" and "Reset app" there end the demo session.
+>
+> The demo dashboard is available until <TOKEN_VALID_UNTIL>. Contact
+> <CONTACT_EMAIL> / <CONTACT_PHONE> if anything is unreachable.
+
+Step 4 describes F15's app bar, which is absent until a scroll up at the top
+of the page summons it. Both builds have F15 (`3fe4e1196`, before either);
+check the gesture on the build under review before pasting.
+
+*Reply:*
+
+> Thank you. Latchkey does not use AR markers, and its QR code is a
+> sign-in code that can also be pasted as text. The app needs a dashboard on
+> a private Tailscale network, so we have set up a demo network and demo
+> dashboard for review. The full steps, the demo sign-in and the demo code
+> are now in the Beta App Review Information. In short: sign in to Tailscale
+> with <REVIEW_LOGIN | the invite link | the auth key>, select
+> <GATEWAY_HOST>, and paste the code <DEMO_TOKEN> in the Sign in sheet.
+> The demo is available until <TOKEN_VALID_UNTIL>.
+
+## 7. End-to-end tests and acceptance
 
 | Option | Test | Suite | Asserts | Shown to fail by |
 |---|---|---|---|---|
-| B1/B2 | review gateway check | owner-run, on the lines of `testing/harness/gateway_check.py`, from a node on the review tailnet | the demo host answers the R26 recognition pair (manifest "Kiro Crew" + 403/`X-Auth-Required`) over HTTPS with a publicly trusted certificate, and the demo token redeems | stopping the host; a self-signed certificate |
-| B2 | auth-key join | L2 | a pasted key joins the fake control plane; the key reaches no log and no file in the container (the existing login-link check extended) | writing the key to the node log |
-| C | demo is sealed | L1 | the demo creates no workspace, no node state dir, no cookie in the default data store; `latchkey://` URLs cannot enter it | using the default data store for the demo |
-| C2 | demo origin only | L1 | the demo web view reaches the demo origin and nothing else, and the token sheet cannot appear against it | allowing the token sheet in demo mode |
-| all | submission check | App Store Connect | the build's Beta App Review status is Approved | — (Apple's verdict is the instrument) |
+| B | review gateway check | owner-run, from a node on the review tailnet | R26's recognition pair over HTTPS with a trusted certificate; `<DEMO_TOKEN>` redeems twice | stopping the host; a self-signed certificate; an expired token |
+| B | demo-token rule | host test of `fake_gateway.py` | the demo token redeems repeatedly until its date and not after; ordinary links keep the 300 s window | removing the date check |
+| B-key | auth-key join | L2 | a pasted key joins the fake control plane and reaches no log or file | writing the key to the node log |
+| C | demo sealed | L1 | no workspace, node state or default-store cookie; `latchkey://` cannot enter it | the default data store |
 
-## 7. Acceptance criteria
-
-1. The chosen route's build is approved for external TestFlight testing.
-   Instrument: the build's status in App Store Connect. For option 0,
-   internal testers install it with no review.
-2. Nothing in the Release binary loads an off-tailnet origin, or holds a login
-   path outside Testing, unless a revision in `../PLAN-REVISIONS.md` says it
-   may. Instrument: the §6 tests of the chosen option, and
-   `strings`/`nm` on the Release binary for the demo or auth-key symbols
-   where they must be absent.
-3. For B: the review host passes the §6 check within an hour before each
-   submission.
+Acceptance: the chosen build's Beta App Review status is **Approved** (App
+Store Connect). For 0, internal testers install it. Nothing in Release loads
+an off-tailnet origin, or holds a login path outside Testing, without a
+revision saying so.
 
 ## 8. Open questions and owner actions
 
 Most design-changing first.
 
-1. **Do you want external testers at all, and who?** If everyone who should
-   install it can be an internal tester (an App Store Connect user), there
-   is no Beta App Review and option 0 is the whole answer. This one answer
-   removes or keeps everything else in this spec.
-2. **The reviewer's message, verbatim.** The guideline number decides the
-   route: 2.1 (cannot review) points to A/B/C; 4.2 or 5.2.2 point to notes
-   and framing; a crash or iPad layout issue points to a bug fix and none of
-   §4.
-3. **Is the App Store itself on the horizon, or only TestFlight?** PLAN §1.3
-   says not. If it is, B1 (or C) becomes close to mandatory, and a demo route
-   is worth building once and properly.
-4. **Will you ship any demo or login path in the Release binary?** A "no"
-   rules out B2 and C and leaves 0, A and B1.
-5. **For B1: which identity can you hand Apple?** A dedicated Google or GitHub
-   account (you on hand for its challenges during review), or a custom OIDC
-   provider on a domain you control (robust, more to run). Check Tailscale's
-   current sign-in options first; §1 lists them from memory.
-6. **May KiroCrew's frontend be served to a third party (B), or shipped inside
-   the app (C1)?** It needs the wheel's licence and, being an official Kiro
-   project, perhaps an ask. If not, the demo page is Latchkey's own mock-up.
-7. **iPad: keep claiming it?** `TARGETED_DEVICE_FAMILY = "1,2"`, and no suite
-   runs on an iPad. Reviewers use iPads. Either test on one, or ship
-   iPhone-only until someone does.
-8. **Where would a review host live**, and are you willing to keep it up for
-   every review window (B), or public (C2)?
+1. **Do you need external testers?** If not, option 0 is the whole answer and
+   nothing needs standing up.
+2. **Reply against 202609250336, or submit 202609251549?** A reply is the
+   fastest route but shows the pre-F11 gate. Submitting 202609251549 shows
+   the introduction and the current UI (the §6.2 steps are written for it),
+   and starts a new review.
+3. **Will you run a review tailnet and an always-on host** for as long as
+   external testing lasts? Without it, only 0 and A remain, and A is unlikely
+   to pass.
+4. **Is the App Store on the horizon?** If yes, B pays for itself twice: App
+   Store review asks the same question more strictly.
+5. **May KiroCrew's frontend be served to Apple?** Check the wheel's licence,
+   or ask, since it is an official Kiro project.
+6. **Keep claiming iPad?** Test on one, or ship iPhone-only.
+7. **For B, which step-1 variant?** B-account (credentials, challenge risk),
+   B-invite (verify Tailscale's invite rules first), or B-key (a new build
+   and an R15 revision).
 
-**Owner actions:**
+**Owner actions tonight:**
 
-- Paste the rejection text from App Store Connect (Q2).
-- Check in App Store Connect whether 202609250336 is still installable by
-  internal testers (§4.0).
-- Separately from this spec: the share extension's missing privacy manifest
-  (§2.2) before the next `make tf` upload.
+- Option 0 or A: paste §6.0 or §6.1. Nothing else is needed.
+- Option B: create the review tailnet and host. The demo-token rule in
+  `fake_gateway.py` has to be built first; it is not yet.
+- Either way: the share extension's privacy manifest (§3.2) before the next
+  `make tf` upload.
 
 ## 9. Log
 
-2026-09-25, opened after the 0.1 rejection. Findings while writing, before
-any decision:
+2026-09-25, opened after the 0.1 rejection. Findings:
 
-- 0.1 predates F11 (`5e78558d4`) and the share extension (`098ef5ff3`),
-  inferred from the build timestamp. §1.1.
-- The encryption declaration is consistent with the owner's answer and with
-  the binary. §2.1.
-- Every claimed capability is used. iPad is claimed and untested. The share
-  extension compiles a FileTimestamp API with no privacy manifest of its
-  own. §2.2.
+- 0.1 predates F11 and the share extension (from the build timestamp).
+- The encryption declaration is consistent. Every claimed capability is used.
+  iPad is claimed and untested. The share extension lacks its own privacy
+  manifest.
+
+2026-09-25 evening, revised against the reviewer's message (2.1 Information
+Needed, "a demo QR code or AR marker"):
+
+- Re-centred on the chain in §2. The QR code is step 5 of 6. The hard steps
+  are the tailnet identity (1) and a reachable dashboard (4).
+- Real KiroCrew's five-minute link window is a constant
+  (`token_auth.py:704`, 0.7.1), so no real dashboard can supply lasting demo
+  data. The fake gateway can, with a demo-token rule.
+- Added B-invite, and paste-ready texts per option (§6). Option C is kept
+  only as a record, since it answers "Information Needed" with a new build.
