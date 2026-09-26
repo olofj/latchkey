@@ -3469,3 +3469,27 @@ done here.
 
 **Evidence:** L1 42/42 in 191 s (budget 240); discovery 15/15, 340 s;
 session 39/39, 1074 s; L2 202 s and lifecycle 172 s, both passing.
+
+## 2026-09-25 — the mid-share sign-out no longer races the page
+
+The "not done" of the entry before. `fake_gateway.py` gains
+`/__app-signed-out`: the app's own requests (`X-Latchkey-Share`,
+`X-Latchkey-Check`) get the signed-out 403 + `X-Auth-Required` until the
+next sign-in link is redeemed, and the page's requests are served.
+`testSignedOutMidShareThenResumed` uses it instead of `__expire` +
+`__revoke`, so Send is the first to find the session gone and the page
+has nothing to notice. Its pick is back on `tapWhenSettled`, and the
+`settled:` parameter is gone. The test now also asserts that Send's
+request was refused as a share denial, and that every refusal in the
+test was the app's (`denials` delta = `app_signed_out_denials` delta).
+
+Margin before, from a traced run of the old test: Send's slot list
+reached the gateway 92 ms before the page's own next request was
+refused (0.35 s in the run the entry before measured). After: none to
+win. With a 10 s wait inserted between the pick and Send, well past the
+page's old ~6 s window, it passed 2 of 2. With the resume broken
+(`preconditionsChanged` listing instead of sending), it fails on "sent
+without another tap".
+
+**Evidence:** the test alone, settled, 8/8 green (50–55 s a run, no
+hang); gateway check 37 steps ok; session 39/39, 1086 s.

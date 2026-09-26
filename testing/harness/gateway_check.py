@@ -419,6 +419,20 @@ def run(port, cport, ca):
     check(s == 403 and "X-Auth-Required" not in h and b"CSRF" in body and st["counters"]["share_denials"] == 1,
           "csrf-deny: %d %r %r" % (s, body, st["counters"]))
 
+    step("F3 /__app-signed-out: the app's requests get 403 + X-Auth-Required, the page's do not, until a sign-in")
+    control(cport, "POST", "/__csrf-deny?on=0")
+    control(cport, "POST", "/__app-signed-out")
+    s1, h1, _, _ = sh.req("GET", "/api/chat/slots", {"X-Latchkey-Share": "item-1"})
+    s2, h2, _, _ = sh.req("GET", "/api/auth/me", {"X-Latchkey-Check": "1"})
+    s3, _, _, _ = sh.req("GET", "/api/auth/me")
+    st = control(cport, "GET", "/__state")
+    check(s1 == 403 and h1.get("X-Auth-Required") == "true" and s2 == 403 and h2.get("X-Auth-Required") == "true"
+          and s3 == 200 and st["counters"]["app_signed_out_denials"] == 2,
+          "app-signed-out: share %d, check %d, page %d, %r" % (s1, s2, s3, st["counters"]))
+    sh.req("GET", "/?token=" + control(cport, "POST", "/__mint?kind=cli")["link"])
+    s, _, _, _ = sh.req("GET", "/api/chat/slots", {"X-Latchkey-Share": "item-1"})
+    check(s == 200, "a redemption ends /__app-signed-out: %d" % s)
+
     step("F3 navigation: GET /chat?sid= is journalled, with whether it carried a prefill")
     sh.req("GET", "/chat?sid=notes&prefill=hi")
     check(control(cport, "GET", "/__state")["navigations"] == [{"sid": "notes", "prefill": True}], "navigations")

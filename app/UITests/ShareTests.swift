@@ -174,32 +174,36 @@ final class ShareTests: XCTestCase {
 
     /// Signed out between the pick and Send: the sign-in sheet says a share
     /// waits, and after sign-in the share goes by itself -- no second tap.
+    ///
+    /// The gateway signs out the app's requests alone (/__app-signed-out),
+    /// so Send is the first to find the session gone. After __expire the
+    /// page found it on its own, about 6 s after the picker listed, and put
+    /// the sign-in sheet over Send: Send had to win that race, by 0.09 to
+    /// 0.35 s, and the settle wait lost it.
     func testSignedOutMidShareThenResumed() async throws {
         let app = try await launchSignedIn()
         defer { app.terminate() }
         share(app, "latchkey://share?url=https://example.com/s")
-        // Not settled: this test races the page. After __expire/__revoke the
-        // page's own next request (about 6 s after the picker lists) finds the
-        // session gone and brings the sign-in sheet up over Send; Send's
-        // request must reach the gateway first. That margin was about 0.35 s,
-        // and the settle wait costs about 0.45 s: settled, it failed 4 of 4,
-        // plain it passed 8 of 8. The row's own tap is checked on the next
-        // line (share-destination-selected), so a lost tap still fails here.
-        try pick(app, "obsidian", settled: false)
-        _ = try await Self.post("\(Self.gatewayControl)/__expire")
-        _ = try await Self.post("\(Self.gatewayControl)/__revoke")
+        try pick(app, "obsidian")
+        let before = try await gatewayState()
+        _ = try await Self.post("\(Self.gatewayControl)/__app-signed-out")
         element(app, "share-send").tap()
         XCTAssertTrue(element(app, "token-sheet").waitForExistence(timeout: 30), "the sign-in sheet")
         let waiting = element(app, "share-waiting-count")
         XCTAssertTrue(waiting.waitForExistence(timeout: 5))
         XCTAssertEqual(waiting.label, "1", "it says one share waits for sign-in")
-        let awaited8 = try await gatewayState()
-        XCTAssertEqual(counter(awaited8, "share_posts"), 0)
+        let refused = try await gatewayState()
+        XCTAssertEqual(counter(refused, "share_posts"), 0)
+        XCTAssertGreaterThan(counter(refused, "share_denials"), counter(before, "share_denials"),
+                             "Send's request was refused as signed out")
         try await signIn(app)
         let awaited9 = try await lastResult(app, timeout: 45)
         XCTAssertEqual(awaited9, "sent:obsidian", "sent without another tap")
-        let awaited10 = try await gatewayState()
-        XCTAssertEqual(counter(awaited10, "share_posts"), 1)
+        let after = try await gatewayState()
+        XCTAssertEqual(counter(after, "share_posts"), 1)
+        XCTAssertEqual(counter(after, "denials") - counter(before, "denials"),
+                       counter(after, "app_signed_out_denials") - counter(before, "app_signed_out_denials"),
+                       "only the app's requests were refused: the page had nothing to notice first")
     }
 
     /// The inbox is on disk: a share the app was killed before sending is
@@ -493,19 +497,13 @@ final class ShareTests: XCTestCase {
         if open.waitForExistence(timeout: 3) { open.tap() }
     }
 
-    /// Waits for the picker's list, then picks `key`. `settled: false` taps
-    /// without waiting for the sheet to settle, for the one test that cannot
-    /// spare the wait (testSignedOutMidShareThenResumed).
-    private func pick(_ app: XCUIApplication, _ key: String, settled: Bool = true,
+    /// Waits for the picker's list, then picks `key`.
+    private func pick(_ app: XCUIApplication, _ key: String,
                       file: StaticString = #filePath, line: UInt = #line) throws {
         let row = element(app, "share-session-\(key)")
         XCTAssertTrue(row.waitForExistence(timeout: 30), "the picker lists \(key)", file: file, line: line)
         // The picker is a sheet; its rows are in the tree from its first frame.
-        if settled {
-            row.tapWhenSettled(in: app, file: file, line: line)
-        } else {
-            row.tap()
-        }
+        row.tapWhenSettled(in: app, file: file, line: line)
         XCTAssertEqual(element(app, "share-destination-selected").label, key, file: file, line: line)
     }
 

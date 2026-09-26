@@ -105,6 +105,12 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
   POST /__upload-limit?bytes=N the upload limit (default 50 MB)
   POST /__csrf-deny?on=1       refuse POST /api/chat and /api/upload/file as
                                a CSRF failure (the 8443 origin case, F1 §4a)
+  POST /__app-signed-out[?on=0]
+                               refuse the app's own requests (X-Latchkey-Share,
+                               X-Latchkey-Check) as a signed-out gateway does,
+                               403 + X-Auth-Required, until the next sign-in
+                               link is redeemed; the page's own requests are
+                               served, so the page cannot notice first
   POST /__slow?slots=S&post=S  hold a share's GET /api/chat/slots for S
                                seconds before answering, and a POST /api/chat
                                for S seconds AFTER it is recorded (the
@@ -374,12 +380,14 @@ class Gateway:
         self.busy = {"plan"}
         self.upload_limit = MAX_UPLOAD
         self.csrf_deny = False
+        self.app_signed_out = False
         self.slow_slots = 0.0
         self.slow_post = 0.0
         self.uploads = {}        # returned path -> bytes
         self.posts = []          # {"slot", "message", "item", "at"}
         self.navigations = []    # {"sid", "prefill"} for GET /chat?...
-        for k in ("slot_lists", "share_posts", "share_uploads", "upload_bytes", "share_denials"):
+        for k in ("slot_lists", "share_posts", "share_uploads", "upload_bytes", "share_denials",
+                  "app_signed_out_denials"):
             self.counters[k] = 0
 
     def count(self, name):
@@ -424,6 +432,7 @@ class Gateway:
             access = self._new_session(boot, chain, exp, self.gen)
             rt = self._new_refresh(boot, chain, self.gen)
             self.counters["redemptions"] += 1
+            self.app_signed_out = False     # signing in again ends /__app-signed-out
             return (access, rt, exp), None
 
     def check_access(self, access):
@@ -773,6 +782,12 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         # 3. Exempt paths: no credential is looked at, and none is redeemed.
         if self.exempt(path):
             return self.route(path, None, None, cookies, port, [])
+        # /__app-signed-out: the app's own requests find the session gone
+        # while the page's are served, so the page cannot notice first.
+        if self.gw.app_signed_out and (self.headers.get("X-Latchkey-Share")
+                                       or self.headers.get("X-Latchkey-Check")):
+            self.gw.count("app_signed_out_denials")
+            return self.deny(path, "token expired")
         # 4. The query token first; the cookie only as a fallback.
         access = cookies.get("mc_token_%s" % port)
         link = (query.get("token") or [None])[0]
@@ -1054,6 +1069,10 @@ class Control(BaseHTTPRequestHandler):
         if u.path == "/__csrf-deny":
             with self.gw.lock:
                 self.gw.csrf_deny = num("on") != 0
+            return self.reply({"ok": True})
+        if u.path == "/__app-signed-out":
+            with self.gw.lock:
+                self.gw.app_signed_out = num("on", 1) != 0
             return self.reply({"ok": True})
         if u.path == "/__slow":
             with self.gw.lock:
