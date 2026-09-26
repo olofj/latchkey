@@ -79,15 +79,9 @@ final class OfflineHarnessTests: XCTestCase {
     /// traffic went through the proxy rather than reaching the server some
     /// other way.
     func testDashboardLoadsThroughTheProxy() async throws {
-        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix,
-                         peers: ["dash"])
-        defer { app.terminate() }
-
-        let report = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 30) {
-            $0["ws"] as? String == "ws:open"
-                && ($0["echo"] as? String)?.hasPrefix("echo:") == true
-                && Self.sseTick($0) != nil
-        }
+        let run = try await defaultPageRun()
+        let report = run.live
+        XCTAssertTrue(run.liveMatched, "the WebSocket echoed and an SSE tick arrived within 30 s; last: \(report)")
         XCTAssertEqual(report["title"] as? String, "FAKE DASHBOARD")
         XCTAssertEqual(report["echo"] as? String, "echo:echo:ping", "the WebSocket echoes through TLS through SOCKS5")
         // F5 §6: the gated chip-row style reached the real DOM on the
@@ -95,14 +89,59 @@ final class OfflineHarnessTests: XCTestCase {
         XCTAssertEqual(report["chip_style"] as? Bool, true, "the app's chip-row <style> is in the gateway's page")
 
         let first = try XCTUnwrap(Self.sseTick(report), "an SSE tick has arrived")
-        let later = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 10) {
-            (Self.sseTick($0) ?? -1) > first
-        }
-        XCTAssertGreaterThan(Self.sseTick(later) ?? -1, first, "the SSE stream advances")
+        XCTAssertGreaterThan(Self.sseTick(run.later) ?? -1, first, "the SSE stream advances")
 
-        let connects = try await journalConnects()
+        let connects = run.connects
         XCTAssertTrue(connects.contains { $0.host == "dash.tail-scale.ts.net" && $0.port == 443 },
                       "the proxy journal must show the CONNECT; got \(connects)")
+    }
+
+    /// One default launch (the fake dashboard's own page, through the
+    /// proxy), read at the first report and again once the page is live.
+    /// `testAFastLoadDoesNotLeaveTheConnectingStateOnScreen` launched the same
+    /// way and only read the screen at the first report, so one launch
+    /// serves both (F14), and each asserts its own claim under its own name.
+    /// Cached only if the page reported at all; a test run on its own takes
+    /// its own.
+    private struct DefaultPageRun {
+        let reported: Bool
+        let connectingShown: Bool       // page-connecting on screen at the first report
+        let errorShown: Bool
+        let shownCount: String
+        let live: [String: Any]         // WebSocket echoed and an SSE tick in
+        let liveMatched: Bool
+        let later: [String: Any]        // a later SSE tick, or the last report
+        let connects: [Connect]
+    }
+
+    private static var defaultPage: DefaultPageRun?
+
+    private func defaultPageRun() async throws -> DefaultPageRun {
+        if let run = Self.defaultPage { return run }
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        defer { app.terminate() }
+        let host = "dash.\(Self.tailnetSuffix)"
+        // Server-side proof the page is up, rather than a sleep; the screen is
+        // read the moment it is.
+        let (_, reported) = try await pollReport(host: host, timeout: 40) { _ in true }
+        let connectingShown = element(app, "page-connecting").exists
+        let errorShown = element(app, "nav-error-overlay").exists
+        let shownCount = element(app, "page-connecting-shown-count").label
+
+        let (live, liveMatched) = try await pollReport(host: host, timeout: 30) {
+            $0["ws"] as? String == "ws:open"
+                && ($0["echo"] as? String)?.hasPrefix("echo:") == true
+                && Self.sseTick($0) != nil
+        }
+        var later = live
+        if liveMatched, let first = Self.sseTick(live) {
+            (later, _) = try await pollReport(host: host, timeout: 10) { (Self.sseTick($0) ?? -1) > first }
+        }
+        let run = DefaultPageRun(reported: reported, connectingShown: connectingShown, errorShown: errorShown,
+                                 shownCount: shownCount, live: live, liveMatched: liveMatched, later: later,
+                                 connects: try await journalConnects())
+        if reported { Self.defaultPage = run }
+        return run
     }
 
     // MARK: - R10 / R11: the anti-leak pair
@@ -309,14 +348,11 @@ final class OfflineHarnessTests: XCTestCase {
     /// A healthy load must not leave the connecting block on screen — and must
     /// not flash it either, which a poll cannot see but the counter can.
     func testAFastLoadDoesNotLeaveTheConnectingStateOnScreen() async throws {
-        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
-        defer { app.terminate() }
-        // Server-side proof the page is up, rather than a sleep.
-        _ = try await waitForReport(host: "dash.\(Self.tailnetSuffix)", timeout: 40) { _ in true }
-        XCTAssertFalse(element(app, "page-connecting").exists,
-                       "the block must be gone the instant the page commits")
-        XCTAssertFalse(element(app, "nav-error-overlay").exists, "and no error page")
-        let shown = element(app, "page-connecting-shown-count").label
+        let run = try await defaultPageRun()
+        XCTAssertTrue(run.reported, "the page reported within 40 s")
+        XCTAssertFalse(run.connectingShown, "the block must be gone the instant the page commits")
+        XCTAssertFalse(run.errorShown, "and no error page")
+        let shown = run.shownCount
         XCTAssertTrue(shown == "connecting-shown:0" || shown == "connecting-shown:1",
                       "a loopback load is under the 300 ms show delay, so it appears at most once: \(shown)")
     }
@@ -595,6 +631,9 @@ final class OfflineHarnessTests: XCTestCase {
         let report: [String: Any]
         let state: [String: Any]
         let connects: [Connect]
+        /// The first report, at or after the settle, in which the gateway's
+        /// own machinery had all reported; the last one seen if none did.
+        var machinery: [String: Any] = [:]
         var requests: [String: Int] { state["requests"] as? [String: Int] ?? [:] }
         var handshakes: [String: Int] { state["handshakes"] as? [String: Int] ?? [:] }
         var paths: [String] { state["paths"] as? [String] ?? [] }
@@ -611,19 +650,36 @@ final class OfflineHarnessTests: XCTestCase {
     private static var defaultRun: SingleOriginRun?
 
     /// The default F6 run (rule list on, CDNs allowed), taken by the first
-    /// test that needs it and read by the four that only observe it (F14):
+    /// test that needs it and read by the five that only observe it (F14):
     /// they each launched the same way, waited for the same settle and then
     /// only read the instruments, so one launch serves them all, and each
     /// still asserts its own claim under its own name. Not cached unless it
     /// settled, so a failed launch fails only the test that took it, and a
-    /// test run on its own takes its own.
+    /// test run on its own takes its own. The machinery report is waited for
+    /// without failing, so its absence fails only the test that reads it.
     private func settledDefaultRun() async throws -> SingleOriginRun {
         if let run = Self.defaultRun { return run }
         let app = try await launchSingleOrigin()
         defer { app.terminate() }
-        let run = try await observe(try await waitForSingleOriginSettled())
+        var run = try await observe(try await waitForSingleOriginSettled())
+        let deadline = Date().addingTimeInterval(10)
+        run.machinery = run.report
+        while !Self.machineryReported(run.machinery) && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(250))
+            let reports = try await dashboardState()["reports"] as? [String: [String: Any]] ?? [:]
+            run.machinery = reports["dash.tail-scale.ts.net"] ?? run.machinery
+        }
         if Self.isSettled(run.report) { Self.defaultRun = run }
         return run
+    }
+
+    /// The gateway's own machinery has all reported: WebSocket, SSE, data:
+    /// and blob: images, a blob: worker and a srcdoc frame.
+    private static func machineryReported(_ r: [String: Any]) -> Bool {
+        r["page"] as? String == "single" && r["ws"] as? String == "ws:open"
+            && (r["sse"] as? String)?.hasPrefix("sse:tick-") == true
+            && r["data_img"] as? String == "ok" && r["blob_img"] as? String == "ok"
+            && r["blob_worker"] as? String == "ok" && r["srcdoc"] as? String == "ok"
     }
 
     private func handshakes() async throws -> [String: Int] {
@@ -767,14 +823,9 @@ final class OfflineHarnessTests: XCTestCase {
     /// worker cannot exist. The report arriving at all proves same-origin
     /// fetch.
     func testTheGatewaysOwnMachineryStillWorks() async throws {
-        let app = try await launchSingleOrigin()
-        defer { app.terminate() }
-        let report = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 40) {
-            $0["page"] as? String == "single" && $0["ws"] as? String == "ws:open"
-                && ($0["sse"] as? String)?.hasPrefix("sse:tick-") == true
-                && $0["data_img"] as? String == "ok" && $0["blob_img"] as? String == "ok"
-                && $0["blob_worker"] as? String == "ok" && $0["srcdoc"] as? String == "ok"
-        }
+        let report = try await settledDefaultRun().machinery
+        XCTAssertTrue(Self.machineryReported(report),
+                      "the WebSocket, SSE, data:, blob:, the blob: worker and srcdoc all worked; last report: \(report)")
         XCTAssertEqual(report["sw"] as? String, "undefined", "no service workers without app-bound domains")
         XCTAssertEqual(report["sw_reg"] as? String, "unavailable")
         // Recorded, not asserted: a future bundle's use of either is noticed here.
@@ -1419,15 +1470,47 @@ final class OfflineHarnessTests: XCTestCase {
     /// Shown to fail by reverting ConnectionGateView to the pre-F11 gate: no
     /// `gate-intro`, and the button reads "Login".
     func testAFirstLaunchExplainsItself() throws {
+        let run = gateRun()
+        XCTAssertTrue(run.buttonShown, "the gate's sign-in button is shown")
+        XCTAssertTrue(run.introShown, "a first launch shows the introduction")
+        XCTAssertTrue(run.stepsWithButton, "and its what-happens-next list")
+        XCTAssertEqual(run.buttonLabel, "Sign in to Tailscale", "the button names what it does")
+        XCTAssertTrue(run.statusShown, "the status section is still there")
+    }
+
+    /// One launch at the gate of a fresh install, read once the sign-in
+    /// button is up. The two F11 tests that only read that screen launched
+    /// identically, so they share it (F14) and each asserts its own claim
+    /// under its own name. Cached only if the gate came up; a test run on
+    /// its own takes its own.
+    private struct GateRun {
+        let buttonShown: Bool
+        let buttonLabel: String
+        let introShown: Bool
+        let stepsWithButton: Bool       // the steps were there when the button was
+        let stepsShown: Bool            // the steps appeared within 20 s
+        let stepsLabel: String
+        let statusShown: Bool
+    }
+
+    private static var gate: GateRun?
+
+    private func gateRun() -> GateRun {
+        if let run = Self.gate { return run }
         let app = launchAtTheGate()
         defer { app.terminate() }
-
         let button = app.buttons["login-button"]
-        XCTAssertTrue(button.appears(within: 20), "the gate's sign-in button is shown")
-        XCTAssertTrue(element(app, "gate-intro").exists, "a first launch shows the introduction")
-        XCTAssertTrue(element(app, "gate-intro-steps").exists, "and its what-happens-next list")
-        XCTAssertEqual(button.label, "Sign in to Tailscale", "the button names what it does")
-        XCTAssertTrue(app.staticTexts["Tailscale Status"].exists, "the status section is still there")
+        let buttonShown = button.appears(within: 20)
+        let steps = element(app, "gate-intro-steps")
+        let stepsWithButton = buttonShown && steps.exists
+        let run = GateRun(
+            buttonShown: buttonShown, buttonLabel: buttonShown ? button.label : "",
+            introShown: element(app, "gate-intro").exists, stepsWithButton: stepsWithButton,
+            stepsShown: stepsWithButton || steps.appears(within: buttonShown ? 1 : 20),
+            stepsLabel: steps.exists ? steps.label : "",
+            statusShown: app.staticTexts["Tailscale Status"].exists)
+        if run.buttonShown || run.stepsShown { Self.gate = run }
+        return run
     }
 
     /// The two things that stranded the owner on 2026-09-24, after a sign-in
@@ -1435,12 +1518,9 @@ final class OfflineHarnessTests: XCTestCase {
     /// the dashboard's machine. Shown to fail by dropping either from
     /// `GateIntroduction.steps`: the message names the one that went missing.
     func testTheIntroductionNamesThePostLoginSteps() throws {
-        let app = launchAtTheGate()
-        defer { app.terminate() }
-
-        let steps = element(app, "gate-intro-steps")
-        XCTAssertTrue(steps.appears(within: 20), "the what-happens-next list is shown")
-        let text = steps.label
+        let run = gateRun()
+        XCTAssertTrue(run.stepsShown, "the what-happens-next list is shown")
+        let text = run.stepsLabel
         XCTAssertTrue(text.localizedCaseInsensitiveContains("approve"),
                       "the steps must say the new device may need approval; they read: \(text)")
         XCTAssertTrue(text.localizedCaseInsensitiveContains("access to the machine running the dashboard"),
@@ -1862,18 +1942,27 @@ final class OfflineHarnessTests: XCTestCase {
 
     private func waitForReport(host: String, timeout: TimeInterval,
                                until predicate: ([String: Any]) -> Bool) async throws -> [String: Any] {
+        let (report, matched) = try await pollReport(host: host, timeout: timeout, until: predicate)
+        if !matched { XCTFail("no matching report from \(host) within \(Int(timeout))s; last: \(report)") }
+        return report
+    }
+
+    /// `waitForReport` without the failure: the matching report, or the last
+    /// one seen, and whether it matched. For runs shared between tests, where
+    /// only the test whose claim it is may fail.
+    private func pollReport(host: String, timeout: TimeInterval,
+                            until predicate: ([String: Any]) -> Bool) async throws -> ([String: Any], Bool) {
         let deadline = Date().addingTimeInterval(timeout)
         var last: [String: Any] = [:]
         while Date() < deadline {
             let reports = try await dashboardState()["reports"] as? [String: [String: Any]] ?? [:]
             if let r = reports[host] {
                 last = r
-                if predicate(r) { return r }
+                if predicate(r) { return (r, true) }
             }
             try await Task.sleep(for: .milliseconds(250))
         }
-        XCTFail("no matching report from \(host) within \(Int(timeout))s; last: \(last)")
-        return last
+        return (last, false)
     }
 
     private struct Connect: CustomStringConvertible {
