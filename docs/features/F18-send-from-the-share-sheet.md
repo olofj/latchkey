@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | options, not a design. Nothing is decided; §9 lists the questions whose answers pick one |
+| **Status** | **decided 2026-09-26: the actions list, not the app-row icon.** Olof chose the Shortcut route, so option C (background send, confirmed without leaving the sheet) is the target and B (the app comes forward) is its fallback. Not built; C's viability still rests on one unmeasured thing, §9 |
 | **Requested** | 2026-09-25, for Olof: the share flow should finish inside the share sheet. He picks the target session from a drop-down there, with no switch into Latchkey. Today it is two steps: the extension writes to the App Group inbox, and the app posts it when opened (F3 stages 1-2) |
 | **Revision** | needs one whichever option is chosen. F3 §3 says "the extension never picks a destination", and F3 §6 answer 1 says the picker always opens. Every option here changes at least one of those |
 | **Touches** | `ShareExtension/`, `App/Share/` (a new session mirror, and `ShareDelivery` gains a pre-chosen destination), `App/Share/ShareIntents.swift` (options B and C), Settings → Share, the session suite |
@@ -393,3 +393,26 @@ behaves as today.
   in memory only (2.3). A background-mode App Intent is the one supported
   way to run where the node is without a switch, from the Shortcut only
   (2.6). Nothing implemented; no suite run.
+
+- **2026-09-26, decided: the actions list.** Asked whether it had to be the
+  Latchkey icon in the app row or whether a Shortcut in the actions list would
+  do, Olof chose the Shortcut. So **option C is the target** — the drop-down
+  and the send both happen in the sheet, and it says "Sent to …" without
+  leaving the sharing app — with **option B as the fallback** if the send
+  cannot finish in the background. Option A (icon, queued) is no longer
+  needed as the primary, though it remains buildable alongside.
+
+  He also observed that Signal's share extension behaves the same way, which
+  is the same constraint from the outside: an extension process cannot reach
+  the host app's authenticated network session, so anything needing it either
+  queues or hands off.
+
+  **The one thing still unmeasured, and it decides C versus B:** how long iOS
+  allows a background App Intent to run, and whether the dashboard page works
+  while the app is backgrounded. §5 estimates an hour with a throwaway build
+  on the owner's phone. Until that is measured, C is the plan and not yet a
+  commitment.
+
+  Still open, and they shape the drop-down rather than the route: whether it
+  defaults to the last session used (one tap, no choosing) and whether "new
+  session" is an entry in it.
