@@ -363,7 +363,8 @@ else
         fi
     fi
     for spec in "share_sent:Share: sent " "share_uploaded:Share: uploaded " \
-                "share_swept:Share: swept [1-9][0-9]* item" "share_refused:Share: refused .* over 50 MB"; do
+                "share_swept:Share: swept [1-9][0-9]* item" "share_refused:Share: refused .* over 50 MB" \
+                "share_intent_post:ShareIntent: post in [0-9]+ ms: sent"; do
         key=${spec%%:*} want=${spec#*:}
         N=$(grep -cE "$want" "$LOG_DIR/unified.log" || true)
         if control "$key" "$N" "no \"$want\" line in the unified log"; then
@@ -374,6 +375,45 @@ else
     done
     [[ $F3_RC -eq 0 ]] && echo "    ok (D1: no XYZ in the unified log or the app's Logs)"
     [[ $F3_RC -eq 0 ]] || TEST_RC=1
+
+    # F18 §6.1/§8: the session mirror is written to the GROUP container after
+    # a listing, holds titles and folders only (no URL, note, text or
+    # credential), and nothing from a share (XYZ). Read from the host, as
+    # the extension side would see it. Every test launches with
+    # -UITestResetShare, so the file is the last listing test's; a shard
+    # whose last test listed nothing records 0, and another must have it.
+    say "F18: the session mirror in the group container holds titles and folders only"
+    F18_RC=0
+    GROUP=$(xcrun simctl get_app_container "$UDID" net.lixom.latchkey groups 2>/dev/null \
+        | awk -F'\t' '$1 == "group.net.lixom.latchkey" {print $2}')
+    MIRROR="$GROUP/Library/Application Support/ShareMirror/mirror.json"
+    N=0
+    if [[ -n "$GROUP" && -f "$MIRROR" ]]; then
+        if python3 - "$MIRROR" <<'EOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+allowed_gw = {"origin", "label", "fetchedAt", "sessions", "lastDestination"}
+allowed_s = {"key", "title", "folder", "running", "queueDepth", "lastActivity"}
+assert m.get("version") == 1, "version %r" % m.get("version")
+assert m.get("gateways"), "no gateway listed"
+for g in m["gateways"]:
+    extra = set(g) - allowed_gw
+    assert not extra, "unexpected gateway fields %s" % extra
+    assert g["origin"].startswith("https://"), g["origin"]
+    for s in g["sessions"]:
+        extra = set(s) - allowed_s
+        assert not extra, "unexpected session fields %s" % extra
+        assert s["key"] and s["title"], s
+assert "XYZ" not in open(sys.argv[1]).read(), "shared content in the mirror"
+print("    ok (%d gateway(s), %d session(s), current %s)" % (
+    len(m["gateways"]), sum(len(g["sessions"]) for g in m["gateways"]), m.get("current")))
+EOF
+        then N=1; else echo "error: the mirror at $MIRROR is not what F18 §6.1 says" >&2; F18_RC=1; fi
+    elif [[ -z "$GROUP" ]]; then
+        echo "    no group container for the app on this simulator"
+    fi
+    control share_mirror "$N" "no shard wrote a session mirror into the group container" || F18_RC=1
+    [[ $F18_RC -eq 0 ]] || TEST_RC=1
 fi
 
 # ----------------------------------------------------------------------- F6 --

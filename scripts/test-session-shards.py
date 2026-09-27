@@ -46,6 +46,8 @@ CONTROLS = {
     "share_uploaded": 'F3: no shard\'s unified log has a "Share: uploaded " line',
     "share_swept": 'F3: no shard\'s unified log has a "Share: swept N item" line',
     "share_refused": 'F3: no shard\'s unified log has a "Share: refused ... over 50 MB" line',
+    "share_intent_post": 'F18: no shard\'s unified log has a "ShareIntent: post in N ms: sent" line',
+    "share_mirror": "F18: no shard wrote the session mirror into the group container",
     "fonts_preload": "F6: no shard logged a page under the rule list that names the fonts link, "
                      "so the fonts check proved nothing",
 }

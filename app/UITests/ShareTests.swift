@@ -403,6 +403,101 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(inboxCount(app), 1, "a 6-day item stays, and the instrument sees it")
     }
 
+    // MARK: - F18: addressed in the Shortcut
+
+    /// F18 §8, the Shortcut's fallback (option B): an item addressed in the
+    /// Shortcut's drop-down is posted to that session with NO picker -- the
+    /// sheet shows the send and the answer, and lists nothing to pick.
+    /// Then the session is gone by delivery time: the picker comes up with
+    /// the "queued for" line, nothing is posted, and the fake records no
+    /// violation. Shown able to fail by posting the stored key without the
+    /// re-list: the fake records a violation and answers 404.
+    func testAnAddressedShareIsSentWithoutThePickerAndAGoneSessionIsNotPosted() async throws {
+        var app = try await launchSignedIn(seed: "pdf:1024:dest=obsidian")
+        let awaited = try await lastResult(app)
+        XCTAssertEqual(awaited, "sent:obsidian")
+        XCTAssertFalse(element(app, "share-picker").exists, "no picker: the choice was made in the Shortcut")
+        XCTAssertFalse(element(app, "share-session-obsidian").exists, "nothing listed to pick")
+        var state = try await gatewayState()
+        let posts = state["posts"] as? [[String: Any]] ?? []
+        XCTAssertEqual(posts.map { $0["slot"] as? String }, ["obsidian"])
+        XCTAssertEqual(violations(state), 0, "\(state["violations"] ?? [])")
+        XCTAssertEqual(inboxCount(app), 0)
+        app.terminate()
+
+        _ = try await Self.post("\(Self.gatewayControl)/__slots?keys=notes,plan")
+        app = try await launchSignedIn(seed: "pdf:1024:dest=obsidian")
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "share-session-notes").appears(within: 30), "the picker comes up instead")
+        XCTAssertTrue(element(app, "share-picker").exists, "as a picker, not a send")
+        let notice = element(app, "share-notice")
+        XCTAssertTrue(notice.exists, "the owner is told which session went")
+        XCTAssertTrue(notice.label.contains("obsidian") && notice.label.contains("isn't there any more"), notice.label)
+        XCTAssertEqual(element(app, "share-destination-selected").label, "none", "nothing preselected")
+        XCTAssertFalse(element(app, "share-send").isEnabled, "no Send without a pick")
+        state = try await gatewayState()
+        XCTAssertEqual(counter(state, "share_posts"), 1, "nothing more was posted")
+        XCTAssertEqual(violations(state), 0, "no post to the stale key: \(state["violations"] ?? [])")
+    }
+
+    /// F18 §4 C, the Shortcut's run in the app's process: with the node up
+    /// and the page signed in from the last launch, the item is listed,
+    /// verified and posted by `performIntent` with no sheet at all, and the
+    /// phase times are logged under `ShareIntent:` (test-session.sh checks
+    /// the line). Then the session is gone: the run hands over to the
+    /// foreground, which shows the picker with the "queued for" line and
+    /// posts nothing. Shown able to fail by skipping the verify in
+    /// `deliver`: the post to the unlisted key is a recorded violation.
+    func testTheIntentDeliversInProcessWithoutASheetAndHandsOverWhenTheSessionIsGone() async throws {
+        var app = try await launchSignedIn()
+        app.terminate()
+        // Signed in from the last launch: the cookie is in the kept web data.
+        app = launch(seed: "pdf:1024:dest=obsidian", reset: false, intent: true)
+        let awaited = try await lastResult(app, timeout: 60)
+        XCTAssertEqual(awaited, "sent:obsidian")
+        XCTAssertFalse(element(app, "share-picker").exists, "no picker")
+        XCTAssertFalse(element(app, "share-delivery").exists, "no sheet at all: the run was in-process")
+        var state = try await gatewayState()
+        XCTAssertEqual(counter(state, "share_posts"), 1)
+        XCTAssertEqual(violations(state), 0, "\(state["violations"] ?? [])")
+        let navs = state["navigations"] as? [[String: Any]] ?? []
+        XCTAssertTrue(navs.contains { $0["sid"] as? String == "obsidian" }, "the page was moved to the session: \(navs)")
+        XCTAssertEqual(inboxCount(app), 0)
+        app.terminate()
+
+        _ = try await Self.post("\(Self.gatewayControl)/__slots?keys=notes,plan")
+        app = launch(seed: "pdf:1024:dest=obsidian", reset: false, intent: true)
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "share-session-notes").appears(within: 45), "handed over: the picker comes up")
+        let notice = element(app, "share-notice")
+        XCTAssertTrue(notice.exists && notice.label.contains("obsidian"), "the owner is told which session went: \(notice.label)")
+        XCTAssertEqual(element(app, "share-destination-selected").label, "none")
+        state = try await gatewayState()
+        XCTAssertEqual(counter(state, "share_posts"), 1, "nothing more was posted")
+        XCTAssertEqual(violations(state), 0, "no post to the stale key: \(state["violations"] ?? [])")
+    }
+
+    /// The other hand-over: signed out, the run cannot finish in the
+    /// background. The item waits, addressed, the sign-in sheet says so,
+    /// and after sign-in it is sent with no picker and no further tap.
+    func testTheIntentHandsOverForSignInAndTheShareThenGoesByItself() async throws {
+        let app = launch(seed: "pdf:1024:dest=obsidian", intent: true)
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30), "signed out: the sign-in sheet")
+        let waiting = element(app, "share-waiting-count")
+        XCTAssertTrue(waiting.appears(within: 10))
+        XCTAssertEqual(waiting.label, "1", "the addressed item waits for sign-in")
+        let beforeSignIn = try await gatewayState()
+        XCTAssertEqual(counter(beforeSignIn, "share_posts"), 0, "nothing posted before sign-in")
+        try await signIn(app)
+        let awaited = try await lastResult(app, timeout: 45)
+        XCTAssertEqual(awaited, "sent:obsidian", "sent without a pick or a tap")
+        XCTAssertFalse(element(app, "share-picker").exists, "no picker")
+        let state = try await gatewayState()
+        XCTAssertEqual(counter(state, "share_posts"), 1)
+        XCTAssertEqual(violations(state), 0)
+    }
+
     // MARK: - Stage 2: the share sheet's app row
 
     /// F3 §7, "The share sheet route (stage 2)" -- fragile by nature: it
@@ -472,7 +567,9 @@ final class ShareTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func launch(seed: String? = nil, reset: Bool = true) -> XCUIApplication {
+    /// `intent`: the seed goes the Shortcut's way, `ShareDelivery.performIntent`
+    /// in the app's process (F18 §4 C), not through the inbox and the picker.
+    private func launch(seed: String? = nil, reset: Bool = true, intent: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = (reset ? ["-UITestResetWorkspaces", "-UITestResetShare"] : []) + [
             "-UITestHomePage", Self.gateway,
@@ -480,7 +577,7 @@ final class ShareTests: XCTestCase {
             "-TestProxyEndpoint", OfflineHarnessTests.proxyEndpoint,
             "-TestProxyCredential", OfflineHarnessTests.proxyCredential,
             "-UITestKeepWebData",
-        ] + (seed.map { ["-UITestSeedShare", $0] } ?? [])
+        ] + (seed.map { ["-UITestSeedShare", $0] } ?? []) + (intent ? ["-UITestIntentDeliver"] : [])
         app.launch()
         return app
     }
