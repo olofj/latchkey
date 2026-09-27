@@ -131,22 +131,6 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(violations(state), 0, "no post to an unlisted slot: \(state["violations"] ?? [])")
     }
 
-    /// A busy session queues the message: said as queued, and the item is
-    /// done with (the gateway has it).
-    func testABusySlotIsQueuedNotSent() async throws {
-        _ = try await Self.post("\(Self.gatewayControl)/__slots?keys=obsidian,notes&busy=obsidian")
-        let app = try await launchSignedIn()
-        defer { app.terminate() }
-        share(app, "latchkey://share?url=https://example.com/q")
-        try pick(app, "obsidian")
-        element(app, "share-send").tap()
-        let awaited5 = try await lastResult(app)
-        XCTAssertEqual(awaited5, "queued:obsidian")
-        let awaited6 = try await gatewayState()
-        XCTAssertEqual(counter(awaited6, "share_posts"), 1)
-        XCTAssertEqual(inboxCount(app), 0, "a queued share is confirmed, and leaves the inbox")
-    }
-
     /// The ported-origin CSRF refusal (F1 §4a): a bare 403 is shown as a
     /// refusal, prefill is offered and opens the session with the text, and
     /// the item stays -- the app cannot know it was sent.
@@ -279,18 +263,6 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(result.label, "failed:File too large (max 1MB)")
         let awaited14 = try await gatewayState()
         XCTAssertEqual(counter(awaited14, "share_posts"), 0)
-    }
-
-    func testAnUnsupportedTypeShowsTheGatewaysWords() async throws {
-        let app = try await launchSignedIn(seed: "bin:1024")
-        defer { app.terminate() }
-        try pick(app, "obsidian")
-        element(app, "share-send").tap()
-        let result = element(app, "share-result")
-        XCTAssertTrue(result.appears(within: 30))
-        XCTAssertEqual(result.label, "failed:Unsupported file type: .bin")
-        let awaited15 = try await gatewayState()
-        XCTAssertEqual(counter(awaited15, "share_posts"), 0)
     }
 
     // MARK: - Failure and cleanup

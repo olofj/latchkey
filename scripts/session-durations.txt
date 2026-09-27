@@ -40,14 +40,12 @@
 27.9 ShareTests/testASharedLinkReachesTheChosenSession
 27.3 ShareTests/testTheLastSessionIsPreselected
 26.9 ShareTests/testOnlyAListedSlotIsEverPosted
-24.2 ShareTests/testABusySlotIsQueuedNotSent
 25.0 ShareTests/testARefusedPostOffersPrefill
 23.3 ShareTests/testSignedOutMidShareThenResumed
 23.1 ShareTests/testAColdLaunchKeepsTheItem
 24.8 ShareTests/testADocumentIsUploadedThenReferenced
 25.5 ShareTests/testFiftyMegabytesGoThroughByteForByte
 43.7 ShareTests/testOverTheLimitIsRefusedAtCaptureAndA413IsShown
-24.3 ShareTests/testAnUnsupportedTypeShowsTheGatewaysWords
 33.0 ShareTests/testUnreachableIsKeptAndRetried
 41.6 ShareTests/testLaterAfterThePostLeftIsRecordedNotReoffered
 40.9 ShareTests/testLaterBeforeThePostLeftKeepsTheItem
