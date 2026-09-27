@@ -90,6 +90,7 @@
 				Share/Inbox/ShareInboxPolicy.swift,
 				Share/Inbox/ShareInboxStore.swift,
 				Share/Inbox/ShareItem.swift,
+				Share/Inbox/ShareMirror.swift,
 				Share/ShareURL.swift,
 				Workspace/BackupExclusion.swift,
 			);

@@ -189,9 +189,25 @@ var json = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
 json["somethingNew"] = ["x": 1]
 expect(ShareItem.decode(try! JSONSerialization.data(withJSONObject: json)) == .item(full),
        "an unknown field is ignored")
-json["version"] = 2
-expect(ShareItem.decode(try! JSONSerialization.data(withJSONObject: json)) == .newerVersion(2),
-       "version 2 is left alone, not misread")
+json["version"] = 3
+expect(ShareItem.decode(try! JSONSerialization.data(withJSONObject: json)) == .newerVersion(3),
+       "version 3 is left alone, not misread")
+// F18 §7: version 2 adds `destination`; a version-1 item reads as unaddressed.
+var v1 = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+v1["version"] = 1
+v1.removeValue(forKey: "destination")
+if case .item(let old) = ShareItem.decode(try! JSONSerialization.data(withJSONObject: v1)) {
+    expect(old.destination == nil && old.version == 1, "a version-1 item decodes, with no destination")
+} else {
+    expect(false, "a version-1 item still decodes")
+}
+var addressed = full
+addressed.destination = ShareDestination(origin: "https://gw.example.ts.net", slotKey: "obsidian",
+                                         slotTitle: "Obsidian", chosenAt: now)
+expect(ShareItem.decode(try! addressed.encoded()) == .item(addressed), "an addressed item (v2) round-trips")
+expect(String(data: try! addressed.encoded(), encoding: .utf8)!.contains("\"version\":2"), "written as version 2")
+expect(ShareOutcome.addressedSessionGone(title: "obsidian")
+       == "The session you queued for, obsidian, isn't there any more — pick one.", "the addressed-gone line")
 var noSource = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
 noSource.removeValue(forKey: "source")
 expect(ShareItem.decode(try! JSONSerialization.data(withJSONObject: noSource)) == .unreadable,
@@ -266,6 +282,96 @@ try! appOnly.add(disk("ancient", age: 8 * 86400), waiting: (0, 0))
 try! ShareInboxStore(root: groupRoot).add(disk("ancient-g", age: 8 * 86400), waiting: (0, 0))
 expect(both.sweep(now: Date()) == 2 && !both.items().contains { $0.id.hasPrefix("ancient") },
        "the sweep takes 8-day items from both locations")
+
+print("== ShareMirror (F18 §6.1)")
+let slots: [[String: Any]] = [
+    ["key": "obsidian", "title": "Obsidian", "surface": "", "folder_id": "f1", "running": true,
+     "queue_depth": 2, "last_activity_ts": 100.0],
+    ["key": "notes", "title": "", "surface": "orchestrator", "last_activity_ts": 300],
+    ["key": "member-x", "title": "Member", "surface": "", "last_activity_ts": 900],
+    ["key": "crew1", "title": "Crew", "surface": "crew", "last_activity_ts": 800],
+    ["title": "no key"],
+]
+let listed = ShareSession.list(from: slots, folders: ["f1": "Work"])
+expect(listed.map(\.key) == ["notes", "obsidian"],
+       "the sidebar's filter: no member-*, no crew surface, newest first: \(listed.map(\.key))")
+expect(listed[1].folder == "Work" && listed[1].running && listed[1].queueDepth == 2,
+       "folder name resolved, running and queue depth kept")
+expect(listed[0].title == "notes", "an untitled session shows its key")
+
+var m = ShareMirror()
+m.record(origin: "https://a.ts.net", label: "a", sessions: listed, at: now)
+m.record(origin: "https://b.ts.net", label: "b", sessions: [], at: now.addingTimeInterval(-3600))
+expect(m.current == "https://b.ts.net" && m.gateways.map(\.label) == ["b", "a"],
+       "the latest recording is current and first")
+m.remember(origin: "https://a.ts.net", .init(slotKey: "notes", slotTitle: "notes", at: now))
+m.record(origin: "https://a.ts.net", label: "a", sessions: listed, at: now.addingTimeInterval(10))
+expect(m.gateway("https://a.ts.net")?.lastDestination?.slotKey == "notes",
+       "a re-listing keeps the gateway's last destination")
+expect(m.gateways.count == 2, "a re-listing replaces, never duplicates")
+let mirrorData = try! m.encoded()
+expect(ShareMirror.decode(mirrorData) == m, "encode → decode is equal")
+let text = String(data: mirrorData, encoding: .utf8)!
+expect(!text.contains("\"url\":") && !text.contains("\"note\":") && !text.contains("\"text\":")
+       && !text.contains("token") && !text.contains("cookie"),
+       "the mirror holds titles and folders only: \(text.prefix(200))")
+var newer = try! JSONSerialization.jsonObject(with: mirrorData) as! [String: Any]
+newer["version"] = 2
+expect(ShareMirror.decode(try! JSONSerialization.data(withJSONObject: newer)) == nil,
+       "a newer mirror is offered as nothing, not misread")
+expect(ShareMirror.decode(Data("nope".utf8)) == nil, "garbage is nothing")
+var pruned = m
+expect(pruned.retain(origins: ["https://b.ts.net"]) && pruned.gateways.map(\.label) == ["b"] && pruned.current == nil,
+       "a forgotten gateway's entry goes, and it is no longer current")
+expect(m.retain(origins: ["https://a.ts.net"]) && m.gateways.map(\.label) == ["a"] && m.current == "https://a.ts.net",
+       "the kept gateway stays current")
+expect(!m.retain(origins: ["https://a.ts.net"]), "retaining what is there changes nothing")
+
+// The staleness rule: 24 h, then the list is hidden and the reason said.
+let fresh = now.addingTimeInterval(30)
+expect(m.gateway("https://a.ts.net")?.isStale(now: fresh) == false, "10 s old is fresh")
+expect(m.gateway("https://a.ts.net")?.isStale(now: now.addingTimeInterval(10 + 24 * 3600 - 1)) == false,
+       "a second under 24 h is still fresh")
+expect(m.gateway("https://a.ts.net")?.isStale(now: now.addingTimeInterval(10 + 24 * 3600 + 1)) == true,
+       "a second over 24 h is stale")
+expect(m.offered(now: fresh).map(\.label) == ["a"] && m.offered(now: now.addingTimeInterval(30 * 3600)).isEmpty,
+       "a stale gateway is not offered")
+expect(ShareMirror.emptyReason(m, now: fresh) == nil, "a fresh list with sessions needs no excuse")
+expect(ShareMirror.emptyReason(nil, now: fresh) == "Open Latchkey once so it can list your sessions.",
+       "no mirror yet")
+expect(ShareMirror.emptyReason(ShareMirror(), now: fresh) == "Open Latchkey once so it can list your sessions.",
+       "an empty mirror reads as none")
+expect(ShareMirror.emptyReason(m, now: now.addingTimeInterval(10 + 30 * 3600))
+       == "Latchkey's session list is 30 h old. Open Latchkey to refresh it.",
+       "a stale list says how old: \(ShareMirror.emptyReason(m, now: now.addingTimeInterval(10 + 30 * 3600)) ?? "nil")")
+var empty = ShareMirror()
+empty.record(origin: "https://chonk.ts.net", label: "chonk", sessions: [], at: now)
+expect(ShareMirror.emptyReason(empty, now: fresh) == "chonk has no sessions.", "a gateway with no sessions")
+var mixed = empty
+mixed.record(origin: "https://a.ts.net", label: "a", sessions: listed, at: now)
+mixed.current = "https://chonk.ts.net"
+expect(mixed.offered(now: fresh).map(\.label) == ["chonk", "a"], "the current gateway comes first")
+expect(ShareMirror.emptyReason(mixed, now: fresh) == nil, "another gateway's sessions are enough")
+
+// On disk: the group container when there is one, else the app's own;
+// atomic, and gone with the test reset.
+let mirrorTmp = FileManager.default.temporaryDirectory.appending(path: "share-mirror-\(UUID().uuidString)")
+defer { try? FileManager.default.removeItem(at: mirrorTmp) }
+expect(ShareMirrorStore.location(appSupport: mirrorTmp.appending(path: "app"), groupContainer: mirrorTmp.appending(path: "g"))
+       .path.hasSuffix("/g/Library/Application Support/ShareMirror/mirror.json"), "the group container's file")
+expect(ShareMirrorStore.location(appSupport: mirrorTmp.appending(path: "app"), groupContainer: nil)
+       .path.hasSuffix("/app/ShareMirror/mirror.json"), "the app's own without the entitlement")
+let mirrorStore = ShareMirrorStore(file: ShareMirrorStore.location(appSupport: mirrorTmp, groupContainer: nil))
+expect(mirrorStore.load() == nil, "nothing on disk reads as no mirror")
+mirrorStore.update { $0.record(origin: "https://a.ts.net", label: "a", sessions: listed, at: now) }
+expect(mirrorStore.load()?.gateways.first?.sessions.map(\.key) == ["notes", "obsidian"], "written and read back")
+let stamp = try? FileManager.default.attributesOfItem(atPath: mirrorStore.file.path)[.modificationDate] as? Date
+mirrorStore.update { $0.retain(origins: ["https://a.ts.net"]) }
+let stamp2 = try? FileManager.default.attributesOfItem(atPath: mirrorStore.file.path)[.modificationDate] as? Date
+expect(stamp == stamp2, "an update that changes nothing writes nothing")
+mirrorStore.removeAll()
+expect(mirrorStore.load() == nil && !FileManager.default.fileExists(atPath: mirrorStore.file.deletingLastPathComponent().path),
+       "the reset removes the directory")
 
 print(failures == 0 ? "share: all \(checks) checks passed" : "share: \(failures) of \(checks) FAILED")
 if failures != 0 { exit(1) }

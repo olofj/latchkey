@@ -17,14 +17,26 @@
 
 import Foundation
 
+/// Where a share is already addressed (F18 §6.2): chosen in the Shortcut's
+/// drop-down, from the mirror. Only ever a PROPOSAL: the key is posted only
+/// if the app's own fresh listing has it (F3 §4.5).
+nonisolated struct ShareDestination: Codable, Equatable, Sendable {
+    var origin: String
+    var slotKey: String
+    var slotTitle: String?
+    var chosenAt: Date
+}
+
 nonisolated struct ShareItem: Codable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable { case link, text, document }
     enum Source: String, Codable, Sendable { case urlScheme, intent, `extension` }
     enum State: String, Codable, Sendable { case pending, sending, failed }
 
-    /// The version this build writes and reads. A higher one is left where it
-    /// is, untouched and undelivered (F3 §5): a newer build wrote it.
-    static let currentVersion = 1
+    /// The version this build writes. A higher one is left where it is,
+    /// untouched and undelivered (F3 §5): a newer build wrote it. Version 2
+    /// (F18) adds `destination`; a version-1 item reads as unaddressed.
+    static let currentVersion = 2
+    static let readableVersions = 1...2
 
     var version: Int = ShareItem.currentVersion
     var id: String
@@ -43,6 +55,8 @@ nonisolated struct ShareItem: Codable, Equatable, Sendable {
     var attempts: Int = 0
     var lastError: String?
     var lastAttemptAt: Date?
+    /// F18: pre-addressed, or nil for the picker.
+    var destination: ShareDestination?
 
     /// The filename's extension, lowercased, with the dot (`.pdf`), or "".
     var fileExtension: String {
@@ -80,7 +94,7 @@ nonisolated struct ShareItem: Codable, Equatable, Sendable {
         guard let header = try? decoder.decode(Header.self, from: data) else { return .unreadable }
         let version = header.version ?? 0
         if version > currentVersion { return .newerVersion(version) }
-        guard version == currentVersion, let item = try? decoder.decode(ShareItem.self, from: data)
+        guard readableVersions.contains(version), let item = try? decoder.decode(ShareItem.self, from: data)
         else { return .unreadable }
         return .item(item)
     }

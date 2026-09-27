@@ -70,6 +70,8 @@ struct ShareSettingsSection: View {
         case .intent: via = "Shortcut"
         case .extension: via = "share sheet"
         }
-        return "\(item.kind.rawValue.capitalized) · \(size) · via \(via) · \(when)"
+        // F18 §5: where it is going, when it was addressed in the Shortcut.
+        let to = item.destination.map { " · → \($0.slotTitle ?? $0.slotKey)" } ?? ""
+        return "\(item.kind.rawValue.capitalized) · \(size) · via \(via) · \(when)\(to)"
     }
 }

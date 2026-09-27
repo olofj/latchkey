@@ -25,24 +25,21 @@
 //  A slot key is posted only if it is in a list fetched moments before: the
 //  gateway silently CREATES a session for an unknown key (F3 §4.5).
 //
+//  F18: an item may arrive ADDRESSED -- the session chosen in the Shortcut's
+//  drop-down, from the mirror this class writes after every listing. Such an
+//  item is a picker whose choice is already made: re-list, post if the key
+//  is still there, else the picker with the "isn't there any more" line. The
+//  Shortcut's background run (`performIntent`) does the same in this process
+//  without a scene, and hands over to the foreground when it cannot finish.
+//
 
 import Combine
 import Foundation
 import SwiftUI
+import TailscaleKit
 #if canImport(UIKit)
 import UIKit
 #endif
-
-/// One session the owner can share to, as the sidebar shows it.
-struct ShareSession: Identifiable, Equatable {
-    let key: String
-    let title: String
-    let folder: String?
-    let running: Bool
-    let queueDepth: Int
-    let lastActivity: Double
-    var id: String { key }
-}
 
 @MainActor
 final class ShareDelivery: ObservableObject {
@@ -80,6 +77,9 @@ final class ShareDelivery: ObservableObject {
     @Published private(set) var receivedCount = 0
     /// Whether the picker shows the gateway picker in its place.
     @Published var choosingGateway = false
+    /// F18: the current item is addressed to this session (its title), so
+    /// the sheet shows the send and no list. Nil once it needs a pick.
+    @Published private(set) var addressedTitle: String?
 
     /// How long a foreground may wait for the page before the owner is told
     /// the gateway is unreachable (F3 §4.4).
@@ -91,9 +91,17 @@ final class ShareDelivery: ObservableObject {
 
     let store: ShareInbox
     let defaults: ShareDefaults
+    /// F18 §6.1: what the Shortcut's drop-down reads.
+    let mirror: ShareMirrorStore
 
     private weak var workspace: Workspace?
     private var observers: Set<AnyCancellable> = []
+    /// Items the Shortcut's background run owns: `advance` leaves them be.
+    private var held: Set<String> = []
+    /// One cheap re-list per foreground, once the page is `.active` and no
+    /// item is on the picker (F18 §6.1).
+    private var mirrorRefreshDue = true
+    private var mirrorRefreshTask: Task<Void, Never>?
     /// Set by the scene-phase change; SwiftUI reports `.active` before
     /// `UIApplication.applicationState` says so, and a foreground that read
     /// only the latter never brought up what the extension had saved.
@@ -128,8 +136,11 @@ final class ShareDelivery: ObservableObject {
         let appSupport = WorkspaceStore.appSupportDir
         store = ShareInbox.app(appSupport: appSupport)
         defaults = ShareDefaults(file: appSupport.appending(path: "share-defaults.json"))
+        mirror = ShareMirrorStore.app(appSupport: appSupport)
 #if LATCHKEY_TEST_HOOKS
-        ShareTestHooks.apply(store: store, defaults: defaults) { [weak self] in self?.receivedCount += 1 }
+        let intentSeed = ShareTestHooks.apply(store: store, defaults: defaults, mirror: mirror) { [weak self] in
+            self?.receivedCount += 1
+        }
 #endif
         try? store.prepare()
         let swept = store.sweep(now: Date())
@@ -140,6 +151,18 @@ final class ShareDelivery: ObservableObject {
         // Always, so "no sweep" and "swept nothing" read differently.
         logger.log("Share: swept \(swept) item(s)")
         reload()
+#if LATCHKEY_TEST_HOOKS
+        // -UITestIntentDeliver: the seeded item goes the Shortcut's way,
+        // in this process, as the intent's background run would take it.
+        if let seed = intentSeed {
+            Task { [weak self] in
+                guard let self else { return }
+                let outcome = await self.performIntent(seed.item, to: seed.destination, payloadFile: seed.payload)
+                try? FileManager.default.removeItem(at: seed.payload)
+                if case .needsForeground = outcome { self.fallBackToForeground() }
+            }
+        }
+#endif
     }
 
     // MARK: - Entry points
@@ -200,12 +223,21 @@ final class ShareDelivery: ObservableObject {
                 Task { @MainActor in
                     guard let self else { return }
                     if self.current == nil { self.advance() } else { self.preconditionsChanged() }
+                    self.refreshMirrorIfDue()
                 }
             }
             .store(in: &observers)
         workspace.homePage.$url
             .removeDuplicates()
             .sink { [weak self] _ in Task { @MainActor in self?.preconditionsChanged() } }
+            .store(in: &observers)
+        // F18 §6.1: a gateway's mirror entry goes with the gateway.
+        workspace.$definition
+            .map(\.knownGatewayOrigins)
+            .removeDuplicates()
+            .sink { [weak self] origins in
+                Task { @MainActor in self?.mirror.update { $0.retain(origins: origins) } }
+            }
             .store(in: &observers)
         advance()
     }
@@ -214,8 +246,10 @@ final class ShareDelivery: ObservableObject {
         sceneActive = true
         deferred.removeAll()
         retriedThisForeground.removeAll()
+        mirrorRefreshDue = true
         reload()
         if current != nil { preconditionsChanged() } else { advance() }
+        refreshMirrorIfDue()
     }
 
     func sceneLeftForeground() {
@@ -234,7 +268,7 @@ final class ShareDelivery: ObservableObject {
     func advance() {
         guard current == nil, appActive else { return }
         guard let next = waiting.first(where: { item in
-            guard !deferred.contains(item.id), !posting.contains(item.id) else { return false }
+            guard !deferred.contains(item.id), !posting.contains(item.id), !held.contains(item.id) else { return false }
             if item.state == .failed {
                 return ShareInboxPolicy.retriesAutomatically(item) && !retriedThisForeground.contains(item.id)
             }
@@ -253,9 +287,17 @@ final class ShareDelivery: ObservableObject {
         elsewhere = nil
         choosingGateway = false
         lastKey = nil
+        addressedTitle = item.destination.map { $0.slotTitle ?? $0.slotKey }
         phase = .waiting("Connecting to the gateway…")
         isPickerRequested = true
         preconditionsChanged()
+    }
+
+    /// The key an addressed item goes to on THIS gateway, or nil for the
+    /// picker (unaddressed, or addressed to another gateway).
+    private func addressedKey(_ item: ShareItem) -> String? {
+        guard let d = item.destination, let origin = gatewayOrigin, d.origin == origin else { return nil }
+        return d.slotKey
     }
 
     /// "1 of 3".
@@ -277,6 +319,12 @@ final class ShareDelivery: ObservableObject {
     /// What delivery is waiting for, or nil when it may talk to the gateway.
     private var blocker: String? {
         guard appActive else { return "Waiting for Latchkey to be in front." }
+        return pageBlocker
+    }
+
+    /// The page's part of `blocker`: what the Shortcut's background run
+    /// waits for, since it never has the app in front.
+    private var pageBlocker: String? {
         guard let workspace, let origin = gatewayOrigin else { return "Choose a gateway first." }
         guard let pageOrigin = page?.sessionOrigin?.absoluteString,
               GatewayAddress.origin(of: pageOrigin) == origin else { return "Waiting for the gateway…" }
@@ -306,7 +354,13 @@ final class ShareDelivery: ObservableObject {
             resumeKey = nil
             logger.log("Share: signed in again; resuming \(current?.id ?? "?")")
             send(to: key)
+        } else if let item = current, let key = addressedKey(item) {
+            // F18 §6.2: the choice is made. `deliver` re-lists and posts
+            // only if the key is still there; else the picker comes up.
+            logger.log("Share: \(item.id) is addressed to \(key); sending without the picker")
+            send(to: key)
         } else {
+            addressedTitle = nil
             list()
         }
     }
@@ -331,13 +385,14 @@ final class ShareDelivery: ObservableObject {
         runTask?.cancel()
         runTask = Task { [weak self] in
             guard let self else { return }
-            switch await self.fetchSessions(item: item) {
+            switch await self.fetchSessions(shareId: item.id) {
             case .failure(let failure):
                 self.finish(failure.outcome, key: nil)
             case .success(let listed):
                 self.sessions = listed
                 let host = URL(string: origin)?.host ?? origin
                 logger.log("Share: listed \(listed.count) session(s) on \(host)")
+                self.writeMirror(origin: origin, sessions: listed)
                 let remembered = self.defaults.lastDestination(origin: origin)
                 if let remembered, listed.contains(where: { $0.key == remembered.slotKey }) {
                     self.selectedKey = remembered.slotKey
@@ -355,14 +410,16 @@ final class ShareDelivery: ObservableObject {
 
     struct Failure: Error { let outcome: ShareOutcome }
 
-    private func fetchSessions(item: ShareItem) async -> Result<[ShareSession], Failure> {
-        let slots = await call("/api/chat/slots", method: "GET", item: item)
+    /// `shareId` is the `X-Latchkey-Share` header: the item's id, or
+    /// `mirror` for the foreground re-list.
+    private func fetchSessions(shareId: String) async -> Result<[ShareSession], Failure> {
+        let slots = await call("/api/chat/slots", method: "GET", shareId: shareId)
         if let failure = ShareOutcome.failure(slots) { return .failure(Failure(outcome: failure)) }
         guard let array = (try? JSONSerialization.jsonObject(with: Data(slots.body.utf8))) as? [[String: Any]] else {
             return .failure(Failure(outcome: .refused(status: slots.status ?? 0, text: "The gateway's session list could not be read.")))
         }
         // Folder names are a nicety: a failure here costs the names only.
-        let folders = await call("/api/chat/folders", method: "GET", item: item)
+        let folders = await call("/api/chat/folders", method: "GET", shareId: shareId)
         var folderNames: [String: String] = [:]
         if ShareOutcome.failure(folders) == nil,
            let list = (try? JSONSerialization.jsonObject(with: Data(folders.body.utf8))) as? [[String: Any]] {
@@ -370,27 +427,41 @@ final class ShareDelivery: ObservableObject {
                 if let id = f["id"] as? String, let name = f["name"] as? String { folderNames[id] = name }
             }
         }
-        return .success(Self.sessions(from: array, folders: folderNames))
+        return .success(ShareSession.list(from: array, folders: folderNames))
     }
 
-    /// What the dashboard's sidebar shows: `surface` (a copy of `mode`) of
-    /// "" or "orchestrator" (0.7.0's filter; 0.6.0 also showed "crew"), and
-    /// never a `member-*` key, which the gateway reserves (409). Newest
-    /// activity first.
-    nonisolated static func sessions(from slots: [[String: Any]], folders: [String: String]) -> [ShareSession] {
-        slots.compactMap { s -> ShareSession? in
-            guard let key = s["key"] as? String, !key.isEmpty, !key.hasPrefix("member-") else { return nil }
-            let surface = (s["surface"] as? String) ?? (s["mode"] as? String) ?? ""
-            guard surface == "" || surface == "orchestrator" else { return nil }
-            let title = (s["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? key
-            return ShareSession(key: key, title: title,
-                                folder: (s["folder_id"] as? String).flatMap { folders[$0] },
-                                running: (s["running"] as? Bool) ?? false,
-                                queueDepth: (s["queue_depth"] as? Int) ?? 0,
-                                lastActivity: (s["last_activity_ts"] as? Double)
-                                    ?? Double((s["last_activity_ts"] as? Int) ?? 0))
+    // MARK: - The mirror (F18 §6.1)
+
+    /// After every successful listing: the titles and folders the Shortcut's
+    /// drop-down offers, and the last destination beside them.
+    private func writeMirror(origin: String, sessions: [ShareSession]) {
+        let label = URL(string: origin)?.host ?? origin
+        let last = defaults.lastDestination(origin: origin)
+        mirror.update { m in
+            m.record(origin: origin, label: label, sessions: sessions, at: Date())
+            if let last { m.remember(origin: origin, .init(slotKey: last.slotKey, slotTitle: last.slotTitle, at: last.at)) }
         }
-        .sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    /// The one extra request per foreground: a re-list once the page is
+    /// active, unless an item is up (its own listing writes the mirror). A
+    /// refusal here is logged and nothing more -- it is not the owner's
+    /// share, so it asks for no sign-in.
+    private func refreshMirrorIfDue() {
+        guard mirrorRefreshDue, current == nil, blocker == nil, let origin = gatewayOrigin,
+              mirrorRefreshTask == nil else { return }
+        mirrorRefreshDue = false
+        mirrorRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.mirrorRefreshTask = nil }
+            switch await self.fetchSessions(shareId: "mirror") {
+            case .success(let listed):
+                self.writeMirror(origin: origin, sessions: listed)
+                logger.log("Share: mirror refreshed: \(listed.count) session(s) on \(URL(string: origin)?.host ?? origin)")
+            case .failure(let f):
+                logger.log("Share: mirror not refreshed: \(Self.logReason(f.outcome))")
+            }
+        }
     }
 
     // MARK: - Send (steps 3-7)
@@ -430,13 +501,14 @@ final class ShareDelivery: ObservableObject {
     private func deliver(_ item: ShareItem, to key: String) async -> ShareOutcome? {
         // 3. verify: the key must be in a list fetched just now.
         phase = .working("Checking the session")
-        let verified = await fetchSessions(item: item)
+        let verified = await fetchSessions(shareId: item.id)
         guard !Task.isCancelled else { return nil }
         switch verified {
         case .failure(let f):
             return f.outcome
         case .success(let fresh):
             sessions = fresh
+            if let origin = gatewayOrigin { writeMirror(origin: origin, sessions: fresh) }
             guard fresh.contains(where: { $0.key == key }) else { return .sessionGone }
         }
         // 4. upload.
@@ -497,7 +569,11 @@ final class ShareDelivery: ObservableObject {
     }
 
     private func call(_ path: String, method: String, body: String? = nil, item: ShareItem) async -> ShareOutcome.Response {
-        var args: [String: Any] = ["path": path, "method": method, "shareId": item.id,
+        await call(path, method: method, body: body, shareId: item.id)
+    }
+
+    private func call(_ path: String, method: String, body: String? = nil, shareId: String) async -> ShareOutcome.Response {
+        var args: [String: Any] = ["path": path, "method": method, "shareId": shareId,
                                    "timeoutMs": Int(Self.requestTimeout.components.seconds) * 1000]
         args["body"] = body ?? NSNull()
         return Self.response(await page?.shareCall(PageScriptSources.shareFetch, arguments: args))
@@ -538,12 +614,20 @@ final class ShareDelivery: ObservableObject {
             logger.log("Share: \(item.id) waits for sign-in")
             workspace?.session.requireSignIn()
         case .sessionGone where key != nil:
-            // Nothing was posted. Back to the picker, nothing selected.
+            // Nothing was posted. Back to the picker, nothing selected. An
+            // addressed item loses its address here (F18 §6.2), so the
+            // picker is a real one and a relaunch does not try it again.
             item.state = .pending
+            if let d = item.destination {
+                notice = ShareOutcome.addressedSessionGone(title: d.slotTitle ?? d.slotKey)
+                item.destination = nil
+            } else {
+                notice = outcome.sentence
+            }
+            addressedTitle = nil
             try? store.update(item)
             current = item
             selectedKey = nil
-            notice = outcome.sentence
             phase = .picking
             logger.log("Share: \(item.id): the chosen session is gone; nothing posted")
         default:
@@ -580,7 +664,9 @@ final class ShareDelivery: ObservableObject {
         store.delete(item.id)
         if let origin = gatewayOrigin {
             let title = sessions.first { $0.key == slot }?.title
-            defaults.remember(origin: origin, .init(slotKey: slot, slotTitle: title, at: Date()))
+            let now = Date()
+            defaults.remember(origin: origin, .init(slotKey: slot, slotTitle: title, at: now))
+            mirror.update { $0.remember(origin: origin, .init(slotKey: slot, slotTitle: title, at: now)) }
         }
         if case .queued = outcome {
             AppDiagnostics.shared.sharesQueued += 1
@@ -625,6 +711,144 @@ final class ShareDelivery: ObservableObject {
             + (prefill.map { [URLQueryItem(name: "prefill", value: $0)] } ?? [])
         guard let url = c.url else { return }
         page?.load(url: url)
+    }
+
+    // MARK: - The Shortcut's run (F18 §4 C)
+
+    /// What `performIntent` ends in: the intent's dialog is written from it.
+    enum IntentOutcome: Equatable {
+        /// Refused at capture (size, inbox full): nothing stored.
+        case refused(String)
+        /// The gateway has it: sent, or queued behind a running turn.
+        case delivered(ShareOutcome, title: String)
+        /// The gateway refused, or nothing answered. Kept, failed; Retry is
+        /// in Settings → Share and on the next foreground.
+        case failed(ShareOutcome)
+        /// It cannot finish without the app in front (the node or the page
+        /// did not come up in time, sign-in, the session gone): the item
+        /// waits in the inbox, still addressed, and option B takes over.
+        case needsForeground(String)
+    }
+
+    /// The whole run, node start included. What iOS itself allows a
+    /// background intent is unmeasured (F18 §9 Q2); the `ShareIntent:`
+    /// lines this logs per phase are the instrument for a device run.
+    static let intentBudget: Duration = .seconds(25)
+
+    /// The Shortcut's run, in this process, with or without a scene: admit
+    /// the item, bring the node up, bring the page up off-screen if need
+    /// be, then `deliver` -- which re-lists and posts only if the key is
+    /// there. Each phase gets what is left of `budget`.
+    func performIntent(_ item: ShareItem, to destination: ShareDestination,
+                       payloadFile: URL? = nil, payloadData: Data? = nil,
+                       budget: Duration = ShareDelivery.intentBudget) async -> IntentOutcome {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let deadline = start + budget
+        var addressed = item
+        addressed.destination = destination
+        func elapsed(_ since: ContinuousClock.Instant = start) -> Int { Self.milliseconds(clock.now - since) }
+        // Not offered to the picker while this run owns it.
+        held.insert(item.id)
+        defer { held.remove(item.id) }
+        if let reason = admit(addressed, payloadFile: payloadFile, payloadData: payloadData) {
+            return .refused(reason)
+        }
+#if canImport(UIKit)
+        let appState = UIApplication.shared.applicationState == .active ? "active" : "not active"
+#else
+        let appState = "n/a"
+#endif
+        logger.log("ShareIntent: begin \(item.id) to \(destination.slotKey) (app \(appState))")
+        func handOver(_ reason: String) -> IntentOutcome {
+            var kept = addressed
+            kept.state = .pending
+            try? store.update(kept)
+            reload()
+            logger.log("ShareIntent: needs foreground after \(elapsed()) ms: \(reason)")
+            return .needsForeground(reason)
+        }
+
+        // A background launch has no view to hand over a workspace.
+        if workspace == nil, let ws = WorkspaceManager.current?.activeWorkspace { attach(ws) }
+        guard let workspace, let origin = gatewayOrigin else { return handOver("no gateway is chosen") }
+        guard destination.origin == origin else { return handOver("the share is addressed to another gateway") }
+        guard current == nil else { return handOver("another share is on the picker") }
+
+        // 1. The node.
+        let nodeStart = clock.now
+        node: while true {
+            switch workspace.model.state {
+            case .Running:
+                break node
+            case .NeedsLogin, .NeedsMachineAuth:
+                return handOver("the tailnet needs a login")
+            default:
+                if workspace.model.startFailure != nil { return handOver("the node could not start") }
+                if clock.now >= deadline { return handOver("the node did not come up in \(elapsed(nodeStart)) ms") }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        logger.log("ShareIntent: node up in \(elapsed(nodeStart)) ms")
+
+        // 2. The page, signed in. With no scene it is created here, off
+        // screen; the view that appears later takes this same one.
+        let pageStart = clock.now
+        guard let tab = workspace.tabManager.currentTab else { return handOver("no page") }
+        if !tab.hasWebView {
+            _ = tab.viewModel.makeWebView()
+            logger.log("ShareIntent: page created off-screen")
+        }
+        while let why = pageBlocker {
+            if workspace.session.state == .needsToken { return handOver("sign-in is needed") }
+            if clock.now >= deadline { return handOver("the page was not ready in \(elapsed(pageStart)) ms (\(why))") }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        logger.log("ShareIntent: page ready in \(elapsed(pageStart)) ms")
+
+        // 3. Re-list, verify, upload, post.
+        let postStart = clock.now
+        addressed.state = .sending
+        addressed.lastAttemptAt = Date()
+        try? store.update(addressed)
+        let outcome = await deliver(addressed, to: destination.slotKey)
+        posting.remove(item.id)
+        if current == nil { phase = .idle }
+        guard let outcome else { return handOver("the send was interrupted") }
+        logger.log("ShareIntent: post in \(elapsed(postStart)) ms: \(Self.logReason(outcome))")
+        switch outcome {
+        case .sent(let slot), .queued(let slot):
+            let title = sessions.first { $0.key == slot }?.title ?? destination.slotTitle ?? slot
+            lastResult = outcome.label
+            confirm(addressed, outcome, slot: slot)
+            reload()
+            showSession(slot)
+            logger.log("ShareIntent: done in \(elapsed()) ms: \(outcome.code)")
+            return .delivered(outcome, title: title)
+        case .sessionGone:
+            // Kept addressed: the foreground picker says which session went.
+            return handOver("the session isn't there any more")
+        case .signedOut:
+            workspace.session.requireSignIn()
+            return handOver("sign-in is needed")
+        case .unreachable, .refused, .uploadInterrupted:
+            lastResult = outcome.label
+            _ = markFailed(addressed, outcome)
+            reload()
+            logger.log("ShareIntent: done in \(elapsed()) ms: failed")
+            return .failed(outcome)
+        }
+    }
+
+    /// After `continueInForeground`, or the test hook's stand-in for it:
+    /// the addressed item goes the way any waiting item goes (option B).
+    func fallBackToForeground() {
+        reload()
+        if current == nil { advance() }
+    }
+
+    nonisolated static func milliseconds(_ d: Duration) -> Int {
+        Int(d.components.seconds) * 1000 + Int(d.components.attoseconds / 1_000_000_000_000_000)
     }
 
     // MARK: - Owner actions

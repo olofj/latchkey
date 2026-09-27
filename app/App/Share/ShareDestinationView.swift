@@ -16,6 +16,10 @@
 //  black page, F15). The session suite checks the page's frame is the same
 //  before and after a share with the keyboard up.
 //
+//  F18: an item addressed in the Shortcut shows no list -- the send, then
+//  the gateway's answer (`share-delivery`, not `share-picker`). It becomes
+//  the picker only when the chosen session is gone.
+//
 
 import SwiftUI
 
@@ -39,7 +43,7 @@ struct ShareDestinationView: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("share-picker")
+        .accessibilityIdentifier(delivery.addressedTitle == nil ? "share-picker" : "share-delivery")
     }
 
     private var picker: some View {
@@ -78,11 +82,22 @@ struct ShareDestinationView: View {
                 }
             }
 
+            if let title = delivery.addressedTitle {
+                Section {
+                    Label("Sending to \(title)", systemImage: "arrow.right.circle")
+                        .font(.subheadline)
+                        .accessibilityIdentifier("share-addressed")
+                }
+            }
+
             switch delivery.phase {
             case .waiting(let text):
                 Section { status(text, spinning: true) }
             case .listing:
                 Section { status("Listing sessions", spinning: true) }
+            case .working where delivery.addressedTitle != nil:
+                // Addressed: nothing to pick, the toolbar shows the step.
+                EmptyView()
             case .picking, .working:
                 sessionList
                 Section("Note") {
@@ -106,7 +121,7 @@ struct ShareDestinationView: View {
                 EmptyView()
             }
         }
-        .navigationTitle("Share to a session")
+        .navigationTitle(delivery.addressedTitle == nil ? "Share to a session" : "Sending")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {

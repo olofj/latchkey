@@ -140,6 +140,12 @@ nonisolated enum ShareOutcome: Equatable {
         }
     }
 
+    /// F18 §5: an item addressed in the Shortcut whose session is gone by
+    /// delivery time. Shown over the picker; nothing was posted.
+    static func addressedSessionGone(title: String) -> String {
+        "The session you queued for, \(title), isn't there any more — pick one."
+    }
+
     /// Whether the prefill fallback (F3 §4.9) is offered: a bare 403 on the
     /// post, which is the ported-origin CSRF refusal (F1 §4a), for a link or
     /// text. Not for a document -- prefill carries no file.

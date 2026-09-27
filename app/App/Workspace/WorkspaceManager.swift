@@ -41,7 +41,12 @@ final class WorkspaceManager: ObservableObject {
     /// Shared launch-only auth key used by automation. Never persisted.
     private let authKey: String?
 
+    /// The one the app made (F18): a background App Intent runs in this
+    /// process with no scene, so no view ever hands it a workspace.
+    private(set) static weak var current: WorkspaceManager?
+
     init() {
+        defer { Self.current = self }
         // App-level one-time setup — MUST run before any TailscaleNode is
         // created so all nodes share one logtail and Go runtime stderr is
         // captured by its persistent filch from the beginning.
