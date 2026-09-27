@@ -192,7 +192,20 @@ the dark flash that follows it. Both are superseded.
    belongs there. `docs/upstream/` already holds one such report; this is a
    second.
 
-Not yet known: whether the dark shell is the pinned 0.7.1 bundle's behaviour in
-general or specific to this owner's stored theme. Serving the same bundle from
-the test harness and watching for the same flash would answer it without
-needing his device.
+**2026-09-26, reproduced locally — it is the bundle, not the owner's theme.**
+Recording the simulator (`xcrun simctl io <udid> recordVideo`) while
+`ONLY_TESTS="SessionTests/testTheRealDashboardConnectsToNothingButTheGateway"
+scripts/test-session.sh --build` drove the real 0.7.1 bundle through the fake
+gateway shows the same sequence: white page area with the app's gear → **solid
+black carrying the dashboard's own dark toolbar** → light, with "Signed out —
+Sign in". Mean brightness bottoms out at **33.5**, against 22–25 on the owner's
+device.
+
+So the dark shell is the pinned bundle's behaviour, reproducible on demand with
+no device and no tailnet. That makes this an ordinary fix with a local loop:
+measure, change the reveal, measure again. The measurement recipe is the one
+above plus per-frame `signalstats` mean brightness, which is what distinguishes
+a flash from a redraw without anyone having to watch a video.
+
+Note the reproduction reaches a signed-out dashboard rather than the owner's
+signed-in one, and the flash appears in both, so it precedes session state.
