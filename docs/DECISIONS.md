@@ -3493,3 +3493,30 @@ without another tap".
 
 **Evidence:** the test alone, settled, 8/8 green (50–55 s a run, no
 hang); gateway check 37 steps ok; session 39/39, 1086 s.
+
+## 2026-09-26 — F18 built: the share finishes from the actions list (C, with B)
+
+**Decision:** `SendToSessionIntent` runs `[.background, .foreground(.dynamic)]`
+with a `destination` parameter read from a session mirror the app writes
+into the group container; the run re-lists in the app's process and posts
+only if the chosen key is still there, and calls `continueInForeground` when
+it cannot finish (sign-in, the session gone, the node or page not up in
+25 s). Option A (a drop-down in the extension's own sheet) is not built.
+
+**Why:** Olof chose the Shortcut over the app-row icon (F18 §10), and a
+background App Intent is the one supported way to run where the node is
+without a switch (F18 §2.6). The mirror exists because nothing session-shaped
+was on disk (§2.3); it holds titles and folders only, so D1 and R32 are
+untouched. The key from the drop-down is a proposal, never posted unverified:
+the trap of F3 §4.5 stands, and the gone cases were shown able to fail by
+skipping the verify: the stale key was posted, the fake refused it with 404
+and recorded the violation, and both tests failed. Sections per gateway
+in the drop-down were not used: an `ItemCollection` result on `EntityQuery`
+is unmeasured, and the host in the subtitle does the same job. The addressed
+sheet (`share-delivery`) shows the send and the answer rather than nothing,
+so option B ends in a confirmation the owner can read.
+
+**Evidence:** host share tests 125/125; the three new `ShareTests` and the
+session suite as recorded in F18 §10. Not measured: what iOS allows the
+background run, and whether the page world runs backgrounded — the
+`ShareIntent:` phase lines are the instrument for the owner's device run.

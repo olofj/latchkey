@@ -148,6 +148,11 @@ Record each result in `docs/DECISIONS.md` under a new "M1 device check" entry.
 | F5: the header's instance chips in portrait | `Local` and the chevron legible, nothing drawn over them; the rest of the row one swipe away | |
 | F5: Settings → Gateway after using two gateways | both listed, the other one labelled `answering` or `not answering` | |
 | F5: switch to the other gateway and back | no second token asked for | |
+| F18: open Latchkey once, then the Shortcut's *Session* drop-down (Shortcuts → the action → Session, or *Ask Each Time* at share time) | the gateway's sessions, the last one used first; "Open Latchkey once…" before any listing | |
+| F18: share from Safari with the app backgrounded, session chosen (warm node) | the sheet says "Sent to <session>" with no switch; `grep ShareIntent:` in Settings → Diagnostics → Logs gives `node up`, `page ready`, `post` in ms — record them | |
+| F18: the same after a force-quit (cold node) | either "Sent to …" or "Latchkey needs to open to finish this share: …" (option B: the app comes up and sends with no picker); record the phase times and which it was | |
+| F18: the same while signed out of the dashboard | the hand-over, then the sign-in sheet with "1 share waits"; sent by itself after sign-in | |
+| F18: a session deleted on the gateway after it was chosen | the hand-over; the picker with "The session you queued for, …, isn't there any more"; nothing posted | |
 
 ## 7. If it goes wrong
 

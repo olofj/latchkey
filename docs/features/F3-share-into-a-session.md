@@ -90,7 +90,10 @@ bug in this spec.
 - **No video.** The gateway streams video to 512 MB; this flow caps
   everything at 50 MB and does not special-case video containers.
 - **The extension never picks a destination.** It captures; the picker is in
-  the app, where the live list is (§4.7).
+  the app, where the live list is (§4.7). *Revised by F18 (2026-09-26): the
+  Shortcut does pick one, from the mirror the app writes (F18 §6.1), and the
+  app posts to it only after its own fresh listing has it (§4.5). The
+  extension's sheet still picks nothing.*
 - **No background delivery** (BGTask). Why, in §4.4.
 - **No notification** unless Olof says so (§8 Q2; R34/D6).
 - **No delivery from any process but the app** (§4.4).
@@ -546,7 +549,11 @@ directory or WebKit's store.
 ## 6. Decisions — answered by Olof, 2026-09-23
 
 1. **Default destination: remember the last session, preselected.** The
-   picker still opens, so one tap changes it.
+   picker still opens, so one tap changes it. *Revised by F18 (2026-09-26):
+   an item addressed in the Shortcut's drop-down skips the picker; the
+   sheet shows the send and the answer. The picker opens for it only when
+   the chosen session is gone by delivery time, with the "queued for … isn't
+   there any more" line.*
 2. **What arrives: the title and the URL, plus a note if typed** — and, for
    a document, **the artifact itself with a note**, "similar to how it would
    be in the chat window of kirocrew or a web session". Folded in: §4.3,

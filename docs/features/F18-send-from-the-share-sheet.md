@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **decided 2026-09-26: the actions list, not the app-row icon.** Olof chose the Shortcut route, so option C (background send, confirmed without leaving the sheet) is the target and B (the app comes forward) is its fallback. Not built; C's viability still rests on one unmeasured thing, §9 |
+| **Status** | **built 2026-09-26: option C with B as its fallback** (§10). The mirror, the `destination` parameter, the addressed delivery and the background run are in; the session suite covers B, C's in-process path and both hand-overs. **Not yet measured on the device**: what iOS allows a background intent, and whether the page world runs backgrounded (§9 Q2). Until that run, C is built and not yet confirmed |
 | **Requested** | 2026-09-25, for Olof: the share flow should finish inside the share sheet. He picks the target session from a drop-down there, with no switch into Latchkey. Today it is two steps: the extension writes to the App Group inbox, and the app posts it when opened (F3 stages 1-2) |
 | **Revision** | needs one whichever option is chosen. F3 §3 says "the extension never picks a destination", and F3 §6 answer 1 says the picker always opens. Every option here changes at least one of those |
 | **Touches** | `ShareExtension/`, `App/Share/` (a new session mirror, and `ShareDelivery` gains a pre-chosen destination), `App/Share/ShareIntents.swift` (options B and C), Settings → Share, the session suite |
@@ -416,3 +416,66 @@ behaves as today.
   Still open, and they shape the drop-down rather than the route: whether it
   defaults to the last session used (one tap, no choosing) and whether "new
   session" is an entry in it.
+
+- **2026-09-26, built (C, with B as the fallback).** What is in the tree:
+  - **The mirror** (§6.1): `App/Share/Inbox/ShareMirror.swift`, shared
+    source (compiled into the extension too, so it stays Foundation-only),
+    at `<group>/Library/Application Support/ShareMirror/mirror.json`,
+    backup-excluded. Written after every successful listing (the picker's
+    and the verify before a post) and once per foreground by a cheap
+    re-list with `X-Latchkey-Share: mirror`, only once the page is
+    `.active` and no item is up. A gateway's entry goes when it leaves
+    `knownGateways`; the whole file goes on `-UITestResetShare`. Titles,
+    folders, `running`, queue depth and the last destination; nothing else.
+  - **The parameter** (§6.3): `destination: ShareDestinationEntity?`,
+    an `AppEntity` whose `EntityQuery` reads the mirror. Fresh gateways
+    only, the current one first, the last destination first within it
+    (`defaultResult()` returns it, so a new action starts on it). Over
+    24 h the list is hidden and the intent refuses with §5's sentence
+    ("Latchkey's session list is N h old…", "Open Latchkey once…",
+    "<host> has no sessions."). No "new session" entry. The gateway host
+    is in the subtitle when more than one is offered; sections were not
+    used (an `ItemCollection` result type on `EntityQuery` was not worth
+    the risk unmeasured).
+  - **Addressed delivery** (§6.2): `ShareItem.destination` (version 2; a
+    v1 item reads as unaddressed). `ShareDelivery` treats an addressed
+    item as a picker whose choice is made: `deliver` re-lists and posts
+    only if the key is there; if not, `finish(.sessionGone)` shows the
+    picker with "The session you queued for, X, isn't there any more —
+    pick one." and drops the address. The sheet is `share-delivery`
+    (the send and the answer, no list) rather than `share-picker`.
+  - **The background run** (§4 C): modes `[.background,
+    .foreground(.dynamic)]`. `ShareDelivery.performIntent` admits, waits
+    for `Running`, creates the page off-screen if no scene made one,
+    waits for `.active`, then `deliver`, all inside `intentBudget`
+    (25 s). Sent/queued returns the dialog. Sign-in, the session gone,
+    the node or page not up in time, another share on the picker:
+    `continueInForeground` (option B). A gateway refusal or no answer:
+    the dialog says so and the item is kept failed. Each phase logs
+    `ShareIntent: node up|page ready|post in N ms`, plus `begin`, `done`
+    and `needs foreground after N ms: <reason>`, so one device run gives
+    §9 Q2's numbers: `grep ShareIntent:` in Settings → Diagnostics → Logs.
+  - **Tests.** Host: the mirror round-trips, the staleness rule, the three
+    empty-list sentences, pruning, `destination` in v1 and v2,
+    `ShareSession.list` feeding the mirror, the store on disk. Session:
+    three `ShareTests` (B addressed then gone; C in-process then handed
+    over on gone; C handed over for sign-in), driven by
+    `-UITestSeedShare …:dest=<key>` and `-UITestIntentDeliver`, which runs
+    the seed through `performIntent` in the app's process. The script
+    reads the mirror from the group container and requires a
+    `ShareIntent: post in N ms: sent` line on some shard. Shown able to
+    fail once by mutation: with the verify in `deliver` skipped, both gone
+    cases posted the stale key; the fake refused it with 404 and recorded
+    the violation, and the tests failed on the refusal shown where they
+    expect the picker (`Share: failed …: refused (404)` in the app's log).
+    Measured on the simulator's fixture node: `node up 0 ms`, `page ready
+    3.1–3.4 s` (created off-screen, signed in from the cookie), `post
+    0.3–0.5 s`, `done 3.6 s`. The device numbers are the open question.
+  - **Not built:** option A (the app-row sheet's drop-down); the extension
+    still saves and says "Open Latchkey". The share-sheet test therefore
+    gains no *choose a session* step.
+  - **For the device** (Olof): build the Shortcut with the action's
+    *Session* set to *Ask Each Time*, share from Safari, watch the dialog;
+    then `grep ShareIntent:` in the app's log for the phase times, cold
+    and warm. If `page ready` never comes while backgrounded, §9 Q4 is
+    the next question.
