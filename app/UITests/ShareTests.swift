@@ -54,6 +54,14 @@ final class ShareTests: XCTestCase {
     /// dashboard is moved to that session. The note is typed, so the keyboard
     /// comes up over the sheet; the page's frame must be the same afterwards
     /// (F13's black page came from exactly such an inset).
+    ///
+    /// Then, on the same launch, two claims that only need a share already
+    /// sent (each once its own test, F14 cost pass): the next share
+    /// preselects that session and Send posts to it (Olof's answer 1,
+    /// `testTheLastSessionIsPreselected`); and when the remembered session
+    /// is gone nothing is selected, the owner is told, and nothing is posted
+    /// to the stale key, which the real gateway would have created as a new
+    /// session (F3 §4.5, `testOnlyAListedSlotIsEverPosted`).
     func testASharedLinkReachesTheChosenSession() async throws {
         let app = try await launchSignedIn()
         defer { app.terminate() }
@@ -84,51 +92,40 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(inboxCount(app), 0, "a confirmed share leaves the inbox")
         XCTAssertTrue(page.appears(within: 5))
         XCTAssertEqual(page.frame, frameBefore, "the share left the page's frame as it was (F13, F15)")
-    }
 
-    /// Olof's answer 1: the last session is preselected, and Send posts to it.
-    func testTheLastSessionIsPreselected() async throws {
-        let app = try await launchSignedIn()
-        defer { app.terminate() }
-        share(app, "latchkey://share?url=https://example.com/one")
-        try pick(app, "notes")
-        element(app, "share-send").tap()
-        let awaited2 = try await lastResult(app)
-        XCTAssertEqual(awaited2, "sent:notes")
-
+        // The last session is preselected, and Send posts to it.
         share(app, "latchkey://share?url=https://example.com/two")
         let selected = element(app, "share-destination-selected")
-        XCTAssertTrue(element(app, "share-session-notes").appears(within: 30))
-        XCTAssertEqual(selected.label, "notes", "the last session is selected before any tap")
+        XCTAssertTrue(element(app, "share-session-obsidian").appears(within: 30),
+                      "the picker lists the session again (testTheLastSessionIsPreselected)")
+        XCTAssertEqual(selected.label, "obsidian",
+                       "the last session is selected before any tap (testTheLastSessionIsPreselected)")
         element(app, "share-send").tap()
-        let awaited3 = try await lastResult(app)
-        XCTAssertEqual(awaited3, "sent:notes")
-        let posts = (try await gatewayState())["posts"] as? [[String: Any]] ?? []
-        XCTAssertEqual(posts.map { $0["slot"] as? String }, ["notes", "notes"])
-    }
+        let awaited2 = try await lastResult(app)
+        XCTAssertEqual(awaited2, "sent:obsidian", "Send posts to the preselected session (testTheLastSessionIsPreselected)")
+        let posts2 = (try await gatewayState())["posts"] as? [[String: Any]] ?? []
+        XCTAssertEqual(posts2.map { $0["slot"] as? String }, ["obsidian", "obsidian"],
+                       "both posts went to the same session (testTheLastSessionIsPreselected)")
+        // The sent sheet closes itself 2 s later; the next share must not
+        // find it still up (then `share` waits out the system's question).
+        _ = element(app, "share-picker").disappears(within: 10)
 
-    /// The trap (F3 §4.5): the remembered session is gone, so nothing is
-    /// selected, the owner is told, and nothing is posted to the stale key --
-    /// which the real gateway would have created as a new session.
-    func testOnlyAListedSlotIsEverPosted() async throws {
-        let app = try await launchSignedIn()
-        defer { app.terminate() }
-        share(app, "latchkey://share?url=https://example.com/one")
-        try pick(app, "obsidian")
-        element(app, "share-send").tap()
-        let awaited4 = try await lastResult(app)
-        XCTAssertEqual(awaited4, "sent:obsidian")
-
+        // The remembered session is gone: nothing selected, nothing posted.
         _ = try await Self.post("\(Self.gatewayControl)/__slots?keys=notes,plan")
-        share(app, "latchkey://share?url=https://example.com/two")
-        XCTAssertTrue(element(app, "share-session-notes").appears(within: 30))
-        XCTAssertEqual(element(app, "share-destination-selected").label, "none", "nothing preselected")
-        XCTAssertTrue(element(app, "share-notice").exists, "the owner is told the session is gone")
-        XCTAssertFalse(element(app, "share-session-obsidian").exists)
-        XCTAssertFalse(element(app, "share-send").isEnabled, "no Send without a pick")
-        let state = try await gatewayState()
-        XCTAssertEqual(counter(state, "share_posts"), 1, "nothing more was posted")
-        XCTAssertEqual(violations(state), 0, "no post to an unlisted slot: \(state["violations"] ?? [])")
+        share(app, "latchkey://share?url=https://example.com/three")
+        XCTAssertTrue(element(app, "share-session-notes").appears(within: 30),
+                      "the picker lists what the gateway has now (testOnlyAListedSlotIsEverPosted)")
+        XCTAssertEqual(element(app, "share-destination-selected").label, "none",
+                       "nothing preselected (testOnlyAListedSlotIsEverPosted)")
+        XCTAssertTrue(element(app, "share-notice").exists,
+                      "the owner is told the session is gone (testOnlyAListedSlotIsEverPosted)")
+        XCTAssertFalse(element(app, "share-session-obsidian").exists,
+                       "the gone session is not listed (testOnlyAListedSlotIsEverPosted)")
+        XCTAssertFalse(element(app, "share-send").isEnabled, "no Send without a pick (testOnlyAListedSlotIsEverPosted)")
+        let state3 = try await gatewayState()
+        XCTAssertEqual(counter(state3, "share_posts"), 2, "nothing more was posted (testOnlyAListedSlotIsEverPosted)")
+        XCTAssertEqual(violations(state3), 0,
+                       "no post to an unlisted slot (testOnlyAListedSlotIsEverPosted): \(state3["violations"] ?? [])")
     }
 
     /// The ported-origin CSRF refusal (F1 §4a): a bare 403 is shown as a
@@ -357,22 +354,24 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(counter(after, "share_posts"), 1, "posted once, on the second Send")
     }
 
-    /// Items older than 7 days go at launch, unsent.
+    /// Items older than 7 days go at launch, unsent. Then the positive
+    /// control for the sweep and capture tests (once its own test,
+    /// `testAFreshSeedIsInTheInbox`): a fresh seed IS in the inbox, and the
+    /// instrument reads it. The hook seeds one item per launch, so the
+    /// control is the same signed-in workspace relaunched with a 6-day
+    /// seed -- one launch more, no second sign-in.
     func testTheSweepRunsAtLaunch() async throws {
-        let app = try await launchSignedIn(seed: "pdf:1024:age=8d")
-        defer { app.terminate() }
+        var app = try await launchSignedIn(seed: "pdf:1024:age=8d")
         XCTAssertEqual(inboxCount(app), 0, "the 8-day item was swept")
         XCTAssertFalse(element(app, "share-picker").exists)
-    }
+        app.terminate()
 
-    /// The positive control for the sweep and capture tests: a fresh seed IS
-    /// in the inbox, and the instrument reads it.
-    func testAFreshSeedIsInTheInbox() async throws {
-        let app = try await launchSignedIn(seed: "pdf:1024:age=6d")
+        app = launch(seed: "pdf:1024:age=6d", reset: false)
         defer { app.terminate() }
-        XCTAssertTrue(element(app, "share-session-obsidian").appears(within: 30), "the picker comes up")
+        XCTAssertTrue(element(app, "share-session-obsidian").appears(within: 45),
+                      "the picker comes up (testAFreshSeedIsInTheInbox)")
         element(app, "share-cancel").tapWhenSettled(in: app)
-        XCTAssertEqual(inboxCount(app), 1, "a 6-day item stays, and the instrument sees it")
+        XCTAssertEqual(inboxCount(app), 1, "a 6-day item stays, and the instrument sees it (testAFreshSeedIsInTheInbox)")
     }
 
     // MARK: - F18: addressed in the Shortcut

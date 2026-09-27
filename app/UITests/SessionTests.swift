@@ -68,6 +68,10 @@ final class SessionTests: XCTestCase {
 
     // MARK: - R22: the native sheet replaces the page's banner
 
+    /// Then, on the reopened sheet, a dead link (expired, or for another
+    /// gateway) says so and the sheet stays up (R23; once its own test,
+    /// `testABadTokenSaysSoAndKeepsTheSheet`). Nothing here signs in, so
+    /// the redemption count is absolute.
     func testSignedOutShowsTheNativeSheetAndHidesThePageBanner() async throws {
         let app = launch()
         defer { app.terminate() }
@@ -89,6 +93,14 @@ final class SessionTests: XCTestCase {
                        "the page's own banner stays hidden (CSS only), past the watchdog")
         element(app, "session-signin-button").tap()
         XCTAssertTrue(sheet.appears(within: 5), "the button reopens the sheet")
+
+        typeToken(app, "\(Self.gateway)/?token=fk1.not-a-link-this-gateway-made")
+        let message = element(app, "token-sheet-message")
+        XCTAssertTrue(message.appears(within: 20), "a failed sign-in explains itself (testABadTokenSaysSoAndKeepsTheSheet)")
+        XCTAssertTrue(message.label.contains("didn't work"), "\(message.label) (testABadTokenSaysSoAndKeepsTheSheet)")
+        XCTAssertTrue(sheet.exists, "the sheet stays up (testABadTokenSaysSoAndKeepsTheSheet)")
+        let redemptions = counter(try await gatewayState(), "redemptions")
+        XCTAssertEqual(redemptions, 0, "a dead link redeems nothing (testABadTokenSaysSoAndKeepsTheSheet)")
     }
 
     /// R22's fallback, and the positive control for the hidden-banner check:
@@ -173,22 +185,6 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(access.contains("(in "), "the access cookie's expiry: \(access)")
     }
 
-    /// A dead link (expired, or for another gateway) says so, and the sheet
-    /// stays up.
-    func testABadTokenSaysSoAndKeepsTheSheet() async throws {
-        let app = launch()
-        defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
-
-        typeToken(app, "\(Self.gateway)/?token=fk1.not-a-link-this-gateway-made")
-        let message = element(app, "token-sheet-message")
-        XCTAssertTrue(message.appears(within: 20), "a failed sign-in explains itself")
-        XCTAssertTrue(message.label.contains("didn't work"), message.label)
-        XCTAssertTrue(element(app, "token-sheet").exists, "the sheet stays up")
-        let redemptions = counter(try await gatewayState(), "redemptions")
-        XCTAssertEqual(redemptions, 0)
-    }
-
     // MARK: - R20 / R25: the page keeps the session alive by itself
 
     /// Short-lived access sessions: the real scheduler refreshes about every
@@ -249,6 +245,12 @@ final class SessionTests: XCTestCase {
 
     // MARK: - R21: the terminal path, and recovery
 
+    /// Then, signed in again, the other terminal path (M4 review; once its
+    /// own test, `testSignOutEverywhereShowsTheSheet`): `kirocrew logout`
+    /// bumps the revocation generation, so the access session AND the
+    /// refresh chain are refused (401 invalid_refresh, no cookie clear, so
+    /// no reload). The sheet comes through the page's 403 interceptor, and
+    /// a new token recovers.
     func testARevokedChainShowsTheSheetAndANewTokenRecovers() async throws {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
@@ -280,6 +282,13 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(counter(state, "redemptions"), 2, "the second token redeemed")
         XCTAssertEqual(violations(state), 0, "the revocation was the gateway's, not a lineage violation")
         XCTAssertFalse(element(app, "token-sheet").exists)
+
+        _ = try await Self.post("\(Self.gatewayControl)/__logout-all")
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 45),
+                      "signed out everywhere: the app asks for a token (testSignOutEverywhereShowsTheSheet)")
+        try await signIn(app, kind: "cli")
+        let redemptions = counter(try await gatewayState(), "redemptions")
+        XCTAssertEqual(redemptions, 3, "a new token redeemed after the logout (testSignOutEverywhereShowsTheSheet)")
     }
 
     // MARK: - R24: gateway restarts
@@ -354,37 +363,26 @@ final class SessionTests: XCTestCase {
 
     // MARK: - M4 review: what real gateways do that the first fake did not
 
-    /// `kirocrew logout` bumps the revocation generation: the access session
-    /// AND the refresh chain are refused (401 invalid_refresh, no cookie
-    /// clear, so no reload). The sheet comes through the page's 403
-    /// interceptor, and a new token recovers.
-    func testSignOutEverywhereShowsTheSheet() async throws {
-        _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
-        let app = launch()
-        defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
-        try await signIn(app, kind: "cli")
-
-        _ = try await Self.post("\(Self.gatewayControl)/__logout-all")
-        XCTAssertTrue(element(app, "token-sheet").appears(within: 45),
-                      "signed out everywhere: the app asks for a token")
-        try await signIn(app, kind: "cli")
-        let redemptions = counter(try await gatewayState(), "redemptions")
-        XCTAssertEqual(redemptions, 2)
-    }
-
     /// A refresh the gateway carried out but whose response was lost: the
     /// page still holds the consumed token. Its next attempt comes inside
     /// the 60 s grace window, gets the same tokens re-served, and the session
-    /// carries on — no sheet, no lineage violation.
-    func testALostRefreshResponseIsRecoveredByTheGraceWindow() async throws {
+    /// carries on — no sheet, no lineage violation (R25; once its own test,
+    /// `testALostRefreshResponseIsRecoveredByTheGraceWindow`).
+    ///
+    /// Then the same lost response, but the gateway restarts before the
+    /// retry: the grace cache is memory-only, so the retry looks like token
+    /// reuse and the chain is revoked. KiroCrew behaviour, not something the
+    /// app can prevent — what the app must do is recover through the sheet.
+    /// The grace window goes first, so its "no violation" stays absolute.
+    func testALostRefreshAtARestartEndsInTheSheet() async throws {
         _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
         let app = launch()
         defer { app.terminate() }
         XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
         try await signIn(app, kind: "cli")
         let asked = authRequiredCount(app)
-        XCTAssertGreaterThanOrEqual(asked, 1, "the event counter is there, and counted the signed-out start")
+        XCTAssertGreaterThanOrEqual(asked, 1, "the event counter is there, and counted the signed-out start "
+                                    + "(testALostRefreshResponseIsRecoveredByTheGraceWindow)")
 
         _ = try await Self.post("\(Self.gatewayControl)/__drop-next-refresh")
         var state: [String: Any] = [:]
@@ -393,22 +391,13 @@ final class SessionTests: XCTestCase {
             state = try await gatewayState()
             if counter(state, "refresh_dropped") > 0, counter(state, "grace_reserves") > 0 { break }
         }
-        XCTAssertEqual(counter(state, "refresh_dropped"), 1, "a refresh response was lost")
-        XCTAssertGreaterThanOrEqual(counter(state, "grace_reserves"), 1, "the retry came inside the grace window")
-        XCTAssertEqual(violations(state), 0)
-        XCTAssertEqual(authRequiredCount(app), asked, "no token needed")
-    }
-
-    /// The same lost response, but the gateway restarts before the retry:
-    /// the grace cache is memory-only, so the retry looks like token reuse
-    /// and the chain is revoked. KiroCrew behaviour, not something the app
-    /// can prevent — what the app must do is recover through the sheet.
-    func testALostRefreshAtARestartEndsInTheSheet() async throws {
-        _ = try await Self.post("\(Self.gatewayControl)/__config?expire_in=6")
-        let app = launch()
-        defer { app.terminate() }
-        XCTAssertTrue(element(app, "token-sheet").appears(within: 30))
-        try await signIn(app, kind: "cli")
+        XCTAssertEqual(counter(state, "refresh_dropped"), 1,
+                       "a refresh response was lost (testALostRefreshResponseIsRecoveredByTheGraceWindow)")
+        XCTAssertGreaterThanOrEqual(counter(state, "grace_reserves"), 1,
+                                    "the retry came inside the grace window (testALostRefreshResponseIsRecoveredByTheGraceWindow)")
+        XCTAssertEqual(violations(state), 0,
+                       "no lineage violation (testALostRefreshResponseIsRecoveredByTheGraceWindow): \(state["violations"] ?? [])")
+        XCTAssertEqual(authRequiredCount(app), asked, "no token needed (testALostRefreshResponseIsRecoveredByTheGraceWindow)")
 
         // The restart happens at the loss itself. Restarting after polling
         // for the drop lost the race on 0.7.x: its page retried within a
@@ -417,10 +406,10 @@ final class SessionTests: XCTestCase {
         _ = try await Self.post("\(Self.gatewayControl)/__drop-next-refresh?restart=1")
         for _ in 0..<15 {
             try await Task.sleep(for: .seconds(1))
-            if counter(try await gatewayState(), "refresh_dropped") > 0 { break }
+            if counter(try await gatewayState(), "refresh_dropped") > 1 { break }
         }
         let atLoss = try await gatewayState()
-        XCTAssertEqual(counter(atLoss, "refresh_dropped"), 1, "the refresh response was lost")
+        XCTAssertEqual(counter(atLoss, "refresh_dropped"), 2, "the refresh response was lost, this time at a restart")
         XCTAssertTrue(element(app, "token-sheet").appears(within: 75),
                       "the chain is revoked by the retry; the app asks for a token")
         let afterRestart = try await gatewayState()
