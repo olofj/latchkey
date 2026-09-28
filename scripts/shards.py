@@ -176,8 +176,10 @@ def xctestrun():
     return max(found, key=os.path.getmtime)
 
 
-def build(suite, sim_name):
-    env = dict(os.environ, SIM_NAME=sim_name)
+def build(suite, sim_name, slots):
+    # The slots are this process's: without LATCHKEY_SLOTS the serial
+    # worker would flock its simulator's slot again and wait for us forever.
+    env = dict(os.environ, SIM_NAME=sim_name, LATCHKEY_SLOTS=" ".join(map(str, slots)))
     env.pop("LATCHKEY_SHARD_TESTS", None)
     say(f"build, once for every shard (on {sim_name})")
     t0 = time.monotonic()
@@ -314,7 +316,7 @@ def main(suite, doc):
             f"(scripts/simpool.py status)")
     n = len(slots)
     sims = simpool.sims_up(slots, prog)
-    build_s = build(suite, sims[0][0]) if args.build else None
+    build_s = build(suite, sims[0][0], slots) if args.build else None
     testrun = xctestrun()
     suite.prepare()
 
