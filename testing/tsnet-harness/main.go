@@ -169,9 +169,9 @@ type Mode struct {
 	RequireAuth        bool `json:"requireAuth"`
 	RequireMachineAuth bool `json:"requireMachineAuth"`
 	NoGateway          bool `json:"noGateway"`
-	// GatewayAlt: gw serves on tailnet :8443 only, as a gateway moved off
-	// 443 does (F1). Set by ?gw=8443.
-	GatewayAlt bool `json:"gatewayAlt"`
+	// GatewayPort: the one tailnet port gw serves on, as a gateway moved off
+	// 443 does (F1). Set by ?gw=<port>; 0 is 443.
+	GatewayPort int `json:"gatewayPort"`
 	// Purgatory: the harness's peers drop traffic from nodes outside
 	// clientsRange (the device-check rehearsal). Set by /purgatory too.
 	Purgatory bool `json:"purgatory"`
@@ -492,13 +492,23 @@ type peerSpec struct {
 	port    int    // the tailnet port it listens on
 }
 
+// gatewayPort reads ?gw=<port>: a port in 1-65535, else 0 (443; "0" is
+// the separate no-gateway mode).
+func gatewayPort(v string) int {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > 65535 {
+		return 0
+	}
+	return n
+}
+
 // peerSpecs lists this generation's peers.
 func (h *harness) peerSpecs(m Mode) []peerSpec {
 	specs := []peerSpec{{"dash", h.opts.dashboardAddr, 443}, {"plain", "", 443}}
 	if h.opts.gatewayAddr != "" && !m.NoGateway {
 		port := 443
-		if m.GatewayAlt {
-			port = 8443
+		if m.GatewayPort != 0 {
+			port = m.GatewayPort
 		}
 		specs = append(specs, peerSpec{"gw", h.opts.gatewayAddr, port})
 	}
@@ -964,7 +974,7 @@ func (h *harness) apiMux() *http.ServeMux {
 			RequireAuth:        r.URL.Query().Get("auth") == "1",
 			RequireMachineAuth: r.URL.Query().Get("machine") == "1",
 			NoGateway:          r.URL.Query().Get("gw") == "0",
-			GatewayAlt:         r.URL.Query().Get("gw") == "8443",
+			GatewayPort:        gatewayPort(r.URL.Query().Get("gw")),
 			Purgatory:          r.URL.Query().Get("purgatory") == "1",
 		}
 		if err := h.reset(m); err != nil {

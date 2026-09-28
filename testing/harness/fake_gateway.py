@@ -115,6 +115,8 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
   POST /__reset                forget everything (a fresh gateway)
   POST /__slots?keys=a,b[&busy=b]   the live sessions (F3), and which are busy
   POST /__upload-limit?bytes=N the upload limit (default 50 MB)
+  POST /__config?allow_origin=O  also accept origin O (KIROCREW_CORS_ORIGINS; F1
+                               §4a), until /__reset
   POST /__csrf-deny?on=1       refuse POST /api/chat and /api/upload/file as
                                a CSRF failure (the 8443 origin case, F1 §4a)
   POST /__app-signed-out[?on=0]
@@ -460,7 +462,10 @@ class Gateway:
                          "refresh_401": 0, "refresh_429": 0, "refresh_dropped": 0,
                          "denials": 0, "ws_opens": 0, "auth_me_ok": 0,
                          "app_auth_checks": 0, "shell_loads": 0, "restarts": 0,
-                         "logouts": 0, "logout_revocations": 0}
+                         "logouts": 0, "logout_revocations": 0,
+                         "csrf_denials": 0, "ws_origin_denials": 0}
+        # F1 §4a: origins allowed at runtime, as KIROCREW_CORS_ORIGINS would.
+        self.extra_origins = set()
         self.violations = []     # R25: superseded refresh token used outside grace
         self.requests = deque(maxlen=300)
         self.unknown = {}        # path -> count: routes this fake does not implement
@@ -792,6 +797,11 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
     def host_header(self):
         return (self.headers.get("Host") or "").strip().lower()
 
+    def origin_allowed(self, origin):
+        """An exact scheme://host[:port] match, as KiroCrew's check_origin is:
+        a ported origin is refused unless it was allowed by name (F1 §4a)."""
+        return origin in self.allowed_origins or origin in self.gw.extra_origins
+
     def host_name(self):
         h = self.host_header()
         if h.startswith("["):
@@ -937,8 +947,10 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
                 ref = urlsplit(self.headers["Referer"])
                 origin = "%s://%s" % (ref.scheme, ref.netloc)
             loopback = self.client_address[0] in ("127.0.0.1", "::1")
-            if (origin is None and not loopback) or (origin is not None and origin not in self.allowed_origins):
+            if (origin is None and not loopback) or (origin is not None and not self.origin_allowed(origin)):
                 self.share_denied()
+                with self.gw.lock:
+                    self.gw.counters["csrf_denials"] += 1
                 return self.send(403, "CSRF check failed: request origin not allowed.", "text/plain; charset=utf-8")
         cookies = self.cookies()
         port = self.cookie_port()
@@ -1119,7 +1131,9 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
     def websocket(self):
         origin = self.headers.get("Origin")
         loopback = self.client_address[0] in ("127.0.0.1", "::1")
-        if (origin is None and not loopback) or (origin is not None and origin not in self.allowed_origins):
+        if (origin is None and not loopback) or (origin is not None and not self.origin_allowed(origin)):
+            with self.gw.lock:
+                self.gw.counters["ws_origin_denials"] += 1
             return self.send(403, "WebSocket origin not allowed", "text/plain")
         k = self.headers.get("Sec-WebSocket-Key")
         if not k:
@@ -1223,8 +1237,12 @@ class Control(BaseHTTPRequestHandler):
             return self.reply({"link": link, "url": "%s/?token=%s" % (self.public_origin, link)})
         if u.path == "/__config":
             with self.gw.lock:
-                self.gw.expire_in = int(num("expire_in"))
-            return self.reply({"ok": True, "expire_in": self.gw.expire_in})
+                if "expire_in" in q:
+                    self.gw.expire_in = int(num("expire_in"))
+                for origin in q.get("allow_origin") or []:
+                    self.gw.extra_origins.add(origin)
+            return self.reply({"ok": True, "expire_in": self.gw.expire_in,
+                               "extra_origins": sorted(self.gw.extra_origins)})
         if u.path == "/__restart":
             self.gw.restart(num("down"))
             return self.reply({"ok": True})
@@ -1313,6 +1331,8 @@ def main():
     ap.add_argument("--cert")
     ap.add_argument("--key")
     ap.add_argument("--host", default="gw.tail-scale.ts.net", help="the gateway's public host name")
+    ap.add_argument("--allow-origin", action="append", default=[],
+                    help="also accept this origin, as KIROCREW_CORS_ORIGINS does (repeatable; F1 §4a)")
     ap.add_argument("--cookie-port", type=int, default=5476,
                     help="the listen port being emulated (names the cookies when Host has no port)")
     ap.add_argument("--instance", default="0",
@@ -1378,7 +1398,7 @@ def main():
     Page.bundle = Bundle(a.dist)
     Page.allowed_hosts = {a.host, "127.0.0.1", "localhost", "[::1]"}
     Page.allowed_origins = {"https://%s" % a.host, "https://127.0.0.1:%d" % a.port,
-                            "https://localhost:%d" % a.port}
+                            "https://localhost:%d" % a.port} | set(a.allow_origin)
     Control.public_origin = "https://%s" % a.host
     Control.instance = a.instance
 

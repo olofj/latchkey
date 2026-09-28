@@ -142,6 +142,7 @@ harness-up: certs harness-down  ## Start the fake dashboard + stub proxy
 		--map wrong.tail-scale.ts.net:443=127.0.0.1:$(DASH_PORT) \
 		--map down.tail-scale.ts.net:443=127.0.0.1:9 \
 		--map gw.tail-scale.ts.net:443=127.0.0.1:$(GW_PORT) \
+		--map gw.tail-scale.ts.net:8443=127.0.0.1:$(GW_PORT) \
 		$(F6_MAPS) \
 		> $(PROXY_LOG) 2>&1 & echo $$! > $(PROXY_PID)
 	@# Wait for OUR processes to listen. Checking the port alone is what let
