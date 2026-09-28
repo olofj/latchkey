@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Status** | spec |
+| **Status** | §4.2 built 2026-09-24; §4.1 is F9's. **Revised 2026-09-27** before building the rest: criterion 4's question answers itself from the specs, and §4.3 cannot catch F5 (§4.5). §4.3 narrowed, §4.5 added; §4.3–4.5 being built |
 | **Requested** | 2026-09-24, by Olof, after reporting F9 from a device: "you should have been able to find that yourself. Test coverage miss, please introspect and come up with (high value and not just silly checkbox) test cases for these kind of issues." |
 | **Revision** | none |
-| **Touches** | `app/UITests/`, `testing/harness/dashboard.py`, `scripts/test-offline.sh`, `scripts/test-session.sh` |
+| **Touches** | `app/UITests/`, `testing/harness/dashboard.py`, `scripts/test-offline.sh`, `scripts/test-session.sh`; §4.3's probe in `App/Browser/RawWebView.swift` (test hooks only) |
 
 ## 1. Why
 
@@ -114,6 +114,30 @@ Runs in **both orientations**: rotate, re-assert, rotate back. Orientation is a
 dimension over existing checks, not a second copy of the suite — F5 was a
 portrait-only bug, and rotating for the geometry sweep alone costs seconds.
 
+**As revised (2026-09-27).** Two details the first draft left open:
+
+- **The unsafe regions need all four insets.** The F9/F11 probes report the
+  window's top and bottom only, and landscape's obstructions are the sides.
+  A third probe, `window-safe-insets` (value `top=T left=L bottom=B
+  right=R`), sits beside them under the same `-UITestReportSafeArea` flag,
+  on the gate and on the dashboard. The window's insets do not change while
+  a sheet is up, so Settings is swept with the insets read before it opened.
+- **Scrolling content is exempt, fixed chrome is not.** A row of a list that
+  scrolls under the home indicator is how iOS lists work: the owner scrolls
+  it into view. An element with a scroll view, table or collection view
+  among its ancestors is therefore checked only against the sides; anything
+  else against all four edges. Exemptions beyond that are named, with a
+  reason, at the call site.
+
+Flows swept, each in portrait and landscape: the gate, the dashboard with
+its bar in, Settings over it, and the error page. The picker is swept in
+portrait: it is one presentation of the same sheet machinery as Settings.
+
+This check has **no retroactive catch** among the bugs so far (§4.5 says
+why), and is kept because it is cheap and aimed at a class that has come
+close: the gear's placement in F15 and the gate's button in F11 were both
+native chrome at an edge. It is the net under those, not the answer to F5.
+
 ### 4.4 The system's own audit, for free
 
 `app.performAccessibilityAudit(for: [.clippedText, .hitRegion, .elementDetection,
@@ -124,6 +148,43 @@ maintenance cost, including cases nobody here thought to write down.
 It does **not** see inside the web view, which is exactly why §4.1 and §4.2 carry
 the page's half. Findings that are genuinely intended get an explicit
 `XCTIssue` suppression with a comment, never a blanket disable.
+
+### 4.5 The page's own content must not collide at phone width (added 2026-09-27)
+
+Criterion 4 asks whether §4.3 would have caught F5, and the specs answer it
+without a run: **no**. F5 was two of the *page's* elements drawn over each
+other (F5 §1: "Switch instance" on top of the list-failed chip), inside the
+web view, which §4.3 exempts by design and §4.4 does not see into. Of the
+layout bugs the owner found: F9 is §4.1's; F15 (the gear over the page's
+bell) has its own standing test; F5 has a test for **its one row**
+(`testTheInstanceChipsDoNotOverlapInPortrait`). Nothing covers the class
+F5 belongs to — the real frontend's own content colliding at the widths a
+phone gives it — so the next row that overflows reaches the owner exactly
+as F5 did.
+
+So the class gets its own check, on the one fixture that can hold it:
+
+- **Where:** the session suite, on the real pinned bundle. The fake
+  dashboard cannot stand in: §4.2 aligns its viewport with the product's,
+  not its layout.
+- **When:** in the shared signed-in run (F14), right after the instance bar
+  is read, in portrait and again in landscape — the page as the owner meets
+  it, signed in, at rest. No new launch.
+- **What is collected:** one accessibility snapshot of the web view, and
+  from it every labelled leaf and every control, by F5's `instanceChips`
+  rule applied to the whole page (a control's children are its content, not
+  separate items). Skipped: anything under 2 pt on either axis (visually
+  hidden text), and anything not on screen (scrolled out of the web view's
+  frame).
+- **What is asserted:** no two collected items overlap, each frame inset by
+  1 pt so a shared edge is not an overlap (F5 §9's rule); and each item's
+  horizontal extent lies inside the web view's frame. A failure names both
+  items and their frames. Deliberate overlaps found on the real bundle are
+  exempted by label, each with a reason, at the call site.
+
+Shown to fail the way F5's own test was: a build with the chip style's
+install removed must fail this check **by naming the pair F5 named** —
+without being told where to look. That is criterion 4.
 
 **Invariants this must not break** (see `../../app/AGENTS.md`): no change to the
 split tunnel, `allowFailover`, ATS, or D1; no vendored-tree change.
@@ -144,6 +205,7 @@ able to fail — which for a test is the only evidence that it works.
 | Obstruction sweep (§4.3) | L1, portrait + landscape | No hittable chrome element intersects the top or bottom unsafe region | Temporarily exempting nothing and adding `.ignoresSafeArea()` to the gateway picker's toolbar: the refresh control lands under the island and is named in the failure |
 | Accessibility audit (§4.4) | L1 | No `.clippedText` / `.hitRegion` findings in the gate, picker and settings flows | Setting a fixed narrow frame on the connecting-state label so its text clips: the audit reports it |
 | Inset truthfulness (§4.1) | L1 | See F9 §6 | See F9 §6 — reverting `BrowserView.swift` makes the probe report `0px` |
+| Page collision sweep (§4.5) | Session, real bundle, portrait + landscape | No two of the page's labelled leaves or controls overlap, and none leaves the web view sideways | The chip style's install removed: the sweep names "Switch instance" and the list-failed chip, as F5's test does |
 
 ## 7. Acceptance criteria
 
@@ -155,12 +217,20 @@ able to fail — which for a test is the only evidence that it works.
 4. Re-running the F5 scenario (portrait instance chips) with the sweep in place
    reproduces a failure on the code as it was before F5's fix — the honest test
    of whether this would have caught the *previous* one, not just the last one.
+   — Revised: §4.3 cannot (§4.5), so the criterion is §4.5's. With the chip
+   style's install removed, the page sweep fails naming F5's pair, without
+   being pointed at the instance bar — instrument: the session suite, run on
+   that build.
+5. The page sweep adds nothing but a snapshot per orientation to the shared
+   signed-in run: < 5 s on the session suite.
 
 ## 8. Open questions and owner actions
 
 - Criterion 4 is the one that decides whether this is worth its keep. If the
   sweep cannot catch F5 retroactively, the design is aimed at the wrong thing and
   should be reconsidered rather than shipped for the sake of coverage.
+  — Reconsidered 2026-09-27 (§4.5): it cannot, so the design gained the check
+  that can, and §4.3 is kept as the cheaper net it is.
 - `performAccessibilityAudit`'s findings on an app nobody has audited before are
   unknown; the first run may be noisy. If it is, the answer is to fix or
   explicitly suppress each finding with a reason — not to narrow the audit types
