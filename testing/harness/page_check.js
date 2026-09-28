@@ -52,8 +52,10 @@ class WebSocket { constructor(url) { this.url = url; this.sent = []; sockets.pus
 class EventSource { constructor(url) { this.url = url; } }
 const location = { host: 'dash.test', search: '', pathname: '/' };
 
+// The page's load listener only sets rendered, which this test does not read.
 vm.runInContext(src, vm.createContext({
     document, location, fetch, WebSocket, EventSource, setTimeout, setInterval, JSON, Math, Date,
+    addEventListener: () => {},
 }));
 
 const lastReport = () => JSON.parse(fetches.filter((f) => f.url === '/__report').slice(-1)[0].body);

@@ -1328,7 +1328,17 @@ final class OfflineHarnessTests: XCTestCase {
                 let start = try await waitForMinY(web, safeTop, timeout: 5)
                 XCTAssertEqual(start, safeTop, accuracy: 0.5, "shell: a page that scrolls starts without the bar")
             }
-            field.tap()
+            // The field is in the tree once parsed, before WebKit can hit-test
+            // it; a tap then focuses nothing (Shard 2, 2026-09-28, warm after
+            // testStartingANewNode...). Wait for the page's rendered, as F17's.
+            if root == "shell" {
+                _ = try await waitForInsets("shell", timeout: 30) { $0["rendered"] as? Bool == true }
+            } else {
+                _ = try await waitForReport(host: "dash.\(Self.tailnetSuffix)", timeout: 30) {
+                    $0["rendered"] as? Bool == true
+                }
+            }
+            field.tapWhenSettled(in: app)
             let keyboard = app.keyboards.firstMatch
             XCTAssertTrue(keyboard.appears(within: 10), "\(root): tapping the field brings up the keyboard")
             try await settle(app, web: web, landscape: false)

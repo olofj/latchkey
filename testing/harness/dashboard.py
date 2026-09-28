@@ -142,6 +142,15 @@ body { margin: 0; padding: calc(8px + env(safe-area-inset-top)) calc(8px + env(s
 // from a stale one left by the previous page (M2 review: without it the
 // sign-in test could pass on the old page's last report).
 var DOC = Math.random().toString(36).slice(2);
+// rendered: true follows the load and two frames, as HANDOFF's: the field is
+// in the accessibility tree before WebKit can hit-test a tap on it, and a tap
+// in that gap focuses nothing, so no keyboard comes up.
+var RENDERED = false;
+addEventListener('load', function () {
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () { RENDERED = true; report(); });
+  });
+});
 // The sign-in URL is assembled here rather than written out, so neither the
 // token nor 'token=' appears in the page source: a copy of the HTML in some
 // WebKit cache must not trip the R1 disk scan as a false positive.
@@ -173,6 +182,7 @@ function report() {
     // gateway's origin. The DOM is shared across content worlds, so the
     // page sees the element the app's world appended.
     chip_style: document.getElementById('latchkey-chip-row') !== null,
+    rendered: RENDERED,
     ts: Date.now()
   };
   fetch('/__report', {method: 'POST', body: JSON.stringify(s),
@@ -314,13 +324,13 @@ var main = document.getElementById('main');
 for (var i = 0; i < 80; i++) {
   var row = document.createElement('div'); row.className = 'row'; row.textContent = 'Row ' + i; main.appendChild(row);
 }
-var DOC = Math.random().toString(36).slice(2), SEQ = 0, pending = false;
+var DOC = Math.random().toString(36).slice(2), SEQ = 0, pending = false, RENDERED = false;
 function report() {
   pending = false;
   var s = {
     probe: 'shell', doc: DOC, seq: ++SEQ,
     scrollTop: main.scrollTop, scrollRange: main.scrollHeight - main.clientHeight,
-    innerHeight: window.innerHeight, docScrollY: window.scrollY, ts: Date.now()
+    innerHeight: window.innerHeight, docScrollY: window.scrollY, rendered: RENDERED, ts: Date.now()
   };
   fetch('/__inset-report', {method: 'POST', body: JSON.stringify(s),
                             headers: {'Content-Type': 'application/json'}}).catch(function(){});
@@ -329,6 +339,11 @@ main.addEventListener('scroll', function () {
   if (!pending) { pending = true; requestAnimationFrame(report); }
 }, {passive: true});
 window.addEventListener('resize', report);
+addEventListener('load', function () {
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () { RENDERED = true; report(); });
+  });
+});
 report();
 setInterval(report, 1000);
 </script>"""

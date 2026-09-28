@@ -6,7 +6,6 @@
     scripts/simpool.py prune               shut down idle simulators outside the pool
     scripts/simpool.py mem [--every S]     memory of each pool simulator and of xcodebuild
     scripts/simpool.py sims [up [N] | down | delete]
-    scripts/simpool.py prepare UDID        set a booted simulator up for the tests
 
 The suite runners take their slots themselves, so a caller needs no lock of
 its own and two worktrees can run suites at once: scripts/shards.py calls
@@ -239,20 +238,9 @@ def sims_up(slots, prog="scripts/simpool.py"):
             t0 = time.monotonic()
             run("xcrun", "simctl", "bootstatus", udid, "-b")
             print(f"    booted in {time.monotonic() - t0:.0f} s", flush=True)
-        prepare(udid)
         out.append((name, udid))
     return out
 
-
-def prepare(udid):
-    """Set a booted simulator up the way the tests expect, every run, so no
-    simulator depends on how it was last used. Opening one in Simulator.app
-    connects the Mac's keyboard as a hardware keyboard, and UIKit then hides
-    the on-screen one, which testTypingInThePageKeepsItOnScreen waits for
-    (it hung on Shard 2, 2026-09-27). With automatic minimization off the
-    on-screen keyboard shows whether or not a hardware keyboard is connected."""
-    run("xcrun", "simctl", "spawn", udid, "defaults", "write", "com.apple.Preferences",
-        "AutomaticMinimizationEnabled", "-bool", "NO")
 
 
 def sim_pids(udid):
@@ -461,8 +449,6 @@ def main():
     s = sub.add_parser("sims", help="list, boot, shut down or delete the pool simulators")
     s.add_argument("action", nargs="?", choices=["status", "up", "down", "delete"])
     s.add_argument("n", nargs="?", type=int)
-    pr = sub.add_parser("prepare", help="set a booted simulator up for the tests")
-    pr.add_argument("udid")
     args = p.parse_args()
     if args.cmd == "run":
         if args.floor is None:
@@ -470,8 +456,6 @@ def main():
         return cmd_run(args)
     if args.cmd == "sims":
         return sims_command(args.action, args.n)
-    if args.cmd == "prepare":
-        return prepare(args.udid)
     return {"status": cmd_status, "prune": cmd_prune, "mem": cmd_mem}[args.cmd](args)
 
 
