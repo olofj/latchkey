@@ -72,6 +72,9 @@ final class Workspace: ObservableObject, Identifiable {
         await manager.refreshStatusNow()
     }
 
+    /// Lights the app bar's gateway row (F22).
+    lazy var gatewayHealth = GatewayHealth(model: model)
+
     /// Called whenever the definition changes, so `WorkspaceManager` can
     /// persist the workspace list. Set after init to avoid a retain cycle.
     var onChange: ((WorkspaceDefinition) -> Void)?

@@ -372,6 +372,21 @@ private struct DashboardContent: View {
             && !statusViewModel.needsAuth && !statusViewModel.needsMachineAuth
     }
 
+    /// F22: the remembered gateways, in the app bar, when there is another
+    /// one to switch to. A tap is the picker's own apply path; the rule is
+    /// checked again first, as the chip's state may be a moment old.
+    private var gatewayRow: AnyView? {
+        let origins = GatewayChipState.order(current: homePage.url,
+                                             known: workspace.definition.knownGatewayOrigins)
+        guard !origins.isEmpty else { return nil }
+        return AnyView(GatewayRow(origins: origins, current: homePage.url, page: tab.viewModel,
+                                  tsnet: model, health: workspace.gatewayHealth) { origin in
+            guard origin != homePage.url, let host = URL(string: origin)?.host(),
+                  model.proxyPolicy?.matchingRule(for: host) != nil else { return }
+            workspace.selectGateway(origin)
+        })
+    }
+
     private var gatewayContent: some View {
         // The app bar, then the page (F15). The banners are between them: in
         // the layout like the page, never over it, and they stay when the bar
@@ -379,6 +394,7 @@ private struct DashboardContent: View {
         AppBarColumn(model: tab.viewModel, controller: tab.viewModel.appBar,
                      showsSignIn: showsSignIn,
                      pinnedForTrouble: session.originCheck == .refused,
+                     gatewayRow: gatewayRow,
                      onSignIn: { session.isTokenSheetPresented = true },
                      onSettings: onSettings) {
             // The node's own trouble first, in the layout rather than over it

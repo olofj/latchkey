@@ -35,6 +35,9 @@ struct AppBarColumn<Content: View>: View {
     /// refusing this origin (F1 §4a) leaves the page inert, and the gear is
     /// then the owner's only way out.
     var pinnedForTrouble = false
+    /// F22: the gateway row, for the bar's middle, or nil when there is no
+    /// other gateway to show.
+    var gatewayRow: AnyView? = nil
     let onSignIn: () -> Void
     let onSettings: () -> Void
     @ViewBuilder let content: Content
@@ -44,7 +47,7 @@ struct AppBarColumn<Content: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             AppBar(model: model, retracted: controller.retracted, showsSignIn: showsSignIn,
-                   onSignIn: onSignIn, onSettings: onSettings)
+                   gatewayRow: gatewayRow, onSignIn: onSignIn, onSettings: onSettings)
             content
         }
         // The page's own canvas colour behind the bar and the status-bar strip
@@ -65,6 +68,7 @@ struct AppBar: View {
     @ObservedObject var model: BrowserViewModel
     let retracted: Bool
     let showsSignIn: Bool
+    var gatewayRow: AnyView? = nil
     let onSignIn: () -> Void
     let onSettings: () -> Void
 
@@ -84,9 +88,19 @@ struct AppBar: View {
             if !retracted {
                 HStack(spacing: 8) {
                     ReturnToDashboardAffordance(model: model)
-                    Spacer(minLength: 0)
-                    if showsSignIn { signIn }
-                    Spacer(minLength: 0)
+                    if let gatewayRow {
+                        // F22: the sign-in capsule keeps its full width, as
+                        // the only way in (F15 §9); the row scrolls in what
+                        // is left. Signed out is when a way to another
+                        // gateway matters most, so neither hides the other.
+                        if showsSignIn { signIn.fixedSize() }
+                        gatewayRow
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Spacer(minLength: 0)
+                        if showsSignIn { signIn }
+                        Spacer(minLength: 0)
+                    }
                     settings
                 }
                 .padding(.horizontal, 6)
