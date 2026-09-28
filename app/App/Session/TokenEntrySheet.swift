@@ -46,7 +46,7 @@ struct TokenEntrySheet: View {
             Form {
                 Section {
                     LabeledContent("Signing in to") {
-                        Text(session.gatewayHost ?? "the gateway")
+                        Text(session.gatewayDisplayName ?? "the gateway")
                             .font(.body.monospaced())
                             .accessibilityIdentifier("token-sheet-target")
                     }
@@ -80,7 +80,7 @@ struct TokenEntrySheet: View {
 
                 if let foreign = session.foreignLinkHost(in: input) {
                     Section {
-                        Text("This link names \(foreign). Latchkey only signs in to \(session.gatewayHost ?? "the selected gateway"), and will try the token there.")
+                        Text("This link names \(foreign). Latchkey only signs in to \(session.gatewayDisplayName ?? "the selected gateway"), and will try the token there.")
                             .font(.subheadline)
                             .foregroundStyle(.orange)
                             .accessibilityIdentifier("token-foreign-host")

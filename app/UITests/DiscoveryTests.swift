@@ -172,6 +172,28 @@ final class DiscoveryTests: XCTestCase {
                       "the page loaded over dash:8443: \(journal.suffix(6))")
     }
 
+    /// F1: a gateway moved off 443 is found on 8443, chosen (the only one),
+    /// and loaded on its port. Not the sign-in sheet: the fake gateway, like
+    /// KiroCrew 0.6.0, allows only the portless origin, so the page loads and
+    /// does nothing (F1 §4a) until the origin check exists to say so.
+    func testAGatewayServingOnly8443IsFoundAndLoads() async throws {
+        try await resetHarness(gatewayOn8443: true)
+        let app = launch()
+        defer { app.terminate() }
+        var requests: [String] = []
+        for _ in 0..<150 where !requests.contains("GET /") {
+            try await Task.sleep(for: .milliseconds(500))
+            requests = try await gatewayState()["requests"] as? [String] ?? []
+        }
+        XCTAssertEqual(Array(requests.prefix(2)), ["GET /manifest.json", "GET /api/auth/me"],
+                       "the gateway was probed (on 8443, the only port it serves): \(requests.prefix(6))")
+        XCTAssertTrue(requests.contains("GET /"), "and loaded without a tap: \(requests.prefix(6))")
+        let journal = try await harnessState()["journal"] as? [[String: Any]] ?? []
+        XCTAssertTrue(journal.contains { $0["peer"] as? String == "gw" && $0["error"] == nil },
+                      "over the tailnet: \(journal.suffix(6))")
+        XCTAssertFalse(element(app, "gateway-picker").exists, "chosen by itself: the only gateway")
+    }
+
     /// The choice persists: a relaunch goes straight to the gateway, with no
     /// picker.
     func testTheChosenGatewayPersistsAcrossRelaunch() async throws {
@@ -830,9 +852,11 @@ final class DiscoveryTests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
-    private func resetHarness(withGateway: Bool = true, purgatory: Bool = false) async throws {
+    private func resetHarness(withGateway: Bool = true, purgatory: Bool = false,
+                              gatewayOn8443: Bool = false) async throws {
         var query: [String] = []
         if !withGateway { query.append("gw=0") }
+        if gatewayOn8443 { query.append("gw=8443") }
         if purgatory { query.append("purgatory=1") }
         let suffix = query.isEmpty ? "" : "?" + query.joined(separator: "&")
         let data = try await Self.post("\(Self.harnessAPI)/reset\(suffix)", timeout: 90)

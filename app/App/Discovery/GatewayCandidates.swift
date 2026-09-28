@@ -54,6 +54,45 @@ struct GatewayPeer: Equatable, Sendable {
     }
 }
 
+/// A gateway is a host and a port (F1 §4.1). The port rides on the origin;
+/// 443 is never written, so a 443 gateway reads exactly as it always has.
+nonisolated struct GatewayEndpoint: Hashable, Sendable, Identifiable {
+    /// tailscale serve's default; a URL with no port means this.
+    static let standardPort = 443
+    /// The project's standard alternate (R40): serve on 443 takes the port
+    /// host-wide on macOS; 8443 is the conventional alt-HTTPS port.
+    static let alternatePort = 8443
+    /// What discovery probes on every candidate.
+    static let standardPorts = [standardPort, alternatePort]
+
+    /// Lowercased FQDN, no trailing dot, never empty.
+    let host: String
+    /// 1...65535.
+    let port: Int
+
+    init?(host: String, port: Int = GatewayEndpoint.standardPort) {
+        var h = host.lowercased()
+        while h.hasSuffix(".") { h.removeLast() }
+        guard !h.isEmpty, (1...65535).contains(port) else { return nil }
+        self.host = h
+        self.port = port
+    }
+
+    /// From `https://host[:port]`; nil for http, a bare name or junk.
+    init?(origin: String) {
+        guard let parts = URLComponents(string: origin), parts.scheme?.lowercased() == "https",
+              let host = parts.host, !host.isEmpty
+        else { return nil }
+        self.init(host: host, port: parts.port ?? Self.standardPort)
+    }
+
+    var id: String { "\(host):\(port)" }
+    /// `https://host` for 443, `https://host:port` otherwise.
+    var origin: String { "https://\(displayName)" }
+    /// `host` for 443, `host:port` otherwise: rows, the sign-in sheet, logs.
+    var displayName: String { port == Self.standardPort ? host : "\(host):\(port)" }
+}
+
 enum GatewayCandidates {
     static let serverOSes: Set<String> = ["linux", "macos", "windows"]
 
@@ -199,7 +238,9 @@ enum GatewayCandidates {
         }
         guard let policy, policy.hasPeerData else { return .failure(.tailnetNotReady) }
         guard policy.matchingRule(for: host) != nil else { return .failure(.offTailnet(host: host)) }
-        return .success(port.map { "https://\(host):\($0)" } ?? "https://\(host)")
+        guard let endpoint = GatewayEndpoint(host: host, port: port ?? GatewayEndpoint.standardPort)
+        else { return .failure(.notAHost) }
+        return .success(endpoint.origin)
     }
 
     /// Whether `raw` could name a gateway at all -- for enabling a button.

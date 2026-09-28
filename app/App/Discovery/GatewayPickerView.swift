@@ -173,12 +173,13 @@ struct GatewayPickerView: View {
                     }
                     ForEach(discovery.gateways) { gateway in
                         Button {
-                            onSelect(gateway.url)
+                            onSelect(gateway.origin)
                         } label: {
-                            Label(gateway.host, systemImage: "server.rack")
+                            Label(gateway.displayName, systemImage: "server.rack")
                                 .font(.body.monospaced())
                         }
-                        .accessibilityIdentifier("gateway-\(gateway.host)")
+                        // A 443 row keeps `gateway-<host>`; 8443 is `gateway-<host>:8443`.
+                        .accessibilityIdentifier("gateway-\(gateway.displayName)")
                     }
                     if discovery.phase == .finished && discovery.gateways.isEmpty {
                         // No case may name a number it did not probe (F7 §4.2).
@@ -251,7 +252,7 @@ struct GatewayPickerView: View {
                 }
 
                 Section {
-                    TextField("gateway, or gateway.example.ts.net", text: $manual)
+                    TextField("gateway, gateway:8443, or gateway.example.ts.net", text: $manual)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
@@ -326,7 +327,7 @@ struct GatewayPickerView: View {
             guard autoSelectSingle, !autoSelected, phase == .finished,
                   discovery.gateways.count == 1 else { return }
             autoSelected = true
-            onSelect(discovery.gateways[0].url)
+            onSelect(discovery.gateways[0].origin)
         }
     }
 

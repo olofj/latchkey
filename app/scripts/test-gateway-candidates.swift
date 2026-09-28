@@ -95,6 +95,19 @@ for bad in ["dash:", "dash:0", "dash:65536", "dash:99999", "dash:84a3", "dash:-1
     expect(gate(bad) == .failure(.badPort) && !GatewayCandidates.isPlausibleGatewayName(bad, suffix: sfx),
            "\(bad) is refused as a bad port: \(gate(bad))")
 }
+// F1 §4.1: GatewayEndpoint.
+let e443 = GatewayEndpoint(origin: "https://h.ts.net"), e8443 = GatewayEndpoint(origin: "https://h.ts.net:8443")
+expect(e443?.host == "h.ts.net" && e443?.port == 443, "no port means 443")
+expect(e8443?.port == 8443 && e8443?.origin == "https://h.ts.net:8443" && e8443?.displayName == "h.ts.net:8443",
+       "8443 round-trips with its port")
+expect(e443?.origin == "https://h.ts.net" && e443?.displayName == "h.ts.net", "443 is never written")
+expect(GatewayEndpoint(origin: "https://H.TS.NET.:443/x?y") == e443, "an explicit 443, case and a trailing dot fold")
+expect(e443 != e8443 && e443?.id != e8443?.id, "one host on two ports is two gateways")
+expect(GatewayEndpoint(origin: "http://h.ts.net") == nil && GatewayEndpoint(origin: "h.ts.net") == nil,
+       "http and a bare name are not gateway origins")
+expect(GatewayEndpoint(host: "h", port: 0) == nil && GatewayEndpoint(host: "h", port: 65536) == nil
+       && GatewayEndpoint(host: "", port: 443) == nil, "a port out of range, or no host, is not an endpoint")
+expect(GatewayEndpoint.standardPorts == [443, 8443], "discovery probes 443 and 8443")
 expect(gate("dash:0").failureMessage == "Enter a host, or host:port (1–65535).", "the bad-port wording (F1 §2)")
 expect(gate("dash", suffix: nil) == .success("https://dash"), "no suffix known: left bare, carried by the short-name rule")
 expect(gate("shared.example.ts.net") == .success("https://shared.example.ts.net"),

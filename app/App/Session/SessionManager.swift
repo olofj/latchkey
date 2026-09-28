@@ -134,8 +134,15 @@ final class SessionManager: NSObject, ObservableObject {
         let pasteboardChangeCount: Int?
     }
 
-    /// The host name the sheet shows as the sign-in target.
+    /// The gateway's host, without its port: what `foreignLinkHost` compares
+    /// a link against, since the CLI names the gateway without one (F1 §4.6).
     var gatewayHost: String? { host?.sessionOrigin?.host }
+
+    /// The sign-in target as the owner reads it: `host`, or `host:port` when
+    /// the gateway is not on 443 (F1 §4.6).
+    var gatewayDisplayName: String? {
+        host?.sessionOrigin.flatMap { GatewayEndpoint(origin: $0.absoluteString)?.displayName } ?? gatewayHost
+    }
 
     /// Forgets the current gateway's sign-in state (a new gateway was chosen,
     /// or the session was signed out, R32). `notice` is what the sheet shows

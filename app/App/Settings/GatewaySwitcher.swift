@@ -83,9 +83,9 @@ struct GatewaySwitcherRows: View {
 
     private var current: String { homePage.url }
     private var others: [String] { viewModel.knownGateways.filter { $0 != current } }
-    private var foundOrigins: Set<String> { Set(discovery.gateways.map(\.url)) }
+    private var foundOrigins: Set<String> { Set(discovery.gateways.map(\.origin)) }
     private var foundNew: [GatewayDiscovery.Gateway] {
-        discovery.gateways.filter { $0.url != current && !viewModel.knownGateways.contains($0.url) }
+        discovery.gateways.filter { $0.origin != current && !viewModel.knownGateways.contains($0.origin) }
     }
 
     var body: some View {
@@ -111,7 +111,7 @@ struct GatewaySwitcherRows: View {
                     }
             }
             ForEach(foundNew) { gateway in
-                row(gateway.url, status: .answering, id: "gateway-found-\(gateway.host)")
+                row(gateway.origin, status: .answering, id: "gateway-found-\(gateway.displayName)")
             }
         }
         .onAppear(perform: sweepIfUseful)

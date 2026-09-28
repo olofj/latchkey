@@ -169,6 +169,9 @@ type Mode struct {
 	RequireAuth        bool `json:"requireAuth"`
 	RequireMachineAuth bool `json:"requireMachineAuth"`
 	NoGateway          bool `json:"noGateway"`
+	// GatewayAlt: gw serves on tailnet :8443 only, as a gateway moved off
+	// 443 does (F1). Set by ?gw=8443.
+	GatewayAlt bool `json:"gatewayAlt"`
 	// Purgatory: the harness's peers drop traffic from nodes outside
 	// clientsRange (the device-check rehearsal). Set by /purgatory too.
 	Purgatory bool `json:"purgatory"`
@@ -467,7 +470,7 @@ func (h *harness) reset(m Mode) error {
 	defer cancel()
 	var peers []*peer
 	for _, spec := range h.peerSpecs(m) {
-		p, err := h.startPeer(ctx, ctl, gen, spec.name, spec.forward)
+		p, err := h.startPeer(ctx, ctl, gen, spec.name, spec.forward, spec.port)
 		if err != nil {
 			for _, q := range peers {
 				q.srv.Close()
@@ -485,24 +488,29 @@ func (h *harness) reset(m Mode) error {
 
 type peerSpec struct {
 	name    string
-	forward string // relay tailnet :443 here; "hold" accepts and never answers; "" nothing
+	forward string // relay tailnet :port here; "hold" accepts and never answers; "" nothing
+	port    int    // the tailnet port it listens on
 }
 
 // peerSpecs lists this generation's peers.
 func (h *harness) peerSpecs(m Mode) []peerSpec {
-	specs := []peerSpec{{"dash", h.opts.dashboardAddr}, {"plain", ""}}
+	specs := []peerSpec{{"dash", h.opts.dashboardAddr, 443}, {"plain", "", 443}}
 	if h.opts.gatewayAddr != "" && !m.NoGateway {
-		specs = append(specs, peerSpec{"gw", h.opts.gatewayAddr})
+		port := 443
+		if m.GatewayAlt {
+			port = 8443
+		}
+		specs = append(specs, peerSpec{"gw", h.opts.gatewayAddr, port})
 	}
 	if h.opts.slowPeer {
-		specs = append(specs, peerSpec{"slow", "hold"})
+		specs = append(specs, peerSpec{"slow", "hold", 443})
 	}
 	return specs
 }
 
 // startPeer brings a harness-owned node to Running, doing its own login and
 // device approval when the mode requires them.
-func (h *harness) startPeer(ctx context.Context, ctl *testcontrol.Server, gen int, name, forward string) (*peer, error) {
+func (h *harness) startPeer(ctx context.Context, ctl *testcontrol.Server, gen int, name, forward string, port int) (*peer, error) {
 	s := &tsnet.Server{
 		Dir:        filepath.Join(h.opts.stateDir, fmt.Sprintf("gen%d", gen), name),
 		Hostname:   name,
@@ -524,7 +532,7 @@ func (h *harness) startPeer(ctx context.Context, ctl *testcontrol.Server, gen in
 		p.ips = append(p.ips, ip.String())
 	}
 	if forward != "" {
-		ln, err := s.Listen("tcp", ":443")
+		ln, err := s.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
 			s.Close()
 			return nil, err
@@ -956,6 +964,7 @@ func (h *harness) apiMux() *http.ServeMux {
 			RequireAuth:        r.URL.Query().Get("auth") == "1",
 			RequireMachineAuth: r.URL.Query().Get("machine") == "1",
 			NoGateway:          r.URL.Query().Get("gw") == "0",
+			GatewayAlt:         r.URL.Query().Get("gw") == "8443",
 			Purgatory:          r.URL.Query().Get("purgatory") == "1",
 		}
 		if err := h.reset(m); err != nil {

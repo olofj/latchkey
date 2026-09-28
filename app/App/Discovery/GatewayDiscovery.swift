@@ -35,11 +35,9 @@ import TailscaleKit
 
 @MainActor
 final class GatewayDiscovery: ObservableObject {
-    struct Gateway: Identifiable, Equatable, Sendable {
-        let host: String
-        var id: String { host }
-        var url: String { "https://\(host)" }
-    }
+    /// A host and a port (F1 §4.1): one machine serving on 443 and 8443 is
+    /// two rows.
+    typealias Gateway = GatewayEndpoint
 
     enum Phase: Equatable {
         case idle
@@ -222,9 +220,11 @@ final class GatewayDiscovery: ObservableObject {
             // the candidates `candidateCount` counts, and adding it would have
             // the picker say it checked more computers than it found to check.
             switch outcome {
-            case .gateway(let found):
-                if !self.gateways.contains(where: { $0.host == found }) {
-                    self.gateways.append(Gateway(host: found))
+            case .gateway(let found, let ports):
+                for port in ports {
+                    guard let gateway = Gateway(host: found, port: port),
+                          !self.gateways.contains(gateway) else { continue }
+                    self.gateways.append(gateway)
                 }
                 self.skipped.removeAll { $0.host == found }
                 logger.log("Discovery: \(found) answered when probed anyway")
@@ -242,7 +242,8 @@ final class GatewayDiscovery: ObservableObject {
     // MARK: - The sweep
 
     private enum Outcome: Sendable {
-        case gateway(String)
+        /// The host, and every port it answered as a gateway on.
+        case gateway(String, ports: [Int])
         case notGateway(String)
         case failed(String, code: Int)
         case deadline
@@ -362,11 +363,14 @@ final class GatewayDiscovery: ObservableObject {
                     }
                     group.cancelAll()
                     continue
-                case .gateway(let host):
+                case .gateway(let host, let ports):
                     answered += 1
                     if firstFound == nil { firstFound = ContinuousClock.now - started }
-                    if !gateways.contains(where: { $0.host == host }) {
-                        gateways.append(Gateway(host: host))
+                    for port in ports {
+                        guard let gateway = Gateway(host: host, port: port),
+                              !gateways.contains(gateway) else { continue }
+                        gateways.append(gateway)
+                        logger.log("Discovery: gateway at \(gateway.id)")
                     }
                     recordProbed(host, replied: true)
                 case .notGateway(let host):
@@ -456,25 +460,52 @@ final class GatewayDiscovery: ObservableObject {
         return URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
     }
 
+    /// One candidate, on every standard port at once (F1 §4.2). The host is
+    /// the unit the sweep counts, so its verdict folds the ports': a gateway
+    /// on any port is a gateway, a reply on any port is an answer, and only a
+    /// host silent on all of them has failed. A port nothing listens on is
+    /// refused at once by tsnet, so the second port costs a round trip, not a
+    /// timeout.
     nonisolated private static func probe(_ host: String, session: URLSession) async -> Outcome {
-        guard let manifestURL = URL(string: "https://\(host)/manifest.json"),
-              let authURL = URL(string: "https://\(host)/api/auth/me")
-        else { return .notGateway(host) }
+        let verdicts = await withTaskGroup(of: (Int, PortVerdict).self) { group in
+            for port in GatewayEndpoint.standardPorts {
+                group.addTask { (port, await Self.probe(host, port: port, session: session)) }
+            }
+            var all: [(Int, PortVerdict)] = []
+            for await verdict in group { all.append(verdict) }
+            return all.sorted { $0.0 < $1.0 }
+        }
+        let ports = verdicts.compactMap { $0.1 == .gateway ? $0.0 : nil }
+        if !ports.isEmpty { return .gateway(host, ports: ports) }
+        if verdicts.contains(where: { $0.1 == .notGateway }) { return .notGateway(host) }
+        let code = verdicts.lazy.compactMap { if case .failed(let c) = $0.1 { c } else { nil } }.first
+        return .failed(host, code: code ?? 0)
+    }
+
+    nonisolated private enum PortVerdict: Equatable, Sendable {
+        case gateway, notGateway, failed(Int)
+    }
+
+    nonisolated private static func probe(_ host: String, port: Int, session: URLSession) async -> PortVerdict {
+        guard let origin = GatewayEndpoint(host: host, port: port)?.origin,
+              let manifestURL = URL(string: "\(origin)/manifest.json"),
+              let authURL = URL(string: "\(origin)/api/auth/me")
+        else { return .notGateway }
         do {
             let (body, response) = try await session.data(from: manifestURL)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             // A 3xx arrives unfollowed (NoRedirects): not a gateway.
             guard GatewayCandidates.manifestIsKiroCrew(status: status, body: body) else {
-                return .notGateway(host)
+                return .notGateway
             }
             let (_, authResponse) = try await session.data(from: authURL)
             let http = authResponse as? HTTPURLResponse
             return GatewayCandidates.authProbeIsKiroCrew(
                 status: http?.statusCode ?? 0,
                 authRequiredHeader: http?.value(forHTTPHeaderField: "X-Auth-Required"))
-                ? .gateway(host) : .notGateway(host)
+                ? .gateway : .notGateway
         } catch {
-            return .failed(host, code: (error as NSError).code)
+            return .failed((error as NSError).code)
         }
     }
 }
