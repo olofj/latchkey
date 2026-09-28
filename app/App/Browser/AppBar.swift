@@ -89,15 +89,18 @@ struct AppBar: View {
                 HStack(spacing: 8) {
                     ReturnToDashboardAffordance(model: model)
                     if let gatewayRow {
-                        // F22: the sign-in capsule is sized first, as the
-                        // only way in (F15 §9); the row scrolls in what is
-                        // left. Signed out is when a way to another gateway
-                        // matters most, so neither hides the other. Not
-                        // fixedSize: at the largest text the capsule alone
-                        // is wider than the screen, and pushed the gear off.
-                        if showsSignIn { signIn.layoutPriority(1) }
+                        // F22: the row starts where it always starts, and
+                        // sign-in is a compact button AFTER it, beside the
+                        // gear (issue #7): signing out must not push a chip
+                        // sideways. Signed out is when a way to another
+                        // gateway matters most, so neither hides the other.
                         gatewayRow
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        if showsSignIn {
+                            compactSignIn
+                                .layoutPriority(1)
+                                .transition(.opacity)
+                        }
                     } else {
                         Spacer(minLength: 0)
                         if showsSignIn { signIn }
@@ -153,6 +156,30 @@ struct AppBar: View {
                 .background(.thinMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("session-signin-button")
+    }
+
+    /// The same way in, beside the row: text only, at the chips' fixed size,
+    /// so it neither reads as a stray icon in the chip strip nor grows past
+    /// the gear at the largest text.
+    private var compactSignIn: some View {
+        Button(action: onSignIn) {
+            Text("Sign in")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6).strokeBorder(Color.orange, lineWidth: 1.5)
+                }
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Signed out — Sign in")
         .accessibilityIdentifier("session-signin-button")
     }
 }
