@@ -834,6 +834,85 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertEqual(element(app, "gateway-current").value as? String, "dash.tail-scale.ts.net", "and dash is still current")
     }
 
+    // MARK: - F22: the gateway row in the app bar
+
+    /// Four remembered gateways, dash in use. The app bar's row has a chip
+    /// for each, dash first; each other chip's light is a probe of its own
+    /// gateway -- gw answers (and its log has the probe), plain does not,
+    /// and a host off the tailnet is grey and cannot be chosen. One tap on
+    /// gw loads it, proved by gw's own log, and gw is then the chip in use
+    /// while dash, a web page but not KiroCrew, is lit red.
+    func testTheAppBarRowLightsEachGatewayAndSwitchesInOneTap() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestHomePage", "https://dash.tail-scale.ts.net",
+                                 "-UITestKnownGateways",
+                                 "https://dash.tail-scale.ts.net,https://\(Self.gatewayHost),"
+                                     + "https://plain.tail-scale.ts.net,https://gateway.example.com"])
+        defer { app.terminate() }
+        try await waitForDashPage()
+        showAppBar(app)
+        XCTAssertTrue(element(app, "gateway-row").appears(within: 10), "the app bar carries the gateway row")
+
+        let dash = element(app, "gateway-chip-dash.tail-scale.ts.net")
+        let gw = element(app, "gateway-chip-\(Self.gatewayHost)")
+        let plain = element(app, "gateway-chip-plain.tail-scale.ts.net")
+        let away = element(app, "gateway-chip-gateway.example.com")
+        XCTAssertTrue(dash.exists && gw.exists && plain.exists && away.exists, "a chip per gateway")
+        XCTAssertEqual(dash.label, "dash.tail-scale.ts.net, in use", "dash is the one in use")
+        XCTAssertLessThan(dash.frame.minX, gw.frame.minX, "the one in use comes first")
+        XCTAssertLessThan(gw.frame.minX, plain.frame.minX, "then the others as remembered")
+
+        XCTAssertTrue(waitForValue(gw, "answering", timeout: 15), "gw is lit answering: \(gw.value ?? "nil")")
+        let probed = try await gatewayState()["requests"] as? [String] ?? []
+        XCTAssertTrue(probed.contains("GET /manifest.json"), "gw's own log has the probe: \(probed.prefix(6))")
+        XCTAssertTrue(waitForValue(plain, "not answering", timeout: 20), "plain is lit not answering: \(plain.value ?? "nil")")
+        XCTAssertTrue(plain.isEnabled, "a red chip still switches: the light is a forecast")
+        XCTAssertEqual(away.value as? String, "not on this tailnet")
+        XCTAssertFalse(away.isEnabled, "a host off the tailnet cannot be chosen")
+
+        try await resetFakes()
+        gw.tap()
+        let sheet = element(app, "token-sheet")
+        XCTAssertTrue(sheet.appears(within: 45), "gw loads and asks for a token")
+        let requests = try await gatewayState()["requests"] as? [String] ?? []
+        XCTAssertTrue(requests.contains("GET /"), "gw's own log has the page load: \(requests.prefix(6))")
+        element(app, "token-sheet-close").tapWhenSettled(in: app)
+        XCTAssertTrue(sheet.disappears(within: 10), "Close closes the token sheet")
+        // Signed out, the sign-in capsule pins the bar, and the row stays
+        // beside it: the way back matters most then.
+        let gwNow = element(app, "gateway-chip-\(Self.gatewayHost)")
+        XCTAssertTrue(gwNow.appears(within: 10), "the row is still in the bar")
+        XCTAssertEqual(gwNow.label, "\(Self.gatewayHost), in use", "gw is now the one in use")
+        XCTAssertTrue(waitForValue(element(app, "gateway-chip-dash.tail-scale.ts.net"), "not KiroCrew", timeout: 15),
+                      "dash answers, but not as KiroCrew")
+    }
+
+    /// One remembered gateway: nothing to switch to, so no row, and the bar
+    /// is as F15 left it.
+    func testTheAppBarRowIsAbsentWithOneGateway() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestHomePage", "https://dash.tail-scale.ts.net",
+                                 "-UITestKnownGateways", "https://dash.tail-scale.ts.net"])
+        defer { app.terminate() }
+        try await waitForDashPage()
+        showAppBar(app)
+        XCTAssertTrue(app.buttons["settings-button"].firstMatch.isHittable, "the bar is up")
+        XCTAssertFalse(element(app, "gateway-row").exists, "and has no gateway row")
+    }
+
+    /// Brings the app bar in if the page has taken it away (F15): a drag down.
+    private func showAppBar(_ app: XCUIApplication) {
+        let gear = app.buttons["settings-button"].firstMatch
+        XCTAssertTrue(gear.appears(within: 10), "the gear exists")
+        XCTAssertTrue(app.settles(within: 10), "nothing is sliding")
+        if !gear.isHittable {
+            let web = app.webViews.firstMatch
+            web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+                .press(forDuration: 0.05, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)))
+        }
+        XCTAssertTrue(gear.isHittable, "the bar is in")
+    }
+
     /// The fake dashboard has reported a page from dash over the tailnet.
     private func waitForDashPage() async throws {
         for _ in 0..<120 {
