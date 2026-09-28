@@ -25,8 +25,8 @@
 #                  contract self-test (make gateway-check)
 #   3. harness     the stub proxy and the fake gateway, up
 #   4. simulator   boot it, trust the test CA
-#   5. tests       SessionTests (Testing configuration, R15); every test in
-#                  the file must pass
+#   5. tests       SessionTests, ShareTests and CalmLaunchTests (Testing
+#                  configuration, R15); every test in them must pass
 #   6. teardown    whatever happened
 #
 # --build runs build-for-testing first.
@@ -82,12 +82,13 @@ say() { printf '::: %s\n' "$*"; }
 say "preflight"
 # R10: only the fixture tailnets may be named (allow-list, not deny-list).
 "$ROOT/scripts/check-fixture-tailnets.sh" \
-    "$APP/UITests/SessionTests.swift" "$APP/UITests/ShareTests.swift" "$HARNESS/fake_gateway.py" \
+    "$APP/UITests/SessionTests.swift" "$APP/UITests/ShareTests.swift" \
+    "$APP/UITests/CalmLaunchTests.swift" "$HARNESS/fake_gateway.py" \
     "$HARNESS/gateway_check.py" "$HARNESS/Makefile" "$HARNESS/leaf.cnf"
-# Both classes (F3 adds ShareTests); every test in both must pass.
-# ONLY=ShareTests (or SessionTests) runs one class while iterating; the
-# count is then that class's, and a pass says so.
-CLASSES=(SessionTests ShareTests)
+# Every class (F3 adds ShareTests, F21 CalmLaunchTests); every test in
+# each must pass. ONLY=ShareTests (or another) runs one class while
+# iterating; the count is then that class's, and a pass says so.
+CLASSES=(SessionTests ShareTests CalmLaunchTests)
 [[ -n "${ONLY:-}" ]] && CLASSES=("$ONLY")
 EXPECTED=0
 for c in "${CLASSES[@]}"; do
@@ -215,9 +216,9 @@ run_tests test "$EXPECTED" "${ONLY_ARGS[@]}"
 TEST_RC=$?
 set -e
 grep -E "Test Case .*(passed|failed)" "$LOG_DIR/test.log" | sed 's/^/    /' || true
-PASSED=$(grep -cE "Test Case .*(SessionTests|ShareTests).* passed" "$LOG_DIR/test.log" || true)
+PASSED=$(grep -cE "Test Case .*(SessionTests|ShareTests|CalmLaunchTests).* passed" "$LOG_DIR/test.log" || true)
 if [[ $TEST_RC -eq 0 && "$PASSED" -ne "$EXPECTED" ]]; then
-    echo "error: $PASSED of $EXPECTED SessionTests + ShareTests passed (a stale build? try --build)" >&2
+    echo "error: $PASSED of $EXPECTED ${CLASSES[*]} passed (a stale build? try --build)" >&2
     TEST_RC=1
 fi
 

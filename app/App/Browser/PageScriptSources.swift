@@ -366,8 +366,12 @@ enum PageScriptSources {
     /// Backgrounds §2.11.2), which is what this reads. It posts the computed
     /// value — `rgb(…)`/`rgba(…)`, or `''` when the page paints nothing — on
     /// load, on attribute changes to `<html>`/`<body>` (a theme switch), on
-    /// stylesheet insertion, on a colour-scheme change and after a background
-    /// transition ends, coalesced to one read per frame and only on change.
+    /// stylesheet insertion and load, on a colour-scheme change and after a
+    /// background transition ends, coalesced to one read per frame and only
+    /// on change. During a background transition it reports the colour the
+    /// fade is heading for. And, for the first three seconds of a document,
+    /// on every frame (F21): a canvas that painted for a frame is what F21
+    /// is about, and not every change raises an event this could hear.
     static let pageBackground = #"""
     (function () {
       var handlers = window.webkit && window.webkit.messageHandlers;
@@ -375,14 +379,43 @@ enum PageScriptSources {
       if (!handler) { return; }
       var last = null, pending = false;
       function clear(c) { return !c || c === 'transparent' || /^rgba\(.*,\s*0\)$/.test(c); }
+      // A background-color transition in flight (the bundle fades between
+      // themes over 250 ms): its current value is nobody's colour, so what
+      // is read is where it is going -- the last keyframe. That is also the
+      // only look a fade that is retargeted before it ends ever gets: the
+      // shell's dark default, arriving with its stylesheet, fades in and is
+      // turned round by the page's own theme before it has finished (F21).
+      // `undefined`: nothing in flight; `null`: in flight, target unreadable,
+      // so nothing is posted until transitionend's read.
+      function target(el) {
+        try {
+          var all = el.getAnimations();
+          for (var i = 0; i < all.length; i++) {
+            var a = all[i];
+            if (a.transitionProperty !== 'background-color'
+                || a.playState === 'finished' || a.playState === 'idle') { continue; }
+            var k = a.effect && a.effect.getKeyframes ? a.effect.getKeyframes() : [];
+            var v = k.length ? (k[k.length - 1].backgroundColor || k[k.length - 1]['background-color']) : '';
+            return v ? String(v) : null;
+          }
+        } catch (e) {}
+        return undefined;
+      }
+      // `''` for a canvas that paints nothing, `null` for "not yet known".
+      function colour(el) {
+        if (!el) { return ''; }
+        var t = target(el);
+        if (t === null) { return null; }
+        var c = t !== undefined ? t : getComputedStyle(el).backgroundColor;
+        return clear(c) ? '' : c;
+      }
       function read() {
         pending = false;
         var c = '';
         try {
-          var d = document.documentElement, b = document.body;
-          c = d ? getComputedStyle(d).backgroundColor : '';
-          if (clear(c)) { c = b ? getComputedStyle(b).backgroundColor : ''; }
-          if (clear(c)) { c = ''; }
+          c = colour(document.documentElement);
+          if (c === '') { c = colour(document.body); }
+          if (c === null) { return; }
         } catch (e) { c = ''; }
         if (c === last) { return; }
         last = c;
@@ -402,7 +435,13 @@ enum PageScriptSources {
       document.addEventListener('DOMContentLoaded', schedule);
       window.addEventListener('load', schedule);
       document.addEventListener('transitionend', schedule, true);
+      // A stylesheet finishing its load (resource loads do not bubble, a
+      // capture listener still sees them): the shell's CSS arriving.
+      document.addEventListener('load', schedule, true);
       try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', schedule); } catch (e) {}
+      var until = Date.now() + 3000;
+      function pump() { read(); if (Date.now() < until) { requestAnimationFrame(pump); } }
+      requestAnimationFrame(pump);
       schedule();
     })();
     """#
@@ -583,6 +622,86 @@ enum PageScriptSources {
             style.id = '\(chipRowStyleID)';
             style.textContent = '\(chipRowCSS)';
             (document.head || document.documentElement).appendChild(style);
+          } catch (e) {
+            // Never break the page over this: without it, the page is
+            // exactly the bundle's own.
+          }
+        })();
+        """
+    }
+
+    /// The id of the `<style>` element `calmShell` adds.
+    nonisolated static let calmShellStyleID = "latchkey-calm-shell"
+
+    /// The rule `calmShell` adds (F21 §4.4). KiroCrew's shell ships
+    /// `<html data-theme="dark">`, its CSS is driven by that attribute alone
+    /// (no `prefers-color-scheme` rule), and the theme the owner chose, or
+    /// the system's, is written onto `<html>` -- `data-theme` and
+    /// `data-mode` -- by the app's `ThemeProvider` only after it has booted,
+    /// from a passive effect. So on a light phone the first paint is a fully
+    /// styled dark shell, held for the whole module load, then a 250 ms fade
+    /// to the light theme (F21 §9). Until the page has chosen, three
+    /// declarations make it paint nothing of its own:
+    ///
+    /// 1. `color-scheme: light dark` on the root. WebKit paints a
+    ///    `color-scheme: dark` document's base canvas black whatever the
+    ///    view's colours are (measured: a transparent body over the shell's
+    ///    dark scheme was a black page area, F21 §9). With both schemes
+    ///    offered, the base canvas follows the phone, as the web view's
+    ///    backing already does (`RawWebView`): white on a light phone, black
+    ///    on a dark one.
+    /// 2. The body's background transparent, so the theme nobody chose does
+    ///    not paint over that.
+    /// 3. `#root` invisible. The app mounts with the shell's dark attributes
+    ///    still on `<html>` and paints its toolbar in dark colours for a few
+    ///    frames before its effect writes the choice (measured: ~60 ms).
+    ///    Hidden, not removed, so nothing reflows and nothing is delayed:
+    ///    the chosen theme paints the moment the page writes it, as before.
+    ///
+    /// Three facts of the 0.7.1 shell must hold for it to match: the static
+    /// `data-theme="dark"`, `data-mode` as the mark of a chosen theme (the
+    /// bundle writes both attributes in one effect), and the body taking its
+    /// background from the theme. A bundle that changes the first makes it a
+    /// no-op, which is today's flash; `calmShell` hands the paint back by
+    /// itself if the second goes. `!important` because the bundle's own
+    /// `body { background: var(--bg) }` is an author rule too.
+    nonisolated static let calmShellCSS =
+        "html[data-theme=\"dark\"]:not([data-mode]) { color-scheme: light dark !important; } "
+        + "html[data-theme=\"dark\"]:not([data-mode]) body { background-color: transparent !important; } "
+        + "html[data-theme=\"dark\"]:not([data-mode]) #root { visibility: hidden !important; }"
+
+    /// Adds `calmShellCSS` at document start, main frame only, and removes
+    /// it once `<html>` carries `data-mode` -- the page has chosen, and the
+    /// rule matches nothing from then on anyway -- or two seconds after
+    /// `#root` gained its first child (the shell's own "did we boot" test)
+    /// with no choice made: a bundle whose resolver does not write
+    /// `data-mode`, which must not be left with a transparent canvas for
+    /// good. Nothing at all on a document that already carries `data-mode`.
+    nonisolated static var calmShell: String {
+        """
+        (function () {
+          try {
+            var doc = document, root = doc.documentElement;
+            if (!root || root.hasAttribute('data-mode')) { return; }
+            if (doc.getElementById('\(calmShellStyleID)')) { return; }
+            var style = doc.createElement('style');
+            style.id = '\(calmShellStyleID)';
+            style.textContent = '\(calmShellCSS)';
+            (doc.head || root).appendChild(style);
+            var observer = null, timer = null;
+            function handBack() {
+              if (observer) { try { observer.disconnect(); } catch (e) {} observer = null; }
+              if (timer !== null) { clearTimeout(timer); timer = null; }
+              var s = doc.getElementById('\(calmShellStyleID)');
+              if (s && s.parentNode) { s.parentNode.removeChild(s); }
+            }
+            observer = new MutationObserver(function () {
+              if (root.hasAttribute('data-mode')) { handBack(); return; }
+              var app = doc.getElementById('root');
+              if (timer === null && app && app.firstChild) { timer = setTimeout(handBack, 2000); }
+            });
+            observer.observe(root, {attributes: true, attributeFilter: ['data-mode'],
+                                    childList: true, subtree: true});
           } catch (e) {
             // Never break the page over this: without it, the page is
             // exactly the bundle's own.

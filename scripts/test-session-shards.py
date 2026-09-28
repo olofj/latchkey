@@ -11,7 +11,7 @@ its own harness instance k: stub proxy, fake dashboard and both fake
 gateways on ports +100*k. How shards are booted, planned, run and judged is
 scripts/shards.py, shared with L1; what is the session suite's own:
 
-  - the plan     SessionTests and ShareTests, as Class/test, longest first
+  - the plan     SessionTests, ShareTests and CalmLaunchTests, as Class/test, longest first
                  by scripts/session-durations.txt. Tests that share one
                  launch (a cached `…Run()` helper) stay together.
   - the bundle   the pinned KiroCrew wheel is fetched once, before the
@@ -70,7 +70,7 @@ class Session(shards.Suite):
 
     def tests(self):
         names, groups = [], []
-        for cls in ("SessionTests", "ShareTests"):
+        for cls in ("SessionTests", "ShareTests", "CalmLaunchTests"):
             path = os.path.join(UITESTS, f"{cls}.swift")
             _, tests = shards.swift_tests(path)
             names += [f"{cls}/{t}" for t in tests]

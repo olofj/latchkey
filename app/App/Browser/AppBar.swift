@@ -47,6 +47,8 @@ struct AppBarColumn<Content: View>: View {
         // above it (F9 §0.1), so bar, strip and page read as one surface. A
         // view background does not reach into the safe area by itself.
         .background { PageTint(model: model).ignoresSafeArea() }
+        // F21: what that colour was, report by report (test builds, on request).
+        .pageBackgroundInstrument(model)
         .animation(AppBar.animation(reduceMotion: reduceMotion), value: controller.retracted)
         // The sign-in button must not be scrolled away: it is the only one.
         .onChange(of: showsSignIn, initial: true) { _, pinned in

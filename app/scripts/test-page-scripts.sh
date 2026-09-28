@@ -96,6 +96,17 @@ EOF8
 xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-chip-row"
 "$OUT/print-chip-row" | node scripts/test-chip-row-style.js
 
+# F21 §4.4: the calm shell, run against a fake document that boots, chooses
+# a theme, has chosen already, or refuses the element.
+cat > "$OUT/main.swift" <<'EOF9'
+import Foundation
+let payload = ["script": PageScriptSources.calmShell, "styleID": PageScriptSources.calmShellStyleID,
+               "css": PageScriptSources.calmShellCSS]
+print(String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!)
+EOF9
+xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-calm-shell"
+"$OUT/print-calm-shell" | node scripts/test-calm-shell.js
+
 # F9 §0.1: what the page-background reporter posts, parsed for the strip.
 cat > "$OUT/main.swift" <<'EOF4'
 var failed = 0

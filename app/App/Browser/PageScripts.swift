@@ -14,9 +14,10 @@
 //  exceptions, F6's blocked-image marker and F17's click reporter, say why.
 //
 //  Order, as `BrowserViewModel.makeWebView` installs them: R2's token strip,
-//  F6's marker, F17's click reporter, the page-background reporter, the app
-//  bar's observer, then the session bridge. Each is an IIFE in its own world, so the order does
-//  not matter functionally; it is fixed so nobody has to wonder. F5's
+//  F21's calm shell, F6's marker, F17's click reporter, the page-background
+//  reporter, the app bar's observer, then the session bridge. Each is an
+//  IIFE in its own world, so the order does not matter functionally; it
+//  is fixed so nobody has to wonder. F5's
 //  chip-row style is the one added later, at the first load of an origin,
 //  because it carries that origin. No code
 //  path removes a user script at runtime (`removeAllUserScripts` removes
@@ -118,6 +119,20 @@ enum PageScripts {
                                               forMainFrameOnly: true,
                                               in: chipRowWorld))
         return true
+    }
+
+    /// The app's own world for `PageScriptSources.calmShell`.
+    static let calmShellWorld = WKContentWorld.world(name: "latchkey-calm-shell")
+
+    /// Installs the calm shell (F21 §4.4): the `<style>` that keeps the
+    /// bundle's unresolved dark default from painting. Main frame only, at
+    /// document start, so it is in place before the first style resolution.
+    /// Called once per web view, before its first navigation.
+    static func installCalmShell(into controller: WKUserContentController) {
+        controller.addUserScript(WKUserScript(source: PageScriptSources.calmShell,
+                                              injectionTime: .atDocumentStart,
+                                              forMainFrameOnly: true,
+                                              in: calmShellWorld))
     }
 
     /// The app's own world for `PageScriptSources.appBarObserver`.

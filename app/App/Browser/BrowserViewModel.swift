@@ -179,6 +179,13 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// pageBackground`), `""` until the page reports one. `BrowserView` tints
     /// the strip above the web view with it (F9 §0.1).
     @Published private(set) var pageBackgroundCSS = ""
+#if LATCHKEY_TEST_HOOKS
+    /// Every canvas colour the page reported since its document committed,
+    /// in order, at most 16 (F21 §6); `page-background-reports` shows it. A
+    /// dark shell painted for one frame is invisible to a poll and not to
+    /// this list.
+    @Published private(set) var pageBackgroundReports: [String] = []
+#endif
     /// Whether the app bar is shown over this page (F15). Fed from the page
     /// script's finger samples and from `pageState`.
     let appBar = AppBarController()
@@ -335,6 +342,12 @@ final class BrowserViewModel: NSObject, ObservableObject {
         let configuration = Self.makeWebViewConfiguration(dataStore: dataStore)
         // Before any navigation, so they run at every document start.
         PageScripts.install(into: configuration.userContentController)
+        if TestHooks.flag("-UITestNoCalmShell") {
+            // F21's control: the bundle's own first paint.
+            logger.log("CALM-SHELL: not installed (-UITestNoCalmShell)")
+        } else {
+            PageScripts.installCalmShell(into: configuration.userContentController)
+        }
         PageScripts.installBlockedMarker(into: configuration.userContentController) { [weak self] message, frame in
             self?.handleBlockedMarker(message, from: frame)
         }
@@ -342,8 +355,7 @@ final class BrowserViewModel: NSObject, ObservableObject {
             self?.recordActivation(from: frame)
         }
         PageScripts.installPageBackground(into: configuration.userContentController) { [weak self] css in
-            guard let self, self.pageBackgroundCSS != css else { return }
-            self.pageBackgroundCSS = css
+            self?.notePageBackground(css)
         }
         PageScripts.installAppBarObserver(into: configuration.userContentController) { [weak self] sample in
             self?.appBar.observe(sample)
@@ -435,6 +447,20 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // No web view, so no page: a stale `connecting` here would have the
         // restored tab show a spinner for a load that is not running.
         setPageState(.idle)
+    }
+
+    /// What the page reports as its canvas (F9 §0.1), each distinct value
+    /// logged with its time since the navigation began: F21's instrument for
+    /// what the page painted first, on a device as in a suite. `none` is a
+    /// canvas that paints nothing, so the web view's own backing shows.
+    private func notePageBackground(_ css: String) {
+        logger.log("page-background: \(css.isEmpty ? "none" : css) after "
+                   + "\(PageState.milliseconds(elapsedSinceNavigationStart())) ms")
+#if LATCHKEY_TEST_HOOKS
+        if pageBackgroundReports.count < 16 { pageBackgroundReports.append(css) }
+#endif
+        guard pageBackgroundCSS != css else { return }
+        pageBackgroundCSS = css
     }
 
     /// Keeps delegates/observation attached if SwiftUI reuses the view.
@@ -1227,6 +1253,11 @@ extension BrowserViewModel: WKNavigationDelegate {
         failedInitialURL = nil
         session?.navigationCommitted()
         appBar.documentChanged()
+#if LATCHKEY_TEST_HOOKS
+        // A new document: its reports follow (the first is scheduled from
+        // its document start, a frame after this).
+        pageBackgroundReports = []
+#endif
         // Back on the dashboard's root: the way-back control has done its job.
         if showsReturnToDashboard, webView.url?.path == "/" || webView.url?.path == "" {
             showsReturnToDashboard = false

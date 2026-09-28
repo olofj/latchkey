@@ -49,7 +49,7 @@ touches() { [[ "$CHANGED" == "(no successful full pass recorded)" ]] || grep -qE
 
 # Code each optional suite exercises. The vendored library and TSNet are the
 # network path under all of them.
-SESSION_RE='^app/(App/(Session|Settings|Browser|Workspace)/|TSNet/|ThirdParty/|UITests/(SessionTests|UITestSupport)\.swift)|^testing/harness/(fake_gateway|tls_accept)\.py|^testing/harness/kirocrew|^scripts/test-session\.sh'
+SESSION_RE='^app/(App/(Session|Settings|Browser|Workspace)/|TSNet/|ThirdParty/|UITests/(SessionTests|CalmLaunchTests|UITestSupport)\.swift)|^testing/harness/(fake_gateway|tls_accept)\.py|^testing/harness/kirocrew|^scripts/test-session\.sh'
 DISCOVERY_RE='^app/(App/(Discovery|Network|Browser)/|TSNet/|ThirdParty/|UITests/(DiscoveryTests|UITestSupport)\.swift)|^testing/tsnet-harness/|^testing/harness/(fake_gateway|tls_accept)\.py|^scripts/test-discovery\.sh'
 # M6: socket damage and a frozen process, on the L2 harness. About 4 min and
 # a SIGSTOP of the app, so quick runs take it only when the recovery code
