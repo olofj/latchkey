@@ -372,19 +372,20 @@ private struct DashboardContent: View {
             && !statusViewModel.needsAuth && !statusViewModel.needsMachineAuth
     }
 
-    /// F22: the remembered gateways, in the app bar, when there is another
-    /// one to switch to. A tap is the picker's own apply path; the rule is
-    /// checked again first, as the chip's state may be a moment old.
+    /// F22: the remembered gateways, in the app bar, and a + to find more.
+    /// A tap is the picker's own apply path; the rule is checked again
+    /// first, as the chip's state may be a moment old.
     private var gatewayRow: AnyView? {
         let origins = GatewayChipState.order(current: homePage.url,
                                              known: workspace.definition.knownGatewayOrigins)
         guard !origins.isEmpty else { return nil }
         return AnyView(GatewayRow(origins: origins, current: homePage.url, page: tab.viewModel,
-                                  tsnet: model, health: workspace.gatewayHealth) { origin in
+                                  tsnet: model, health: workspace.gatewayHealth,
+                                  onSwitch: { origin in
             guard origin != homePage.url, let host = URL(string: origin)?.host(),
                   model.proxyPolicy?.matchingRule(for: host) != nil else { return }
             workspace.selectGateway(origin)
-        })
+        }, onFindGateways: { showingGatewayPicker = true }))
     }
 
     private var gatewayContent: some View {

@@ -52,8 +52,8 @@ expect(S.shown("https://gw.tail-scale.ts.net:8443") == "gw.tail-scale.ts.net:844
 
 section("order")
 let a = "https://a.ts.net", b = "https://b.ts.net", c = "https://c.ts.net:8443"
-expect(S.order(current: a, known: [a]) == [], "one gateway: no row")
-expect(S.order(current: a, known: []) == [], "nothing known: no row")
+expect(S.order(current: a, known: [a]) == [a], "one gateway: a row of one, for its +")
+expect(S.order(current: a, known: []) == [a], "nothing known: the one in use")
 expect(S.order(current: "", known: [a, b]) == [], "no gateway in use: no row")
 expect(S.order(current: b, known: [a, b, c]) == [a, b, c], "by name, the one in use in its place")
 expect(S.order(current: a, known: [c, b, a]) == [a, b, c], "a switch reorders nothing: recency is ignored")

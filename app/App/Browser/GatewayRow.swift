@@ -12,7 +12,9 @@
 //  gateway's loopback (F5 §5). These are gateways the app itself opens.
 //
 //  It lives in the bar, so it is there only when the bar is (F15): nothing
-//  of it is on the page, and it adds no height.
+//  of it is on the page, and it adds no height. It ends in a +, outside the
+//  scrolling chips, that opens Find gateways: so it shows with one gateway
+//  too, as the way to a second (F22 §8 item 9).
 //
 
 import SwiftUI
@@ -27,19 +29,33 @@ struct GatewayRow: View {
     @ObservedObject var tsnet: TSNetModel
     @ObservedObject var health: GatewayHealth
     let onSwitch: (String) -> Void
+    let onFindGateways: () -> Void
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(origins, id: \.self) { origin in
-                    GatewayChip(origin: origin, inUse: origin == current, state: state(origin)) {
-                        onSwitch(origin)
+        HStack(spacing: 4) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(origins, id: \.self) { origin in
+                        GatewayChip(origin: origin, inUse: origin == current, state: state(origin)) {
+                            onSwitch(origin)
+                        }
                     }
                 }
+                .padding(.horizontal, 2)
             }
-            .padding(.horizontal, 2)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            // Chips running on under the + fade out rather than end in a cut.
+            .mask {
+                HStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 16)
+                }
+            }
+            // In a slot of its own, not the last thing in the scroll: always
+            // in reach, and where it was whatever the chips do (issue #7).
+            FindGatewaysButton(action: onFindGateways)
         }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("gateway-row")
         // Probes only while the row is on screen, and again every
@@ -82,6 +98,30 @@ struct GatewayRow: View {
         case .committed: return .committed
         case .failed: return .failed
         }
+    }
+}
+
+/// The row's +: a dashed circle a chip's height, for "there could be more".
+private struct FindGatewaysButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 26, height: 26)
+                .background(.thinMaterial, in: Circle())
+                .overlay {
+                    Circle().strokeBorder(Color.secondary.opacity(0.6),
+                                          style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                }
+                .frame(width: 34, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Find gateways")
+        .accessibilityIdentifier("gateway-add")
     }
 }
 
