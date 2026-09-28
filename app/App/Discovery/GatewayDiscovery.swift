@@ -448,7 +448,9 @@ final class GatewayDiscovery: ObservableObject {
 
     // MARK: - One probe
 
-    nonisolated private static func makeSession(proxy: ProxyConfiguration) -> URLSession {
+    /// Also the gateway row's (F22): the same proxy-only, cookieless,
+    /// redirect-refusing session for every probe.
+    nonisolated static func makeSession(proxy: ProxyConfiguration) -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.proxyConfigurations = [proxy]
         config.timeoutIntervalForRequest = requestTimeout
@@ -483,11 +485,13 @@ final class GatewayDiscovery: ObservableObject {
         return .failed(host, code: code ?? 0)
     }
 
-    nonisolated private enum PortVerdict: Equatable, Sendable {
+    nonisolated enum PortVerdict: Equatable, Sendable {
         case gateway, notGateway, failed(Int)
     }
 
-    nonisolated private static func probe(_ host: String, port: Int, session: URLSession) async -> PortVerdict {
+    /// One port of one host: the fingerprint, and all of it. The gateway
+    /// row probes a remembered origin with this alone (F22).
+    nonisolated static func probe(_ host: String, port: Int, session: URLSession) async -> PortVerdict {
         guard let origin = GatewayEndpoint(host: host, port: port)?.origin,
               let manifestURL = URL(string: "\(origin)/manifest.json"),
               let authURL = URL(string: "\(origin)/api/auth/me")
