@@ -350,3 +350,11 @@ and F5's own test failed alongside it, as it should. Tests on the final
 code: the five L1 tests carrying §4.3/§4.4 passed, and the five session
 tests sharing the signed-in run passed (`ONLY_TESTS`, instance 7).
 
+Full runs on the final code: session 35/35 (8 simulators, 203 s). L1 42/43
+(4 simulators, 386 s): `testTypingInThePageKeepsItOnScreen` hung on
+`Latchkey Shard 2`, where no software keyboard comes up, and passed with
+the same build on Shards 1, 4 and 5. An earlier full L1 run also failed
+Settings portrait on audit findings with no element — the audit could not
+resolve Settings' section headers that run — which the baseline now
+matches by screen and kind.
+

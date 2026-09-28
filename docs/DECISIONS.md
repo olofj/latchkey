@@ -3603,7 +3603,8 @@ baseline, not suppressed as intended. A new finding fails; each baseline
 entry is an owner item in F10 §8. The error page's text is the one worth
 acting on: a plain `VStack`, the shape F11 moved the gate out of.
 
-**Evidence:** L1, the five tests carrying the sweep and audit, green;
-session, the five tests on the shared signed-in run, green; each check
-shown to fail by a mutation (F10 §9). Full-tier runs: see the commit that
-records them.
+**Evidence:** session suite 35/35 on 8 simulators, 203 s. L1 42/43 on 4:
+the one not run is `testTypingInThePageKeepsItOnScreen`, which hangs on
+`Latchkey Shard 2` only — no software keyboard comes up there — and passes
+with the same build on Shards 1, 4 and 5; a simulator's state, not this
+change. Each check shown to fail by a mutation (F10 §9).
