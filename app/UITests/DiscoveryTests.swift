@@ -841,7 +841,8 @@ final class DiscoveryTests: XCTestCase {
     /// gateway -- gw answers (and its log has the probe), plain does not,
     /// and a host off the tailnet is grey and cannot be chosen. One tap on
     /// gw loads it, proved by gw's own log, and gw is then the chip in use
-    /// while dash, a web page but not KiroCrew, is lit red.
+    /// while dash, a web page but not KiroCrew, is lit red. The + stays in
+    /// its slot through all of it.
     func testTheAppBarRowLightsEachGatewayAndSwitchesInOneTap() async throws {
         try await resetHarness()
         let app = launch(extra: ["-UITestHomePage", "https://dash.tail-scale.ts.net",
@@ -862,7 +863,11 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertLessThan(dash.frame.minX, away.frame.minX, "the chips are by name")
         XCTAssertLessThan(away.frame.minX, gw.frame.minX, "not by recency")
         XCTAssertLessThan(gw.frame.minX, plain.frame.minX, "every one of them")
-        let frames = { [dash, away, gw, plain].map { $0.frame } }
+        let add = element(app, "gateway-add")
+        XCTAssertTrue(add.exists, "the + is in the bar")
+        XCTAssertEqual(add.frame.maxX, element(app, "gateway-row").frame.maxX, accuracy: 1,
+                       "at the row's end, outside the scrolling chips")
+        let frames = { [dash, away, gw, plain, add].map { $0.frame } }
         let early = frames()
 
         XCTAssertTrue(waitForValue(gw, "answering", timeout: 15), "gw is lit answering: \(gw.value ?? "nil")")
@@ -896,23 +901,35 @@ final class DiscoveryTests: XCTestCase {
         // up and dash lit red. Every chip is where it was, at its width.
         XCTAssertTrue(element(app, "session-signin-button").exists, "signed out: the sign-in button")
         XCTAssertTrue(app.settles(within: 10), "nothing is sliding")
-        XCTAssertEqual(frames(), before, "neither the switch nor the sign-out moved a chip")
+        XCTAssertEqual(frames(), before, "neither the switch nor the sign-out moved a chip or the +")
+        XCTAssertLessThanOrEqual(element(app, "gateway-add").frame.maxX,
+                                 element(app, "session-signin-button").frame.minX,
+                                 "sign-in comes after the +")
         XCTAssertLessThanOrEqual(element(app, "gateway-row").frame.maxX,
                                  element(app, "session-signin-button").frame.minX,
                                  "sign-in comes after the row, not before it")
     }
 
-    /// One remembered gateway: nothing to switch to, so no row, and the bar
-    /// is as F15 left it.
-    func testTheAppBarRowIsAbsentWithOneGateway() async throws {
+    /// One remembered gateway: the row is there anyway, a chip and the +,
+    /// so a second gateway can be found from the bar. The + opens Find
+    /// gateways, which sweeps and lists gw, with manual entry below it.
+    func testTheAppBarRowOffersFindGatewaysWithOneGateway() async throws {
         try await resetHarness()
         let app = launch(extra: ["-UITestHomePage", "https://dash.tail-scale.ts.net",
                                  "-UITestKnownGateways", "https://dash.tail-scale.ts.net"])
         defer { app.terminate() }
         try await waitForDashPage()
         showAppBar(app)
-        XCTAssertTrue(app.buttons["settings-button"].firstMatch.isHittable, "the bar is up")
-        XCTAssertFalse(element(app, "gateway-row").exists, "and has no gateway row")
+        XCTAssertTrue(element(app, "gateway-row").appears(within: 10), "one gateway still has a row")
+        XCTAssertEqual(element(app, "gateway-chip-dash.tail-scale.ts.net").label,
+                       "dash.tail-scale.ts.net, in use", "with its one chip")
+        let add = element(app, "gateway-add")
+        XCTAssertTrue(add.exists && add.isHittable, "and the + beside it")
+        XCTAssertEqual(add.label, "Find gateways")
+        add.tapWhenSettled(in: app)
+        XCTAssertTrue(element(app, "gateway-picker").appears(within: 10), "the + opens Find gateways")
+        XCTAssertTrue(element(app, "gateway-\(Self.gatewayHost)").appears(within: 15), "which sweeps and lists gw")
+        XCTAssertTrue(element(app, "gateway-manual-field").exists, "with manual entry")
     }
 
     /// While the row is up, each other gateway is asked again every
