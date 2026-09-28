@@ -35,6 +35,10 @@ struct LatchkeyApp: App {
         // Only construct the (heavy) WorkspaceManager — which initializes the
         // process logger and starts tsnet nodes — in normal mode. Harness modes
         // bypass it and own their node lifecycle.
+#if LATCHKEY_TEST_HOOKS && canImport(UIKit)
+        // F16 §6.4: from before any node or relay starts.
+        if TestHooks.flag("-UITestMainThreadMonitor") { MainThreadStallMonitor.shared.start() }
+#endif
         if !Self.harnessMode {
             _workspaceManager = State(initialValue: WorkspaceManager())
             // F3: the inbox is swept, and any waiting share read, at launch.
@@ -69,6 +73,12 @@ struct LatchkeyApp: App {
             .background(alignment: .topLeading) {
                 PresentationProbe().frame(width: 1, height: 1).opacity(0.01)
                     .allowsHitTesting(false).ignoresSafeArea()
+            }
+            .background(alignment: .topTrailing) {
+                if TestHooks.flag("-UITestMainThreadMonitor") {
+                    MainThreadStallProbe().frame(width: 2, height: 1).opacity(0.01)
+                        .allowsHitTesting(false).ignoresSafeArea()
+                }
             }
 #endif
             // F3 §4.2: `latchkey://share?…`. Captured into the inbox, never

@@ -314,6 +314,30 @@ final class LifecycleHarnessTests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground, "the app survived the shutdown")
     }
 
+    // MARK: - F16 stage 3: a loopback recovery during a slow relay start
+
+    /// The node's first relay start is slow (`-UITestRelayReadyDelay 2.5`),
+    /// and half a second into it the tsnet loopback is closed and replaced
+    /// (`-UITestRecoverDuringRelayStart`). The recovery starts its own relay,
+    /// against the new loopback, and publishes it; the first start finishes
+    /// after that, pointed at the closed listener. It must be stopped, not
+    /// installed, and the launch's own publication dropped: the page loads
+    /// through the new loopback. Before the staleness checks the stale relay
+    /// replaced the new one and was published, and every load died on the
+    /// closed listener. The interleaving is forced, as stage 2's is; the app's
+    /// log must show the stale start stopped (scripts/test-lifecycle.sh).
+    func testARecoveryDuringASlowRelayStartPublishesOnlyTheNewRelay() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestRelayReadyDelay", "2.5", "-UITestRecoverDuringRelayStart"])
+        defer { app.terminate() }
+        let up = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        let node = try await appNode()
+        let journal = try await journal(from: node)
+        XCTAssertFalse(journal.isEmpty, "the page loaded over the tailnet, through the replacement loopback")
+        XCTAssertNotNil(up["doc"], "the dashboard reported its document")
+        XCTAssertEqual(app.state, .runningForeground, "the app survived the race")
+    }
+
     /// With prefersEphemeralWebBrowserSession iOS normally skips the "wants to
     /// use … to Sign In" prompt; accept it if a release shows it anyway.
     private func acceptSignInPromptIfShown() {

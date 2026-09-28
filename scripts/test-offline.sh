@@ -26,7 +26,8 @@
 #   4. harness     self-test the harness host-side (make check: R10's curl
 #                  mechanics, the silent-client lesson, page_check.js), then
 #                  start the fake dashboard + stub proxy (controlled per test)
-#   5. tests       xcodebuild test-without-building, OfflineHarnessTests
+#   5. tests       xcodebuild test-without-building, OfflineHarnessTests and
+#                  LoopbackStallOfflineTests (F16's L1 tests, on the same harness)
 #   6. R1 check    no sign-in token anywhere in the app container's logs
 #   7. teardown    stop the harness, whatever happened
 #
@@ -42,7 +43,8 @@
 # two --build runs at once would race in one DerivedData.
 #
 # As a shard worker (test-offline-shards.py sets these): LATCHKEY_SHARD_TESTS
-# names the tests to run, LATCHKEY_XCTESTRUN the built .xctestrun to run them
+# names the tests to run (OfflineHarnessTests' by name, the other class's as
+# <class>/<name>), LATCHKEY_XCTESTRUN the built .xctestrun to run them
 # from, LATCHKEY_LOG_DIR where the logs go. --build-only builds and exits.
 set -euo pipefail
 
@@ -89,13 +91,14 @@ say "preflight"
 # The check allow-lists the fixture tailnets rather than naming one real one,
 # so it protects every checkout and not just its author's.
 "$ROOT/scripts/check-fixture-tailnets.sh" \
-    "$APP/UITests/OfflineHarnessTests.swift" "$HARNESS"/*.py \
+    "$APP/UITests/OfflineHarnessTests.swift" "$APP/UITests/LoopbackStallOfflineTests.swift" "$HARNESS"/*.py \
     "$HARNESS/Makefile" "$HARNESS/leaf.cnf"
 if [[ -n "$SHARD_TESTS" ]]; then
     read -ra TESTS <<< "$SHARD_TESTS"
     EXPECTED=${#TESTS[@]}
 else
-    EXPECTED=$(grep -cE '^\s*func test[A-Za-z0-9_]*\(' "$APP/UITests/OfflineHarnessTests.swift")
+    EXPECTED=$(cat "$APP/UITests/OfflineHarnessTests.swift" "$APP/UITests/LoopbackStallOfflineTests.swift" \
+        | grep -cE '^\s*func test[A-Za-z0-9_]*\(')
 fi
 if ifconfig 2>/dev/null | grep -A4 '^utun' | grep -qE 'inet 100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.'; then
     say "WARNING: the host's Tailscale is up (a utun interface holds a 100.64/10 address)."
@@ -198,12 +201,14 @@ SIGNIN="$CLASS/testSignInTokenIsStrippedFromTheAddress"
 # run_tests: one pass, with the watchdog for a runner relaunch's idle wait.
 TEST_ALLOWANCE=120
 source "$ROOT/scripts/lib-run-tests.sh"
-SUITE_ARGS=(-only-testing:"$CLASS" -skip-testing:"$SIGNIN")
+SUITE_ARGS=(-only-testing:"$CLASS" -only-testing:"LatchkeyUITests/LoopbackStallOfflineTests"
+            -skip-testing:"$SIGNIN")
 RUN_SIGNIN=1
 if [[ -n "$SHARD_TESTS" ]]; then
     SUITE_ARGS=(); RUN_SIGNIN=0
     for t in "${TESTS[@]}"; do
         if [[ "$CLASS/$t" == "$SIGNIN" ]]; then RUN_SIGNIN=1
+        elif [[ "$t" == */* ]]; then SUITE_ARGS+=(-only-testing:"LatchkeyUITests/$t")
         else SUITE_ARGS+=(-only-testing:"$CLASS/$t"); fi
     done
 fi
@@ -220,9 +225,9 @@ cat "$LOG_DIR/suite.log" "$LOG_DIR/signin.log" > "$LOG_DIR/test.log"
 grep -E "Test Case .*(passed|failed)" "$LOG_DIR/test.log" | sed 's/^/    /' || true
 # Both passes together must pass every test in the file: a stale build or a
 # wrong name runs nothing and still exits 0 (M3 review).
-PASSED=$(grep -cE "Test Case .*OfflineHarnessTests.* passed" "$LOG_DIR/test.log" || true)
+PASSED=$(grep -cE "Test Case .*(OfflineHarnessTests|LoopbackStallOfflineTests).* passed" "$LOG_DIR/test.log" || true)
 if [[ $TEST_RC -eq 0 && "$PASSED" -ne "$EXPECTED" ]]; then
-    echo "error: $PASSED of $EXPECTED OfflineHarnessTests passed (a stale build? try --build)" >&2
+    echo "error: $PASSED of $EXPECTED L1 tests passed (a stale build? try --build)" >&2
     TEST_RC=1
 fi
 # A test build from before F14 ignores the ports above and talks to instance

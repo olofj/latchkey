@@ -260,9 +260,17 @@ final class TSNetManager {
         model.localStatus = fixture.status
         model.tailnetName = fixture.status.CurrentTailnet?.MagicDNSSuffix
         model.state = Self.ipnState(fromBackendState: fixture.status.BackendState) ?? .Running
-        model.proxyConfiguration = proxyConfig(upstreamHost: fixture.proxyHost,
-                                               upstreamPort: fixture.proxyPort,
-                                               credential: fixture.credential)
+        // Published once the relay is up (F16 §4.3): `Running` is already on
+        // the model, so the first load waits for the proxy in `loadInitial`.
+        let generation = loopbackRecoveryGeneration
+        Task { [weak self] in
+            guard let self else { return }
+            let config = await self.proxyConfig(upstreamHost: fixture.proxyHost,
+                                                upstreamPort: fixture.proxyPort,
+                                                credential: fixture.credential)
+            guard generation == self.loopbackRecoveryGeneration else { return }
+            self.model.proxyConfiguration = config
+        }
     }
 #endif
 
@@ -337,9 +345,15 @@ final class TSNetManager {
         // The loopback SOCKS5 proxy is up as soon as the node is started, so
         // `proxyConfiguration` can be published now. The initial connection
         // gate does not create the browser until the bus reports `Running`.
+        //
+        // Suspended, not blocked, while the relay starts (F16 §4.3). A loopback
+        // recovery in that time publishes its own configuration; this one is
+        // then stale and is dropped.
         if let loopback = try await self.node?.loopback() {
-            await MainActor.run {
-                model.proxyConfiguration = proxyConfig(loopback)
+            let generation = loopbackRecoveryGeneration
+            let config = await proxyConfig(loopback)
+            if generation == loopbackRecoveryGeneration {
+                model.proxyConfiguration = config
             }
         }
     }
@@ -623,7 +637,12 @@ final class TSNetManager {
                 self.socksLogProxy?.stop()
                 self.socksLogProxy = nil
                 self.socksLogProxyPort = nil
-                self.model.proxyConfiguration = self.proxyConfig(loopback)
+                let config = await self.proxyConfig(loopback)
+                // Rechecked after the relay's start (F16 §4.3): a shutdown()
+                // or a newer recovery in that time owns what is published.
+                guard !Task.isCancelled,
+                      generation == self.loopbackRecoveryGeneration else { return }
+                self.model.proxyConfiguration = config
                 self.busRestartBackoff = .milliseconds(500)
                 self.loopbackRecoveryTask = nil
                 self.model.tcpChaosTestStatus = "recovered"
@@ -734,12 +753,18 @@ final class TSNetManager {
     /// `-ProxyEverything` restores the old proxy-everything behaviour, so the
     /// two modes can be A/B'd on a real device with no rebuild (the iPad in
     /// the bug report can't be attached to a Mac).
-    func proxyConfig(_ loopbackConfig: TailscaleNode.LoopbackConfig) -> ProxyConfiguration? {
+    ///
+    /// Async since F16 §4.3: starting the relay awaits its listener instead of
+    /// blocking the main actor. A loopback recovery or `shutdown()` during
+    /// that wait supersedes the call, which then returns nil and records
+    /// nothing; callers check `loopbackRecoveryGeneration` before publishing,
+    /// so a superseded nil never replaces what the newer caller published.
+    func proxyConfig(_ loopbackConfig: TailscaleNode.LoopbackConfig) async -> ProxyConfiguration? {
         guard let ip = loopbackConfig.ip, let port = loopbackConfig.port else {
             return nil
         }
-        return proxyConfig(upstreamHost: ip, upstreamPort: port,
-                           credential: loopbackConfig.proxyCredential)
+        return await proxyConfig(upstreamHost: ip, upstreamPort: port,
+                                 credential: loopbackConfig.proxyCredential)
     }
 
     /// The same, from plain values: tsnet's loopback listener in production,
@@ -748,7 +773,8 @@ final class TSNetManager {
     /// later rescoping, and builds the configuration through
     /// `ProxyConfigurationFactory`.
     func proxyConfig(upstreamHost ip: String, upstreamPort port: Int,
-                     credential: String) -> ProxyConfiguration? {
+                     credential: String) async -> ProxyConfiguration? {
+        let generation = loopbackRecoveryGeneration
 
         // Route WebKit through the logging relay (Settings → Logs) so every
         // connection attempt that reaches the tailnet proxy is recorded with
@@ -758,24 +784,12 @@ final class TSNetManager {
         var proxyHost = ip
         var proxyPort = port
         if SocksLogProxy.isEnabled() {
-            if socksLogProxy == nil,
-               let upstreamPort = UInt16(exactly: port) {
-                let relay = SocksLogProxy(upstreamHost: ip, upstreamPort: upstreamPort,
-                                          onListenerFailed: { [weak self] failed in
-                    Task { @MainActor [weak self] in self?.relayListenerFailed(failed) }
-                }, onProxyReply: { [weak self] reply in
-                    // One hop to the main actor, where the page reads it (F4
-                    // §4.5). Last-one-wins is correct: a sweep's twelve refusals
-                    // are all for hosts the page is not loading, and the page
-                    // matches on target and time before believing any of them.
-                    Task { @MainActor [weak self] in self?.model.lastProxyFailure = reply }
-                })
-                if let localPort = relay.start() {
-                    socksLogProxy = relay
-                    socksLogProxyPort = localPort
-                } else {
-                    recordRelayFallback(after: "no listener could be started")
-                }
+            if let upstreamPort = UInt16(exactly: port) {
+                await startRelayIfNeeded(upstreamHost: ip, upstreamPort: upstreamPort)
+            }
+            guard generation == loopbackRecoveryGeneration else {
+                logger.log("proxyConfig: superseded while its relay started; not publishing")
+                return nil
             }
             if let localPort = socksLogProxyPort {
                 proxyHost = "127.0.0.1"
@@ -803,6 +817,64 @@ final class TSNetManager {
             logger.log("proxyConfig: short names withheld (public-TLD collision), reachable via FQDN: \(policy.shortNamesWithheldAsPublicTLD.joined(separator: ", "))")
         }
         return proxyConfig
+    }
+
+    /// The relay start in flight, and the loopback generation it belongs to
+    /// (F16 §4.3). A second caller of the same generation joins it rather
+    /// than starting another relay; a caller of a newer one starts its own.
+    @MainActor private var relayStart: (generation: UInt64, task: Task<Void, Never>)?
+
+    /// Starts the logging relay in front of `upstreamHost:upstreamPort` unless
+    /// one is running, without blocking: the listener's `.ready` is awaited.
+    /// A start superseded while in flight (a loopback recovery or `shutdown()`
+    /// bumped `loopbackRecoveryGeneration`, and replaced or cleared the relay)
+    /// stops the relay it started instead of installing it: its upstream is
+    /// the replaced loopback, and installing it over the newer relay would
+    /// point WebKit at a dead listener.
+    @MainActor
+    private func startRelayIfNeeded(upstreamHost ip: String, upstreamPort: UInt16) async {
+        let generation = loopbackRecoveryGeneration
+        if let inFlight = relayStart, inFlight.generation == generation {
+            await inFlight.task.value
+            return
+        }
+        guard socksLogProxy == nil else { return }
+        let relay = SocksLogProxy(upstreamHost: ip, upstreamPort: upstreamPort,
+                                  onListenerFailed: { [weak self] failed in
+            Task { @MainActor [weak self] in self?.relayListenerFailed(failed) }
+        }, onProxyReply: { [weak self] reply in
+            // One hop to the main actor, where the page reads it (F4
+            // §4.5). Last-one-wins is correct: a sweep's twelve refusals
+            // are all for hosts the page is not loading, and the page
+            // matches on target and time before believing any of them.
+            Task { @MainActor [weak self] in self?.model.lastProxyFailure = reply }
+        })
+#if LATCHKEY_TEST_HOOKS
+        recoverDuringRelayStartIfRequested()
+        let stallWindow = MainThreadStallMonitor.shared.window()
+        defer { stallWindow.map(MainThreadStallMonitor.shared.close) }
+#endif
+        let task = Task { @MainActor [weak self] in
+            let localPort = await relay.start()
+            guard let self else {
+                relay.stop()
+                return
+            }
+            guard generation == self.loopbackRecoveryGeneration, self.socksLogProxy == nil else {
+                logger.log("sockslog: a relay start was superseded while in flight; stopping it")
+                relay.stop()
+                return
+            }
+            if let localPort {
+                self.socksLogProxy = relay
+                self.socksLogProxyPort = localPort
+            } else {
+                self.recordRelayFallback(after: "no listener could be started")
+            }
+        }
+        relayStart = (generation, task)
+        await task.value
+        if relayStart?.generation == generation { relayStart = nil }
     }
 
     /// Re-derives the proxy's `matchDomains` from the latest peer status and
@@ -1201,6 +1273,32 @@ final class TSNetManager {
             self.model.tcpChaosTestStatus = installed ? "bus after shutdown" : "shutdown clean"
         }
         return .seconds(4)
+    }
+
+    /// `-UITestRecoverDuringRelayStart` (F16 §6.4): half a second into the
+    /// first relay start, the tsnet loopback is closed and replaced, as a
+    /// failed LocalAPI request would have it. With `-UITestRelayReadyDelay`
+    /// that start is still in flight when the recovery installs its own relay,
+    /// so it finishes stale: pointed at the closed listener. On demand rather
+    /// than by scheduling accident.
+    @MainActor private var recoverDuringRelayStartTaken = false
+    @MainActor
+    private func recoverDuringRelayStartIfRequested() {
+        guard TestHooks.flag("-UITestRecoverDuringRelayStart"), !recoverDuringRelayStartTaken,
+              let node else { return }
+        recoverDuringRelayStartTaken = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self else { return }
+            logger.log("TCP chaos test: replacing the loopback inside the first relay start")
+            do {
+                try await node.debugDefunctLoopback()
+            } catch {
+                logger.log("TCP chaos test failed: \(error)")
+                return
+            }
+            self.recoverLoopbackAfterFailure(URLError(.cannotConnectToHost))
+        }
     }
 
     nonisolated private static func holdIgnoringCancellation(_ hold: Duration) async {

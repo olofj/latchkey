@@ -10,7 +10,8 @@ worker on its own simulator ("Latchkey Shard k") against its own harness
 instance k. How shards are booted, planned, run and judged is
 scripts/shards.py, shared with the session suite; what is L1's own:
 
-  - the plan     OfflineHarnessTests' tests, longest first by
+  - the plan     OfflineHarnessTests' tests and LoopbackStallOfflineTests'
+                 (as <class>/<name>; F16), longest first by
                  scripts/l1-durations.txt. Tests that share one launch
                  (a cached `…Run()` helper) stay together. The sign-in test and R1's
                  disk scan go to one shard, as its last pass, whose weight
@@ -26,6 +27,9 @@ import sys
 import shards
 
 SWIFT = os.path.join(shards.APP, "UITests", "OfflineHarnessTests.swift")
+# Further L1 classes on the same harness. Their test ids carry the class;
+# OfflineHarnessTests' stay bare, as l1-durations.txt names them.
+MORE = ("LoopbackStallOfflineTests",)
 SIGNIN = "testSignInTokenIsStrippedFromTheAddress"
 SIGNIN_PASS = 6.0      # the second xcodebuild pass the sign-in test needs
 
@@ -42,10 +46,16 @@ class L1(shards.Suite):
         """The file's test names, and the groups that must share a shard
         (shards.shared_runs: the tests that read one launch's cached run)."""
         _, names = shards.swift_tests(SWIFT)
-        return names, shards.shared_runs(SWIFT, names)
+        groups = shards.shared_runs(SWIFT, names)
+        for cls in MORE:
+            path = os.path.join(shards.APP, "UITests", f"{cls}.swift")
+            _, tests = shards.swift_tests(path)
+            names += [f"{cls}/{t}" for t in tests]
+            groups += [[f"{cls}/{t}" for t in g] for g in shards.shared_runs(path, tests)]
+        return names, groups
 
     def test_id(self, cls, name):
-        return name
+        return name if cls in (None, "OfflineHarnessTests") else f"{cls}/{name}"
 
     def weight(self, test, table):
         return table.get(test, self.unknown) + (SIGNIN_PASS if test == SIGNIN else 0)

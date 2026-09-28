@@ -518,7 +518,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
     }
 
     func loadInitial() {
-        guard !didLoadInitial, tsnetModel.state == .Running else { return }
+        // The proxy must be in the store first (F16 §4.3): the relay starts
+        // asynchronously, so `Running` can be published before it, and a load
+        // made then would go direct. `applyProxy` calls this when it arrives.
+        guard !didLoadInitial, tsnetModel.state == .Running,
+              !dataStore.proxyConfigurations.isEmpty else { return }
 
         // A tab that has already committed a page (or has a pending restore
         // URL captured at unload) must never be sent back to its initial/home

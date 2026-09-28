@@ -142,19 +142,16 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
 
     /// Starts listening and returns the local port WebKit should point at, or
     /// nil if the listener couldn't start (caller then uses tsnet directly).
-    /// Waits for the port (see `startListener`): the proxy configuration is
-    /// built synchronously from it when the node comes up.
-    func start() -> UInt16? {
-        let result = Box<UInt16?>(nil)
-        let done = DispatchSemaphore(value: 0)
-        queue.async { [self] in
-            startListener { port in
-                result.value = port
-                done.signal()
+    /// Awaits the port (see `startListener`) without blocking the caller: the
+    /// callers are on the main actor, and a listener slow to reach `.ready`
+    /// used to freeze the UI for up to `startTimeout` (F16 §1.4). The same
+    /// shape as `restartListener() async`.
+    func start() async -> UInt16? {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                startListener { continuation.resume(returning: $0) }
             }
         }
-        _ = done.wait(timeout: .now() + Self.startTimeout + 1)
-        return result.value
     }
 
     /// Creates a listener on `queue` and hands `completion` (also on `queue`)
@@ -186,19 +183,33 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
             guard let self else { return }
             switch state {
             case .ready:
-                guard !progress.settled else { return }
-                progress.settled = true
-                guard let port = l.port?.rawValue, port != 0 else {
-                    logger.log("sockslog: listener ready without a port; using tsnet proxy directly")
-                    l.cancel()
-                    completion(nil)
+                let becameReady = { [self] in
+                    guard !progress.settled else { return }
+                    progress.settled = true
+                    guard let port = l.port?.rawValue, port != 0 else {
+                        logger.log("sockslog: listener ready without a port; using tsnet proxy directly")
+                        l.cancel()
+                        completion(nil)
+                        return
+                    }
+                    progress.ready = true
+                    self.listener = l
+                    self.listenerGeneration &+= 1
+                    logger.log("sockslog: relay listening on 127.0.0.1:\(port) -> tsnet \(self.upstreamHost):\(self.upstreamPort) (listener \(self.listenerGeneration))")
+                    completion(port)
+                }
+#if LATCHKEY_TEST_HOOKS
+                // `-UITestRelayReadyDelay <s>` (F16 §6.1): the process's
+                // first listener is slow to reach `.ready`, as one sitting in
+                // `.waiting` is. Past `startTimeout` the start gives up, as it
+                // would. Once only, so a start that supersedes it is prompt.
+                if let delay = Self.takeReadyDelayForTest() {
+                    logger.log("sockslog: holding the listener's ready for \(delay) s (test hook)")
+                    self.queue.asyncAfter(deadline: .now() + delay, execute: becameReady)
                     return
                 }
-                progress.ready = true
-                self.listener = l
-                self.listenerGeneration &+= 1
-                logger.log("sockslog: relay listening on 127.0.0.1:\(port) -> tsnet \(self.upstreamHost):\(self.upstreamPort) (listener \(self.listenerGeneration))")
-                completion(port)
+#endif
+                becameReady()
             case .failed(let error):
                 if progress.ready {
                     // After `.ready`: iOS reporting the defuncted listener.
@@ -349,13 +360,28 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
         var ready = false
     }
 
-    /// A value handed across a semaphore.
-    private final class Box<T>: @unchecked Sendable {
-        var value: T
-        init(_ value: T) { self.value = value }
+#if LATCHKEY_TEST_HOOKS
+    /// SOCKS requests any relay in this process has parsed (F16 §6.4): L1's
+    /// evidence that a load went through the relay rather than straight to
+    /// the upstream, which the stub proxy's journal cannot tell apart. A
+    /// self-probe sends no request, so it is not counted.
+    nonisolated(unsafe) private static var relayedRequests: UInt64 = 0
+    private static func countRelayedRequest() {
+        nextIDLock.withLock { relayedRequests &+= 1 }
+    }
+    static var relayedRequestCount: UInt64 {
+        nextIDLock.withLock { relayedRequests }
     }
 
-#if LATCHKEY_TEST_HOOKS
+    nonisolated(unsafe) private static var readyDelayTaken = false
+    private static func takeReadyDelayForTest() -> Double? {
+        guard let delay = TestHooks.value("-UITestRelayReadyDelay").flatMap(Double.init), delay > 0 else { return nil }
+        return nextIDLock.withLock {
+            defer { readyDelayTaken = true }
+            return readyDelayTaken ? nil : delay
+        }
+    }
+
     /// Test hook (R30): kills the app-owned listener and every session the
     /// way iOS does after a suspension. The port WebKit was given stops
     /// answering; tsnet's own listener is untouched, so the status poll sees
@@ -599,6 +625,9 @@ nonisolated final class SocksLogProxy: @unchecked Sendable {
                 let kind = Self.addrKind(atyp)
                 let cmdName = cmd == 0x01 ? "CONNECT" : "cmd=\(cmd)"
                 logger.log("socks[\(s.id)] \(cmdName) \(kind) \(s.target) — request reached the tailnet proxy")
+#if LATCHKEY_TEST_HOOKS
+                Self.countRelayedRequest()
+#endif
                 return
             case .done:
                 return

@@ -312,6 +312,20 @@ func eventually(_ seconds: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
     return true
 }
 
+/// `SocksLogProxy.start()` is async (F16 §4.3); this script's top level is
+/// synchronous, so it waits here. The start resumes off the main thread.
+nonisolated func startRelay(_ relay: SocksLogProxy) -> UInt16? {
+    final class Result: @unchecked Sendable { var port: UInt16? }
+    let result = Result()
+    let done = DispatchSemaphore(value: 0)
+    Task.detached {
+        result.port = await relay.start()
+        done.signal()
+    }
+    done.wait()
+    return result.port
+}
+
 /// `SocksLogProxy.probe`, waited for.
 func probe(_ port: UInt16, timeout: TimeInterval = 2) -> SocksRelayRecovery.ListenerProbe? {
     let done = DispatchSemaphore(value: 0)
@@ -366,7 +380,7 @@ expect(upstreamPort != 0, "the fake upstream listens")
 let beforeStart = Date()
 let strict = SocksLogProxy(upstreamHost: "127.0.0.1", upstreamPort: upstreamPort,
                            capacity: SocksRelayCapacity(maxSessions: 2, idleGrace: 3600))
-let strictPort = strict.start() ?? 0
+let strictPort = startRelay(strict) ?? 0
 expect(strictPort != 0, "the relay listens: \(logger.lines.last ?? "-")")
 expect(!strict.hasAcceptedSession(since: .distantPast), "nothing accepted yet")
 let c1 = Client(port: strictPort)
@@ -450,7 +464,7 @@ c1.cancel(); c3.cancel(); c4.cancel(); c5.cancel()
 print("== the relay: evicting the quietest at the cap")
 let lenient = SocksLogProxy(upstreamHost: "127.0.0.1", upstreamPort: upstreamPort,
                             capacity: SocksRelayCapacity(maxSessions: 2, idleGrace: 0))
-let lenientPort = lenient.start() ?? 0
+let lenientPort = startRelay(lenient) ?? 0
 expect(lenientPort != 0, "the second relay listens")
 let e1 = Client(port: lenientPort)
 expect(upstream.waitForAccept(), "first relayed")
@@ -472,7 +486,7 @@ print("== the relay: traffic keeps a session; silence past the grace does not")
 let grace: TimeInterval = 1
 let busy = SocksLogProxy(upstreamHost: "127.0.0.1", upstreamPort: upstreamPort,
                          capacity: SocksRelayCapacity(maxSessions: 2, idleGrace: grace))
-let busyPort = busy.start() ?? 0
+let busyPort = startRelay(busy) ?? 0
 expect(busyPort != 0, "the third relay listens")
 let b1 = Client(port: busyPort)
 expect(b1.waitReady() && upstream.waitForAccept(), "the first (oldest) relayed")
@@ -504,7 +518,7 @@ let echo = try! EchoUpstream()
 let echoPort = echo.start()
 expect(echoPort != 0, "the echo upstream listens")
 var released: SocksLogProxy? = SocksLogProxy(upstreamHost: "127.0.0.1", upstreamPort: echoPort)
-let releasedPort = released?.start() ?? 0
+let releasedPort = released.flatMap(startRelay) ?? 0
 expect(releasedPort != 0, "the fourth relay listens")
 let r1 = Client(port: releasedPort)
 expect(r1.waitReady() && echo.waitForAccept(), "a session through it")
@@ -527,7 +541,7 @@ print("== the relay: stopped and released with no session, its port is closed")
 // suspension, so nothing holds the relay when the recovery releases it. The
 // listener must still close, not linger accepting connections nobody serves.
 var idle: SocksLogProxy? = SocksLogProxy(upstreamHost: "127.0.0.1", upstreamPort: echoPort)
-let idlePort = idle?.start() ?? 0
+let idlePort = idle.flatMap(startRelay) ?? 0
 expect(idlePort != 0, "the fifth relay listens")
 weak var idleRelay = idle
 idle?.stop()

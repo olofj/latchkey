@@ -7,10 +7,11 @@
 # dashboard; then its sockets are damaged by the app's own chaos hooks
 # (-UITestShutdownTCPConnections, -UITestDefunctLoopback, -UITestStallLoopback),
 # its IPN bus killed under a held restart (-UITestBusErrorAfter,
-# -UITestBusInstallDelay; F16), and its process is frozen from the host with
-# SIGSTOP while it sits in the background -- the closest a simulator gets to a
-# suspended app (after app/scripts/test-lock-resume.sh, which needed a real
-# tailnet). Needs no account.
+# -UITestBusInstallDelay; F16), a loopback recovery forced into a slow relay
+# start (-UITestRelayReadyDelay, -UITestRecoverDuringRelayStart; F16), and its
+# process is frozen from the host with SIGSTOP while it sits in the background
+# -- the closest a simulator gets to a suspended app (after app/scripts/
+# test-lock-resume.sh, which needed a real tailnet). Needs no account.
 #
 #   1. preflight   refuse a real tailnet name in the test config (R10)
 #   2. harness     self-test the tsnet harness host-side (make check), then
@@ -223,7 +224,7 @@ fi
 # tests hold the budgets.
 say "timings"
 grep -h "^LIFECYCLE " "$LOG_DIR/test.log" | sed 's/^/    /' || true
-grep -E "LocalAPI loopback (failure|recovered|replacement)|Status request abandoned|TCP chaos test|sockslog: restarting|sockslog: relay listener|proxyConfig: endpoint replaced|Proxy endpoint republished|Bus watcher error|Bus start held|Bus restart superseded|BUS WATCHER MISMATCH" "$UNIFIED" \
+grep -E "LocalAPI loopback (failure|recovered|replacement)|Status request abandoned|TCP chaos test|sockslog: restarting|sockslog: relay listener|proxyConfig: endpoint replaced|Proxy endpoint republished|Bus watcher error|Bus start held|Bus restart superseded|BUS WATCHER MISMATCH|relay start was superseded|holding the listener|relay listening|proxyConfig: superseded" "$UNIFIED" \
     | sed -E 's/^([^ ]+ [^ ]+) .*\] /    \1  /' || true
 sed 's/^/    freezer: /' "$FREEZER_LOG" || true
 # R30's instrument: the relay test must have made the app restart its relay
@@ -256,6 +257,14 @@ fi
 if [[ $TEST_RC -eq 0 ]] && { ! grep -q "Bus restart superseded while starting" "$UNIFIED" \
         || grep -q "BUS WATCHER MISMATCH" "$UNIFIED"; }; then
     echo "error: the app's log shows no superseded bus restart discarded, or a bus watcher installed for a stale consumer (F16 stage 2)" >&2
+    TEST_RC=1
+fi
+
+# F16 stage 3's: the relay start that a loopback recovery overtook must have
+# been stopped rather than installed, and the recovery must have completed.
+if [[ $TEST_RC -eq 0 ]] && { ! grep -q "sockslog: a relay start was superseded while in flight" "$UNIFIED" \
+        || ! grep -q "replacing the loopback inside the first relay start" "$UNIFIED"; }; then
+    echo "error: the app's log shows no superseded relay start stopped (F16 stage 3)" >&2
     TEST_RC=1
 fi
 
