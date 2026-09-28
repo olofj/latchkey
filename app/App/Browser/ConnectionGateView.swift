@@ -84,6 +84,7 @@ struct ConnectionGateView: View {
                 VStack(spacing: 0) {
                     WindowSafeAreaProbe(edge: .top).frame(width: 1, height: 1)
                     WindowSafeAreaProbe(edge: .bottom).frame(width: 1, height: 1)
+                    WindowSafeAreaProbe(edge: .all).frame(width: 1, height: 1)
                 }
                 .opacity(0.01)
                 .allowsHitTesting(false)

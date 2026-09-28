@@ -50,20 +50,29 @@ struct RawWebView: UIViewRepresentable {
 /// `.bottom` is F11 §6's: the gate's sign-in button must end above the home
 /// indicator. It is a second element (`window-safe-area-bottom`, value
 /// `bottom=N`) so the top probe's value keeps the shape its readers parse.
+///
+/// `.all` is F10 §4.3's: landscape's obstructions are the sides, so the
+/// chrome sweep needs all four (`window-safe-insets`, value
+/// `top=T left=L bottom=B right=R`).
 struct WindowSafeAreaProbe: UIViewRepresentable {
-    var edge: VerticalEdge = .top
+    enum Edge { case top, bottom, all }
+    var edge: Edge = .top
 
     func makeUIView(context: Context) -> UIView { ProbeView(edge: edge) }
     func updateUIView(_ view: UIView, context: Context) {}
 
     private final class ProbeView: UIView {
-        let edge: VerticalEdge
+        let edge: Edge
 
-        init(edge: VerticalEdge) {
+        init(edge: Edge) {
             self.edge = edge
             super.init(frame: .zero)
             isAccessibilityElement = true
-            accessibilityIdentifier = edge == .top ? "window-safe-area" : "window-safe-area-bottom"
+            accessibilityIdentifier = switch edge {
+            case .top: "window-safe-area"
+            case .bottom: "window-safe-area-bottom"
+            case .all: "window-safe-insets"
+            }
             isUserInteractionEnabled = false
         }
         required init?(coder: NSCoder) { fatalError("not used") }
@@ -71,9 +80,13 @@ struct WindowSafeAreaProbe: UIViewRepresentable {
         override var accessibilityValue: String? {
             get {
                 guard let window else { return "no-window" }
-                return edge == .top
-                    ? "top=\(Int(window.safeAreaInsets.top.rounded()))"
-                    : "bottom=\(Int(window.safeAreaInsets.bottom.rounded()))"
+                let i = window.safeAreaInsets
+                func n(_ v: CGFloat) -> Int { Int(v.rounded()) }
+                return switch edge {
+                case .top: "top=\(n(i.top))"
+                case .bottom: "bottom=\(n(i.bottom))"
+                case .all: "top=\(n(i.top)) left=\(n(i.left)) bottom=\(n(i.bottom)) right=\(n(i.right))"
+                }
             }
             set {}
         }

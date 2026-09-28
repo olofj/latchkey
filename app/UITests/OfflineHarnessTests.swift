@@ -380,14 +380,36 @@ final class OfflineHarnessTests: XCTestCase {
 
         // Choose another gateway opens the picker.
         try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
-        let again = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
-        defer { again.terminate() }
+        let again = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                           extra: ["-UITestReportSafeArea"])
+        defer {
+            again.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
         XCTAssertTrue(element(again, "nav-error-overlay").appears(within: 40))
+
+        // F10 §4.3/§4.4: the error page in both orientations, then the
+        // picker it opens, in portrait.
+        var findings: [String] = []
+        var insets: SafeInsets?
+        for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+            try await rotate(again, to: orientation)
+            insets = safeInsets(again)
+            guard let insets else { break }
+            findings += try screenFindings(again, "error page \(orientation.isLandscape ? "landscape" : "portrait")",
+                                           insets: insets)
+        }
+
         let choose = element(again, "nav-error-choose-gateway")
         XCTAssertTrue(choose.isHittable, "Choose another gateway must be tappable")
         choose.tap()
         XCTAssertTrue(element(again, "gateway-picker").appears(within: 10),
                       "and open the one picker presentation")
+        if let insets {
+            _ = again.settles(within: 5)
+            findings += try screenFindings(again, "picker portrait", insets: insets)
+        }
+        XCTAssertTrue(findings.isEmpty, "F10: the error page and the picker:\n" + findings.joined(separator: "\n"))
     }
 
     // MARK: - The error page (coverage lost with the address bar in M1)
@@ -1142,6 +1164,7 @@ final class OfflineHarnessTests: XCTestCase {
                        "a page too short to scroll has the bar untouched, or nothing could bring it in")
         XCTAssertTrue(gear.isHittable, "and the gear with it, no gesture needed")
 
+        var findings: [String] = []
         for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
             let name = orientation.isLandscape ? "landscape" : "portrait"
             XCUIDevice.shared.orientation = orientation
@@ -1168,12 +1191,20 @@ final class OfflineHarnessTests: XCTestCase {
 
             XCTAssertTrue(gear.appears(within: 5) && gear.isHittable,
                           "\(name): the gear is on screen and tappable")
+            // F10 §4.3/§4.4, with the bar in and over it Settings. The
+            // window's insets do not change under a sheet, so they are read
+            // here, where the probe is not covered.
+            let insets = try XCTUnwrap(safeInsets(app), "\(name): the window's insets")
+            findings += try screenFindings(app, "dashboard \(name)", insets: insets)
             gear.tap()
             let settings = app.navigationBars["Settings"]
             XCTAssertTrue(settings.appears(within: 10), "\(name): the gear opens Settings")
+            _ = app.settles(within: 5)
+            findings += try screenFindings(app, "settings \(name)", insets: insets)
             settings.buttons["Done"].tap()
             XCTAssertTrue(settings.disappears(within: 10), "\(name): and Settings closes again")
         }
+        XCTAssertTrue(findings.isEmpty, "F10: the dashboard and Settings:\n" + findings.joined(separator: "\n"))
 
         XCUIDevice.shared.orientation = .portrait
         try await settle(app, web: web, landscape: false)
@@ -1469,8 +1500,8 @@ final class OfflineHarnessTests: XCTestCase {
     /// what happens after sign-in, and the button says what it does.
     /// Shown to fail by reverting ConnectionGateView to the pre-F11 gate: no
     /// `gate-intro`, and the button reads "Login".
-    func testAFirstLaunchExplainsItself() throws {
-        let run = gateRun()
+    func testAFirstLaunchExplainsItself() async throws {
+        let run = try await gateRun()
         XCTAssertTrue(run.buttonShown, "the gate's sign-in button is shown")
         XCTAssertTrue(run.introShown, "a first launch shows the introduction")
         XCTAssertTrue(run.stepsWithButton, "and its what-happens-next list")
@@ -1491,34 +1522,65 @@ final class OfflineHarnessTests: XCTestCase {
         let stepsShown: Bool            // the steps appeared within 20 s
         let stepsLabel: String
         let statusShown: Bool
+        let swept: [String]             // F10: the orientations swept
+        let findings: [String]          // F10 §4.3/§4.4, across them
     }
 
     private static var gate: GateRun?
 
-    private func gateRun() -> GateRun {
+    private func gateRun() async throws -> GateRun {
         if let run = Self.gate { return run }
-        let app = launchAtTheGate()
-        defer { app.terminate() }
+        let app = launchAtTheGate(extra: ["-UITestReportSafeArea"])
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
         let button = app.buttons["login-button"]
         let buttonShown = button.appears(within: 20)
         let steps = element(app, "gate-intro-steps")
         let stepsWithButton = buttonShown && steps.exists
+        let stepsShown = stepsWithButton || steps.appears(within: buttonShown ? 1 : 20)
+        let stepsLabel = steps.exists ? steps.label : ""
+        let introShown = element(app, "gate-intro").exists
+        let statusShown = app.staticTexts["Tailscale Status"].exists
+
+        // F10: read last, since it rotates.
+        var swept: [String] = [], findings: [String] = []
+        if buttonShown {
+            for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
+                let name = orientation.isLandscape ? "landscape" : "portrait"
+                try await rotate(app, to: orientation)
+                guard let insets = safeInsets(app) else { break }
+                findings += try screenFindings(app, "gate \(name)", insets: insets)
+                swept.append(name)
+            }
+        }
         let run = GateRun(
             buttonShown: buttonShown, buttonLabel: buttonShown ? button.label : "",
-            introShown: element(app, "gate-intro").exists, stepsWithButton: stepsWithButton,
-            stepsShown: stepsWithButton || steps.appears(within: buttonShown ? 1 : 20),
-            stepsLabel: steps.exists ? steps.label : "",
-            statusShown: app.staticTexts["Tailscale Status"].exists)
+            introShown: introShown, stepsWithButton: stepsWithButton,
+            stepsShown: stepsShown, stepsLabel: stepsLabel, statusShown: statusShown,
+            swept: swept, findings: findings)
         if run.buttonShown || run.stepsShown { Self.gate = run }
         return run
+    }
+
+    /// F10 §4.3/§4.4 on the one screen every new user meets: nothing of it
+    /// reaches under the island, the home indicator or landscape's sides, and
+    /// Apple's audit finds nothing, in both orientations. Shown to fail by
+    /// `.ignoresSafeArea()` on the gate's pinned button: it is named, with
+    /// the edge it crosses.
+    func testTheGateIsClearOfTheScreensEdges() async throws {
+        let run = try await gateRun()
+        XCTAssertEqual(run.swept, ["portrait", "landscape"], "the gate was swept in both orientations")
+        XCTAssertTrue(run.findings.isEmpty, "the gate:\n" + run.findings.joined(separator: "\n"))
     }
 
     /// The two things that stranded the owner on 2026-09-24, after a sign-in
     /// that worked: the new device needs approving, and it needs access to
     /// the dashboard's machine. Shown to fail by dropping either from
     /// `GateIntroduction.steps`: the message names the one that went missing.
-    func testTheIntroductionNamesThePostLoginSteps() throws {
-        let run = gateRun()
+    func testTheIntroductionNamesThePostLoginSteps() async throws {
+        let run = try await gateRun()
         XCTAssertTrue(run.stepsShown, "the what-happens-next list is shown")
         let text = run.stepsLabel
         XCTAssertTrue(text.localizedCaseInsensitiveContains("approve"),

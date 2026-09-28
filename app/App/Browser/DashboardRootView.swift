@@ -331,6 +331,7 @@ private struct DashboardContent: View {
                 // the window, so where it sits does not matter.
                 if TestHooks.flag("-UITestReportSafeArea") {
                     WindowSafeAreaProbe().frame(width: 1, height: 1)
+                    WindowSafeAreaProbe(edge: .all).frame(width: 1, height: 1)
                 }
 #endif
             }
