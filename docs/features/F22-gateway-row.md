@@ -51,8 +51,13 @@ Working:
   from being the only signal.
 - One tap on another chip switches to it: the page reopens at that gateway,
   and it becomes the chip in use. No sheet.
-- More gateways than fit: the row scrolls sideways; chips keep their width,
-  names truncate at 140 pt. Nothing overlaps the cogwheel.
+- After the chips, in a slot of its own, a **+**: a dashed circle a chip's
+  height. It opens Find gateways, the same sheet as Settings → Gateway →
+  Find gateways… (discovery and manual entry). The bar reads [chips] [+]
+  [Sign in, when signed out] [cogwheel] (§8 item 9).
+- More gateways than fit: the chips scroll sideways and fade out under the
+  +; chips keep their width, names truncate at 140 pt. The + does not
+  scroll. Nothing overlaps the cogwheel.
 - Scrolling down takes the bar away, row and all. Nothing new is on the page.
 
 Failing:
@@ -62,17 +67,18 @@ Failing:
   gateway — the same rule as Settings' rows.
 - If the tailnet is not up, every other chip is grey, disabled, and says
   "tailnet not connected".
-- Only one gateway known: no row. The bar is as it was.
+- Only one gateway known: the row is its one chip and the +, the way to a
+  second.
 
 ## 3. Non-goals
 
 - **Not the dashboard's instances.** `GET /api/instances` lists SSH-tunnelled
   loopback remotes a phone cannot load, behind a feature that is off by
   default (F5 §5). The row lists what the app itself can open.
-- **No discovery sweep from the bar.** Only remembered gateways are probed,
-  each directly. Finding new ones stays in Settings and the picker; a 12 s
-  sweep of every tailnet peer each time the bar appears would be the wrong
-  cost.
+- **No discovery sweep when the bar appears.** Only remembered gateways are
+  probed, each directly; a 12 s sweep of every tailnet peer each time the
+  bar appears would be the wrong cost. The + sweeps only when tapped, in
+  the picker.
 - **No change to when the bar shows.** F15's policy is untouched. The row
   neither pins the bar nor adds height to it.
 - No per-gateway session state, unread counts or reordering.
@@ -122,20 +128,25 @@ with the accent under white text and bold, with a 1.5 pt accent border. A
 chip's width is its name's alone: the name always reserves its bold width
 (a hidden bold copy under it), and the state takes no width. Identifier `gateway-row`;
 each chip `gateway-chip-<host[:port]>`, label the full name ("…, in use" for
-the current one), value the word. It is shown only when there is at least
-one other known gateway.
+the current one), value the word. The chips' scroll view fades out over its
+last 16 pt; after it, outside it, the + (`gateway-add`, label "Find
+gateways"): 26 pt dashed circle, 34 × 44 pt target. The row is shown
+whenever there is a gateway in use, one chip or more.
 
 **`AppBar`.** Takes an optional row view in the middle slot, always starting
 at the same leading edge. When signed out, a compact text-only "Sign in"
 button (orange outline, fixed 12 pt, label "Signed out — Sign in") sits after
-the row, beside the gear; the row scrolls in what is left. Without a row the
-F15 capsule is unchanged.
+the row, beside the gear. Its slot is kept, empty, while signed in, so the
+row's width, and with it the +, never changes on a sign-out. Without a row
+(no gateway in use) the F15 capsule is unchanged.
 
 **`DashboardContent`.** Builds the row from `homePage.url`,
 `workspace.definition.knownGatewayOrigins`, `tab.viewModel.pageState` and
 the proxy policy, and on tap re-checks the rule and calls
 `workspace.selectGateway(origin)` — the picker's own apply path. No sheet is
-up, so there is nothing to wait out.
+up, so there is nothing to wait out. The + sets `showingGatewayPicker`, the
+one picker presentation (F4 §4.7), which applies a choice after the sheet
+has gone.
 
 **Invariants this must not break** (see `../../app/AGENTS.md`):
 - the split tunnel decides what goes through the proxy; only tailnet hosts
@@ -160,14 +171,15 @@ start; `gw` is a fake KiroCrew gateway; `plain` has nothing listening.
 | Test | Suite | Asserts | Shown to fail by |
 |---|---|---|---|
 | `testTheAppBarRowLightsEachGatewayAndSwitchesInOneTap` | Discovery | Home `dash`, known `dash, gw, plain, gateway.example.com`. The row is there with a chip per gateway; `dash` is in use; `gw` turns "answering", `plain` "not answering", `gateway.example.com` "not on this tailnet" and disabled. `gw`'s own log shows the probe (`GET /manifest.json`). One tap on `gw`: `gw`'s log has `GET /`, the sign-in sheet for `gw` comes up, and the row names `gw` as in use | Running it on the tree before the change: no `gateway-row` |
-| `testTheAppBarRowIsAbsentWithOneGateway` | Discovery | Home `dash`, known `dash` only: the bar is up (gear hittable) and `gateway-row` does not exist | Showing the row unconditionally |
+| `testTheAppBarRowOffersFindGatewaysWithOneGateway` | Discovery | Home `dash`, known `dash` only: the row is there with `dash` in use and a hittable + labelled "Find gateways"; tapping it opens `gateway-picker`, which lists `gw` and has manual entry | The code before item 9: `one gateway still has a row` |
 
 Host: `scripts/test-gateway-row.sh`, the §4 table, in `make test-policy`.
 
 ## 7. Acceptance criteria
 
-1. With two or more remembered gateways, the summoned bar shows one chip per
-   gateway, sorted by name — the Discovery test.
+1. With any remembered gateway, the summoned bar shows one chip per
+   gateway, sorted by name, and a + that opens Find gateways — the
+   Discovery tests.
 2. Each other chip's light matches a probe of that gateway, as the gateway's
    own request log confirms — the Discovery test.
 3. One tap switches, proved by the new gateway's log — the Discovery test.
@@ -209,8 +221,18 @@ an icon pops in on sign-out):
    chip. It still hides while the token sheet is up (F15); that no longer
    shifts anything.
 
-For Olof: whether the row should also offer "Find gateways…" at its end, and
-whether the bar should come in by itself when the page in use fails.
+From Olof's mock:
+
+9. **A + in a fixed slot after the chips**, before sign-in and the gear:
+   a dashed circle a chip's height that opens Find gateways. It does not
+   scroll with the chips, which fade out under it. The row now shows with
+   one gateway, so the + is always reachable; this reverses "one gateway:
+   no row" (§2). The sign-in slot is reserved while signed in, so the +
+   stays put on a sign-out as the chips do; the cost is a gap of about
+   60 pt between the + and the gear while signed in.
+
+For Olof: whether the bar should come in by itself when the page in use
+fails.
 
 ## 9. Log
 
@@ -273,3 +295,15 @@ red); and that sign-in sits after the row. Run on the old `GatewayRow` and
 `AppBar` (new order kept), it fails: `neither the switch nor the sign-out
 moved a chip`, every chip 208 pt to the right and dash 71 pt wider. Host
 `test-gateway-row.sh` 44/44; Discovery 21/21 (484 s); L1 45/45 (204 s).
+
+### 2026-09-28 — §8 item 9: the + and a row for one gateway
+
+`testTheAppBarRowIsAbsentWithOneGateway` is replaced by
+`testTheAppBarRowOffersFindGatewaysWithOneGateway`, and
+`testTheAppBarRowLightsEachGatewayAndSwitchesInOneTap` now checks the + is
+at the row's end and that its frame, with every chip's, is unchanged across
+the switch and the sign-out, with sign-in after it. On the old app code both
+fail: `the + is in the bar` and `one gateway still has a row`. With the
+sign-in slot not reserved, the switch test fails on `neither the switch nor
+the sign-out moved a chip or the +`. Host `test-gateway-row.sh` 44/44.
+

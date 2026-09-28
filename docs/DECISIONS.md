@@ -3713,3 +3713,18 @@ out, a compact text-only "Sign in" sits after the row beside the gear, so
 the row's leading edge never moves. The Discovery test now asserts every
 chip's frame is unchanged across verdicts, a switch and a sign-out, and
 fails on the old chip and bar code.
+
+## 2026-09-28 — F22: a + for Find gateways, and a row for one gateway
+
+Olof's pick from a mock: a + in a fixed slot after the chips, beside the
+gear, that opens Find gateways (the Settings sheet: discovery and manual
+entry). The bar reads [chips, scrolling, fading at the trailing edge] [+]
+[Sign in, signed out only] [gear]. The row now shows with one gateway, so
+the + is always reachable; this reverses F22's "one gateway: no row".
+
+Issue #7's guarantee extends to the +: the sign-in button's slot is kept,
+empty, while signed in, so a sign-out narrows nothing and moves neither a
+chip nor the +. The cost is a gap before the gear while signed in. F22 §8
+item 9; the Discovery test asserts the +'s frame across a switch and a
+sign-out and fails without the reserved slot.
+
