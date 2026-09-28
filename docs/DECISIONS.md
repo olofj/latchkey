@@ -3520,3 +3520,58 @@ so option B ends in a confirmation the owner can read.
 session suite as recorded in F18 §10. Not measured: what iOS allows the
 background run, and whether the page world runs backgrounded — the
 `ShareIntent:` phase lines are the instrument for the owner's device run.
+
+## 2026-09-26 — the cold-launch flash was the page's; its shell now paints nothing until it has chosen
+
+F21 (issue #4) was specified as a grace window on our own gate, connecting
+and banner states. The owner's 60 fps recording showed none of them: the
+gear was on screen throughout, and the quarter-second of black was inside
+the web view. The pinned 0.7.1 bundle ships `<html data-theme="dark">`,
+keys its CSS to that attribute with no `prefers-color-scheme` rule, and
+writes the chosen theme onto `<html>` from a React effect after its
+module graph has loaded. The flash is that load, in the dark theme's
+colours, and it is proportional to the path the chunks come over.
+
+Decided: fix it as a `<style>` added at document start
+(`PageScriptSources.calmShell`), not as a held surface with a timeout.
+While `<html>` is still the shell's static default and carries no
+`data-mode`, the root offers `color-scheme: light dark`, the body's
+background is transparent and `#root` is invisible: the web view's own
+appearance-keyed backing shows, and the chosen theme paints the instant
+the page writes it. A hold would have needed a definition of "painted
+something we would be happy to show", a timeout for when it is never
+met, and would have charged that timeout to every owner whose dashboard
+theme differs from the phone's. This needs none of those and delays
+nothing. It rests on three facts of the 0.7.1 shell; a changed default
+makes it a no-op (today's flash), and the script hands the paint back by
+itself two seconds after the app mounts without writing a choice. The
+durable fix is upstream's (`upstream/kirocrew-theme-flash.md`, drafted,
+not filed).
+
+Two things the measurement forced. The bare loopback fixture showed no
+flash at all — the bundle booted before its shell got a frame — so the
+fake gateway gained `/__slow?assets=S` and the F21 tests hold each chunk
+50 ms, which gives the shell the few hundred ms a phone gives it. And a
+transparent body alone left 103 ms of dark: WebKit paints a
+`color-scheme: dark` root's base canvas black regardless of the view's
+colours, and React mounts under the shell's attributes for ~60 ms before
+its effect writes the choice; the other two declarations answer those.
+
+Every build now logs `page-background: <colour> after <ms> ms` for each
+canvas colour the page reports, so a phone says what painted first from
+Settings → Logs; test builds keep the sequence in
+`page-background-reports` (`CalmLaunchTests`, under
+`-UITestReportPageBackgrounds`, so no other suite's sweep meets it). The
+reporter samples every frame for a document's first three seconds and,
+while a background transition is in flight, reports the colour it is
+heading for: the shell's dark default fades in with its stylesheet and
+is turned round by the page's theme before it finishes, so a reporter
+that waited for the fade to end never saw it (the control failed that
+way on its first run, F21 §9).
+
+**Evidence:** `scripts/measure-launch-flash.sh`, 50 ms per asset, on
+Shard 4: control (`-UITestNoCalmShell`) one dark run of 225 ms, darkest
+frame 34.3; built, no dark run, darkest 114.2 (the launch fade). Each
+test shown able to fail by mutation (F21 §9). `ShareTests` and
+`CalmLaunchTests` 17/17 serially; host: 22/22 calm-shell checks,
+page scripts and `make test-policy` green.
