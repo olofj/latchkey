@@ -155,6 +155,9 @@ enum GatewayCandidates {
     enum ManualEntryRefusal: Error, Equatable, Sendable {
         /// Nothing, or not a host name (spaces, unparseable).
         case notAHost
+        /// A port that is not a number in 1...65535, or a bare trailing
+        /// colon (F1 §2).
+        case badPort
         /// The split-tunnel rule set has no peer data yet, so nothing can be
         /// checked -- and so nothing is accepted.
         case tailnetNotReady
@@ -165,6 +168,8 @@ enum GatewayCandidates {
             switch self {
             case .notAHost:
                 return "Enter the name of a computer on your tailnet, like gateway or gateway.<tailnet>.ts.net."
+            case .badPort:
+                return "Enter a host, or host:port (1–65535)."
             case .tailnetNotReady:
                 return "The tailnet's peer list hasn't arrived yet, so this name can't be checked. Try again in a moment."
             case .offTailnet(let host):
@@ -175,7 +180,7 @@ enum GatewayCandidates {
 
     /// THE gate for a gateway the owner typed, whichever field it was typed
     /// into: the picker's manual entry, Settings → Gateway, and any field
-    /// added later. Returns `https://<host>` only when `policy` -- the live
+    /// added later. Returns `https://<host>[:<port>]` only when `policy` -- the live
     /// split-tunnel rule set -- carries `host`. Anything else would load
     /// direct, off the tailnet, and become the sign-in origin a pasted token
     /// is sent to (M5 review). The picker had this check and Settings did
@@ -187,34 +192,53 @@ enum GatewayCandidates {
     /// with no policy, or one without peer data yet, nothing is accepted.
     static func manualGateway(_ raw: String, suffix: String?,
                               policy: TailnetProxyPolicy?) -> Result<String, ManualEntryRefusal> {
-        guard let host = manualHost(raw, suffix: suffix) else { return .failure(.notAHost) }
+        let host: String, port: Int?
+        switch manualHost(raw, suffix: suffix) {
+        case .success(let parsed): (host, port) = parsed
+        case .failure(let refusal): return .failure(refusal)
+        }
         guard let policy, policy.hasPeerData else { return .failure(.tailnetNotReady) }
         guard policy.matchingRule(for: host) != nil else { return .failure(.offTailnet(host: host)) }
-        return .success("https://\(host)")
+        return .success(port.map { "https://\(host):\($0)" } ?? "https://\(host)")
     }
 
     /// Whether `raw` could name a gateway at all -- for enabling a button.
     /// No promise about the tailnet: `manualGateway` decides that.
     static func isPlausibleGatewayName(_ raw: String, suffix: String?) -> Bool {
-        manualHost(raw, suffix: suffix) != nil
+        if case .success = manualHost(raw, suffix: suffix) { return true }
+        return false
     }
 
-    /// The host from what the user typed: a bare name is qualified with the
-    /// tailnet's MagicDNS suffix, any scheme, port, path or query is dropped
-    /// (the scheme is always https, R26). Private on purpose: an origin for
-    /// the app to load comes only from `manualGateway`, checked.
-    private static func manualHost(_ raw: String, suffix: String?) -> String? {
+    /// The host and port from what the user typed: a bare name is qualified
+    /// with the tailnet's MagicDNS suffix, any scheme, path or query is
+    /// dropped (the scheme is always https, R26). The port is kept unless it
+    /// is 443, which is the origin's default and so never written (F1 §2).
+    /// Private on purpose: an origin for the app to load comes only from
+    /// `manualGateway`, checked.
+    private static func manualHost(_ raw: String, suffix: String?) -> Result<(String, Int?), ManualEntryRefusal> {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
+        guard !text.isEmpty else { return .failure(.notAHost) }
         if let range = text.range(of: "://") { text = String(text[range.upperBound...]) }
-        let hostPort = text.split(separator: "/", maxSplits: 1).first.map(String.init) ?? text
-        guard var host = URLComponents(string: "https://\(hostPort)")?.host?.lowercased(),
+        var hostText = text.split(separator: "/", maxSplits: 1).first.map(String.init) ?? text
+        // The port is parsed here rather than by URLComponents, which drops
+        // a bare trailing colon and takes any Int: both must be refused.
+        var port: Int?
+        if let colon = hostText.lastIndex(of: ":"),
+           !hostText[colon...].contains("]") {
+            let digits = hostText[hostText.index(after: colon)...]
+            guard !digits.isEmpty, digits.count <= 5, digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let value = Int(digits), (1...65535).contains(value)
+            else { return .failure(.badPort) }
+            port = value == 443 ? nil : value
+            hostText = String(hostText[..<colon])
+        }
+        guard var host = URLComponents(string: "https://\(hostText)")?.host?.lowercased(),
               !host.isEmpty, !host.contains(" ")
-        else { return nil }
+        else { return .failure(.notAHost) }
         while host.hasSuffix(".") { host.removeLast() }
         if !host.contains("."), let suffix, !suffix.isEmpty {
             host += "." + suffix.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         }
-        return host
+        return .success((host, port))
     }
 }

@@ -18,7 +18,7 @@
 //
 //   - DERP and STUN on 127.0.0.1.
 //
-//   - Peers. "dash" forwards tailnet :443 to the fake dashboard
+//   - Peers. "dash" forwards tailnet :443 (and :8443) to the fake dashboard
 //     (dashboard.py, which terminates TLS with the test CA's leaf for
 //     dash.tail-scale.ts.net), and journals every connection with its tailnet
 //     source address -- the proof a load went through the tailnet. "plain"
@@ -534,6 +534,16 @@ func (h *harness) startPeer(ctx context.Context, ctl *testcontrol.Server, gen in
 		} else {
 			go h.forward(gen, name, ln, forward)
 		}
+	}
+	// dash also serves tailnet :8443, journaled as "dash:8443", so a test
+	// can tell a typed port was used rather than dropped (F1).
+	if name == "dash" && forward != "" {
+		ln, err := s.Listen("tcp", ":8443")
+		if err != nil {
+			s.Close()
+			return nil, err
+		}
+		go h.forward(gen, name+":8443", ln, forward)
 	}
 	return p, nil
 }

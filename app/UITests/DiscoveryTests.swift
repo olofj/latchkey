@@ -135,9 +135,24 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertTrue(element(app, "gateway-manual-error").appears(within: 5),
                       "a public host is refused, with a reason")
         XCTAssertTrue(element(app, "gateway-picker").exists, "and the picker stays")
+        // F1 §2: a port out of range is refused with a reason, not dropped.
+        // The button is disabled for it, so Return is what shows the reason.
         field.tap()
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20))
-        field.typeText("dash")
+        field.typeText("dash:99999")
+        XCTAssertFalse(element(app, "gateway-manual-use").isEnabled, "a bad port cannot be used")
+        field.typeText("\n")
+        // The error is already up from the refusal above: wait for its words.
+        for _ in 0..<10 where element(app, "gateway-manual-error").label != "Enter a host, or host:port (1–65535)." {
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        XCTAssertTrue(element(app, "gateway-manual-error").label == "Enter a host, or host:port (1–65535).",
+                      "a bad port says why: \(element(app, "gateway-manual-error").label)")
+        XCTAssertTrue(element(app, "gateway-picker").exists, "and the picker stays")
+
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20))
+        field.typeText("dash:8443")
         element(app, "gateway-manual-use").tap()
 
         // dash.tail-scale.ts.net is the fake dashboard: it reports itself.
@@ -148,6 +163,11 @@ final class DiscoveryTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(500))
         }
         XCTAssertTrue(loaded, "the manually entered gateway (qualified to its FQDN) loads")
+        // Through the typed port: the harness journals dash's :8443
+        // listener apart from its :443 one, and the port used to be dropped.
+        let journal = try await harnessState()["journal"] as? [[String: Any]] ?? []
+        XCTAssertTrue(journal.contains { $0["peer"] as? String == "dash:8443" && $0["error"] == nil },
+                      "the page loaded over dash:8443: \(journal.suffix(6))")
     }
 
     /// The choice persists: a relaunch goes straight to the gateway, with no

@@ -83,8 +83,19 @@ func gate(_ raw: String, suffix: String? = sfx, policy p: TailnetProxyPolicy? = 
 expect(gate("dash") == .success("https://dash.tail-scale.ts.net"), "a bare name is qualified, and the suffix rule carries it")
 expect(gate("  Dash.Tail-Scale.ts.net.  ") == .success("https://dash.tail-scale.ts.net"),
        "trimmed, lowercased, trailing dot dropped")
-expect(gate("http://dash.tail-scale.ts.net:5476/x?y") == .success("https://dash.tail-scale.ts.net"),
-       "always https, no port, path or query (R26)")
+expect(gate("http://dash.tail-scale.ts.net/x?y") == .success("https://dash.tail-scale.ts.net"),
+       "always https, no path or query (R26)")
+// F1 §2: a typed port is kept, 443 is the default and never written, and a
+// port that is not 1...65535 is refused rather than dropped.
+expect(gate("dash:8443") == .success("https://dash.tail-scale.ts.net:8443"), "a bare name keeps its port")
+expect(gate("https://dash.tail-scale.ts.net:8443/anything") == .success("https://dash.tail-scale.ts.net:8443"),
+       "a URL keeps its port, loses its path")
+expect(gate("dash:443") == .success("https://dash.tail-scale.ts.net"), "443 is the default: not written")
+for bad in ["dash:", "dash:0", "dash:65536", "dash:99999", "dash:84a3", "dash:-1", "dash:+80", "dash:000008443"] {
+    expect(gate(bad) == .failure(.badPort) && !GatewayCandidates.isPlausibleGatewayName(bad, suffix: sfx),
+           "\(bad) is refused as a bad port: \(gate(bad))")
+}
+expect(gate("dash:0").failureMessage == "Enter a host, or host:port (1–65535).", "the bad-port wording (F1 §2)")
 expect(gate("dash", suffix: nil) == .success("https://dash"), "no suffix known: left bare, carried by the short-name rule")
 expect(gate("shared.example.ts.net") == .success("https://shared.example.ts.net"),
        "a node shared in from another tailnet is carried by its own FQDN rule")
@@ -113,8 +124,10 @@ expect((gate("dash", policy: nil).failureMessage ?? "").contains("moment"), "the
 for raw in ["dash", "DASH.tail-scale.ts.net", "https://shared.example.ts.net:8443/path", "latchkey-iphone",
             "gw_1", "dash..", "xn--80ak6aa92e", "evil.example", "shared", "not on tailnet"] {
     if case .success(let origin) = gate(raw) {
-        let host = URLComponents(string: origin)?.host ?? ""
-        expect(origin == "https://\(host)" && policy.matchingRule(for: host) != nil,
+        let parts = URLComponents(string: origin)
+        let host = parts?.host ?? ""
+        let authority = parts?.port.map { "\(host):\($0)" } ?? host
+        expect(origin == "https://\(authority)" && policy.matchingRule(for: host) != nil,
                "\(raw) -> \(origin): accepted only because the policy carries \(host)")
     }
 }
