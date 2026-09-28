@@ -2849,7 +2849,9 @@ change, then install.
 - A relay with a dead upstream surfaces as `-1009`, which
   `SocksRelayRecovery.isTransportFailure` does not classify. By design (the
   status poll repairs it), recorded so the next reader does not treat it as a
-  gap.
+  gap. Timed 2026-09-27 (F16 stage 4): the error page shows about 1.0 s
+  after the load starts, and the relay's session ends 10-36 ms after its
+  accept, on ECONNREFUSED from the upstream's `receive`.
 - ~~The real tailnet name and two host addresses remain in **git history**. The
   working tree is clean; rewriting history is Olof's call and is cheapest before
   the first push.~~ **Done 2026-09-24**, before the first push, by
@@ -3608,3 +3610,60 @@ the one not run is `testTypingInThePageKeepsItOnScreen`, which hangs on
 `Latchkey Shard 2` only — no software keyboard comes up there — and passes
 with the same build on Shards 1, 4 and 5; a simulator's state, not this
 change. Each check shown to fail by a mutation (F10 §9).
+
+## 2026-09-27 — F16 stages 2-4: bus watcher install, async relay start, fault 3 measured
+
+**Decision:** three changes finish issue #3's faults. Stage 2 is
+`2681057`, and stage 3 is `59e8986`.
+
+- **Stage 2.** An IPN-bus watcher is installed only by whoever started
+  it, after that caller's own staleness check: the restart's
+  cancellation, and the recovery's generation. It acts only once
+  installed.
+- **Stage 3.** `SocksLogProxy.start()` is async. A start that a recovery
+  or `shutdown()` overtakes stops its relay. `loadInitial` waits for a
+  proxy in the data store.
+- **Stage 4.** Fault 3 (a refused upstream hangs WebKit for 60 s) was
+  measured at **about 1.0 s in the simulator**. The fix §4.4 held in
+  reserve (a `stateUpdateHandler` on the relay's upstream) is **declined**:
+  there is nothing to fix. It stays open for device evidence.
+
+**Why:**
+
+- **Stage 2.** A restart overtaken by a loopback recovery installed a
+  watcher for the old consumer. The live bus's next death then went
+  unobserved, and Login opened nothing. The caller's check alone was not
+  enough: the stale watcher saw its own processor fail and scheduled a
+  restart for the old consumer before the start could be discarded.
+- **Stage 3.** Every caller is on the main actor, so a slow listener
+  froze the UI for up to 3 s. Going async opened two windows that the
+  blocking start had kept shut: a stale relay published over a newer one,
+  and a first load made before the proxy existed, which would go direct.
+  Both are closed and tested.
+
+**Evidence:** F16 §9. Each new test was shown to fail against a mutation:
+
+- **The pre-F16 install order:** the Login after the race never
+  completes, and a bus is installed after shutdown.
+- **A blocking start:** a main-thread stall of 2162 ms.
+- **A ready delay past the start timeout:** zero relayed requests.
+- **No `loadInitial` guard:** a direct load succeeds under both
+  anti-leak copies.
+- **No post-start checks:** the stale relay is published and the page's
+  socket never reopens.
+
+Fault 3, five runs each:
+
+- **With the relay:** -1009 after 1002-1071 ms.
+- **Without it:** -1004 after 1002-1019 ms.
+
+Suite results:
+
+- **Lifecycle:** 9/9.
+- **Discovery:** 15/15.
+- **Targeted L1:** 11/11, on Shard 3, instance 3.
+- **`make test-policy`:** passed.
+
+**Not yet:** the full sharded L1, whose simulators were in use by other
+work. Also still to do: a device log that would show a defuncted
+listener dropping SYNs, or a relay listener sitting in `.waiting`.

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **stage 1 built** 2026-09-25 (`5864df9`, `c5d5198`, `4c5a65d`; §9). Stages 2-4 designed, not built. Four stages, **stage 1 first** (§4.0). Specced from [issue #3](https://github.com/olofj/latchkey/issues/3). Of its four faults, two are confirmed as stated, one is a real code defect whose trigger this pass could not show happens on its own, and **one is contradicted by a recorded measurement** (§1.5). That one gets measured before anything is fixed |
+| **Status** | **built** 2026-09-27. Stage 1 2026-09-25 (`5864df9`, `c5d5198`, `4c5a65d`), stage 2 (`2681057`) and stage 3 (`59e8986`) 2026-09-27; stage 4 measured fault 3 at about 1 s and **declined the fix** (§9). Specced from [issue #3](https://github.com/olofj/latchkey/issues/3). Of its four faults, two are confirmed as stated, one is a real code defect whose trigger this pass could not show happens on its own, and **one is contradicted by a recorded measurement** (§1.5), now measured again |
 | **Requested** | 2026-09-25, by Olof, as issue #3: *"The network layer has several ways to stall for seconds to a minute when the loopback path misbehaves."* Owner-visible evidence from 2026-09-24: the gateway picker sat at "Searching…"; reported as *"scan didn't work, nothing found"*, together with an empty screen showing only the cogwheel |
 | **Revision** | none. No documented behaviour changes. Timeouts get shorter on paths where the owner is waiting, and a stalled loopback is now recovered |
 | **Touches** | `TSNet/TSNetManager.swift` (status bound, recovery trigger, bus-watcher install, async relay start), `TSNet/SocksLogProxy.swift` (async `start`, one test hook), `App/Discovery/GatewayDiscovery.swift` (no change beyond the bounded closure it is handed), the vendored tree (**one** debug hook, its own commit, R16), the L2 lifecycle and discovery suites, L1, host tests |
@@ -582,3 +582,114 @@ unfixed build.
   parser counting both stalled sweeps and one recovery. Lifecycle passed
   6/6. The quick tier (`scripts/test-all.sh --build`) is recorded in
   `../DECISIONS.md`.
+- 2026-09-27: **stages 2 and 3 built** in `2681057` and `59e8986`;
+  **stage 4 measured, fix declined**. The build departs from the text
+  above in these ways:
+  - **Stage 2: `startEventBus` returns a `StartedBus`**, not a tuple. It
+    carries the consumer, so `installBus` can log `BUS WATCHER MISMATCH`,
+    and the client, for the next point.
+  - **Stage 2: a watcher acts only once installed.** The caller's check
+    alone was not enough. A stale start's processor fails against the
+    replaced loopback, and its watcher then scheduled a restart for the
+    OLD consumer before the caller could discard the start. That restart
+    installed later, past every check. So the watcher is unarmed until
+    `installBus`, which also takes up any error that arrived before it.
+    `startEventBus` clears the consumer's error first:
+    `scheduleBusRestart`'s own clear runs inside the failing assignment's
+    `willSet` and does not stick, and the leftover error would otherwise
+    read as a new death at install. An abandoned first attempt used
+    `dropFirst` on the watcher instead. That drops a real death that
+    lands between the start and the subscription, so it was replaced.
+  - **Stage 2: `testShutdownDuringRecoveryInstallsNoWatcher` is an L2
+    lifecycle test**, not a host or L1 one. The host tests cannot compile
+    `TSNetManager` (TailscaleKit), and L1 has no node, so no recovery
+    runs there. `-UITestShutdownDuringRecovery` holds the first recovery's
+    bus start 4 s, shuts the manager down 1 s into it, and reports what
+    is installed afterwards on the chaos label.
+  - **Stage 2's forcing hooks** are as §6.1 says, with two changes.
+    `-UITestBusErrorAfter` takes a list of offsets (`2,13`): the second
+    death is the one a stale watcher would miss, so the test needs no
+    60 s idle death. `-UITestBusInstallDelay` holds the first ordinary
+    restart only.
+  - **Stage 3: `loadInitial` waits for `dataStore.proxyConfigurations`**,
+    not `tsnetModel.proxyConfiguration`. The view model's sinks are
+    delivered with `receive(on: main)`, so a `$state` sink can run after
+    the proxy is on the model and before `applyProxy` has put it in the
+    store. What leaks is a load made before the store has a proxy, so
+    that is what the guard checks.
+  - **Stage 3: the in-flight start is keyed by loopback generation**
+    (`relayStart`). A caller of the same generation joins it. A recovery,
+    which bumps the generation, starts its own relay against the new
+    loopback. The overtaken start stops its relay, `proxyConfig` returns
+    nil for it, and every caller checks the generation before it
+    publishes, so a stale nil never replaces a newer configuration.
+  - **Stage 3: `main-thread-max-stall-ms` measures a window**, not the
+    whole run. In L1 the first relay start runs during the launch, and a
+    cold launch alone kept the main thread busy for up to 1.4 s (gaps of
+    838-957 ms, with no relay involved). The window opens
+    `-UITestMainThreadMonitor <s>` seconds after a relay start begins,
+    from a background queue so a blocked main thread cannot hold it
+    shut, and closes when the start ends. The test holds `.ready` 2.8 s
+    and opens the window at 1.8 s. `relay-requests` counts the SOCKS
+    requests the relay parsed. It is the evidence that a load went
+    through the relay, which the stub's journal cannot show.
+  - **Stage 3: the L1 tests are in `LoopbackStallOfflineTests`**, not in
+    `OfflineHarnessTests`, and the two R10 tests are rerun there as
+    copies under the delay. `scripts/test-offline.sh` and the shard
+    planner run both classes; the new class's test ids carry the class.
+  - **Stage 3: `-UITestRelayReadyDelay` delays the process's first
+    listener only**, so a relay that overtakes it starts promptly. The
+    lifecycle test forces the overtaking with
+    `-UITestRecoverDuringRelayStart`: half a second into the first start,
+    the loopback is closed and recovery runs.
+  - **Stage 4's timing is not in `OfflineHarnessTests`.** That file was
+    being edited by another piece of work, so the two proxy-gone tests
+    were run unchanged. The number comes from the app's own
+    `page-state: failed … after N ms` line, which times the load from its
+    start, and from the relay's accept and finish lines.
+- Shown able to fail. Each mutation was built and run, and the source was
+  restored afterwards:
+  - **Stage 2, install before the check** (the pre-F16 order): the race
+    test fails ("the new login ends the banner"), and the shutdown test
+    reads `bus after shutdown`.
+  - **Stage 3, a blocking start** (a semaphore around `start()` on the
+    main actor): `main-thread-max-stall-ms` reads 2162, and the test
+    fails.
+  - **Stage 3, a ready delay past `startTimeout`** (3.5 s):
+    `relay-requests` reads 0. The load went around the relay, and the
+    test can tell.
+  - **Stage 3, no `loadInitial` guard:** both anti-leak copies fail. The
+    first load goes direct during the delay and succeeds, so no error
+    page appears within 40 s.
+  - **Stage 3, no post-start checks** (in the start task, `proxyConfig`
+    and `tailscaleUp`): the lifecycle race test fails. The stale relay
+    is published, and the page's WebSocket never opens again.
+- **Fault 3, measured** (stage 4). The two proxy-gone tests were run five
+  times each on the simulator, with the app log streamed:
+  - **With the relay:** `page-state: failed cause=proxyDown code=-1009`
+    after **1002-1071 ms**. The relay's session ends 10-36 ms after its
+    accept, as `relay receive ended: … Connection refused` and then
+    `relay finished (receive error)`. So what closes the session is the
+    upstream `receive` completing with ECONNREFUSED. WebKit dials twice,
+    and the error page shows about 2.1-2.4 s after the first accept.
+  - **Without it** (`-NoSocksLog`): -1004 after **1002-1019 ms**.
+  - That is far under §4.4's 10 s threshold, so **the fix is declined**.
+    The upstream stays without a `stateUpdateHandler`. Fault 3 is closed
+    as not reproducible in the simulator and stays open for device
+    evidence: a defuncted listener that drops SYNs would show a
+    `socks[n] relay accepted` with no `finished` for about 60 s.
+- Runs, at `59e8986`:
+  - Lifecycle (`SIM_NAME="Latchkey Shard 2" scripts/test-lifecycle.sh
+    --build`): 9/9 passed, with the log checks for stages 1-3.
+  - Discovery (`SIM_NAME="Latchkey Shard 2" scripts/test-discovery.sh`):
+    15/15 passed.
+  - Targeted L1 (`SIM_NAME="Latchkey Shard 3" LATCHKEY_INSTANCE=3`, the
+    worker path with `LATCHKEY_SHARD_TESTS`): the three new tests, the
+    four R10 tests, `testDashboardLoadsThroughTheProxy` and three other
+    launch-path tests, 11/11. Under the delay, `main-thread-max-stall-ms`
+    read 0-1 ms. The full sharded L1 was not run: its shard simulators
+    were in use by other work.
+  - `make test-policy`: passed. The SOCKS relay host test is 99/99, with
+    its starts awaited through a blocking helper.
+  - Measured: bus-restart race, damage → recovered 1.1 s, and the Login
+    after the second bus death completed in 4.2 s.
