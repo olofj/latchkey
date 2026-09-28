@@ -300,6 +300,17 @@ device build.
   tls_accept.py`). Wrapping the listening socket instead lets one silent
   client, such as a peer's half-open forward left by a killed app, stall
   every later connection.
+- **Never drive a `Latchkey Shard k` simulator without holding slot k.**
+  The suite scripts take their slots through `scripts/simpool.py`; a bare
+  `xcodebuild test-without-building -destination id=<shard UDID>` takes
+  none. Two xcodebuilds on one simulator force-quit each other's runner
+  ("terminate for debugging launch request" in the simulator's log), and
+  the log reads like the app never going idle, followed by "Restarting
+  after unexpected exit". To rerun one test, wrap the command:
+  `scripts/simpool.py run --want 1 -- <command>`, and use the simulator
+  of the slot it hands you (`LATCHKEY_SLOTS`). Seen 2026-09-27: a hand-run
+  `testTypingInThePageKeepsItOnScreen` on Shard 2 lost its runner to the
+  discovery suite, which held that slot.
 
 Xcode 27 specifics worth knowing: `xcresulttool get object` is deprecated and
 needs `--legacy`; use `xcrun xcresulttool get test-results summary|tests`
