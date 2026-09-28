@@ -677,6 +677,69 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(panel.newHittable, "the panel's New button is there and hittable")
     }
 
+    // MARK: - F10 §4.5: the page's own content does not collide
+
+    /// F5's class, not F5's row: the real page, signed in and at rest, in
+    /// portrait and landscape, reports from its own layout that no two of its
+    /// drawn items collide (`PageSweep`, which says what "drawn" and "collide"
+    /// mean). Shown to fail by removing the chip style's install: the sweep
+    /// names F5's pair without being pointed at the instance bar.
+    func testThePagesOwnContentDoesNotCollide() async throws {
+        let run = try await signedInRun()
+        var problems: [String] = []
+        for (name, look) in [("portrait", run.portraitPage), ("landscape", run.landscapePage)] {
+            guard let page = look else { problems.append("\(name): the page gave no report"); continue }
+            let line = "PAGE-SWEEP \(name): viewport \(page.viewport) items=\(page.items.count)"
+            print(line + ": " + page.items.joined(separator: "; "))
+            add(XCTAttachment(string: ([line] + page.items).joined(separator: "\n")))
+            if page.items.count < 5 { problems.append("\(name): the sweep read too little of the page: \(line)") }
+            problems += page.collisions.map { "\(name): \($0) collide" }
+        }
+        // One assertion for all of them: this class stops at its first failure.
+        XCTAssertTrue(problems.isEmpty, "F10 §4.5, the page's own content:\n" + problems.joined(separator: "\n"))
+    }
+
+    /// The page's report (`page-sweep`, `-UITestPageSweep`): its viewport,
+    /// every drawn item and every colliding pair, in CSS px.
+    private struct PageLook {
+        let viewport: String
+        let items: [String]
+        let collisions: [String]
+    }
+
+    /// The first report taken after this call whose viewport has the
+    /// window's orientation, so a report from before a rotation is not read
+    /// as the one after it. Nil if none comes within 10 s.
+    private func lookAtPage(_ app: XCUIApplication) async throws -> PageLook? {
+        let probe = element(app, "page-sweep")
+        guard probe.appears(within: 10) else { return nil }
+        func parse() -> (seq: Int, look: PageLook, landscape: Bool)? {
+            guard let text = probe.value as? String, let data = text.data(using: .utf8),
+                  let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let seq = o["seq"] as? Int, let vw = o["vw"] as? Int, let vh = o["vh"] as? Int else { return nil }
+            return (seq, PageLook(viewport: "\(vw)x\(vh)", items: o["items"] as? [String] ?? [],
+                                  collisions: o["collisions"] as? [String] ?? []), vw > vh)
+        }
+        let after = parse()?.seq ?? 0
+        let window = app.windows.firstMatch.frame
+        let deadline = Date().addingTimeInterval(15)
+        var last: (seq: Int, look: PageLook, landscape: Bool)?
+        while Date() < deadline {
+            // At rest: two successive reports, both after this call and in
+            // the window's orientation, that agree. A single report can land
+            // mid-transition, with an element on its way out still drawn.
+            guard let r = parse(), r.seq > after, r.landscape == (window.width > window.height) else {
+                try await Task.sleep(for: .milliseconds(300)); continue
+            }
+            defer { last = r }
+            if let prev = last, prev.seq < r.seq, prev.look.items == r.look.items {
+                return r.look
+            }
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        return nil
+    }
+
     // MARK: - F14: one signed-in run, read by the tests that only look at it
 
     /// Everything four tests looked at after the same launch and the same CLI
@@ -712,6 +775,8 @@ final class SessionTests: XCTestCase {
         let portrait: BarLook?
         let rotated: Bool
         let landscape: BarLook?
+        let portraitPage: PageLook?
+        let landscapePage: PageLook?
         let panel: PanelLook
         let sessionExpires: String
         let accessExpires: String
@@ -722,7 +787,7 @@ final class SessionTests: XCTestCase {
     private func signedInRun() async throws -> SignedInRun {
         if let run = Self.signedIn { return run }
         XCUIDevice.shared.orientation = .portrait
-        let app = launch()
+        let app = launch(extra: ["-UITestPageSweep"])
         defer {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -734,7 +799,10 @@ final class SessionTests: XCTestCase {
         let signInButtonShown = element(app, "session-signin-button").exists
 
         let portrait = try await lookAtBar(app)
-        var rotated = false, landscape: BarLook?
+        // The bar settled, so the page's header has laid out: F10 §4.5 reads
+        // the page there, and again once the bar has settled in landscape.
+        let portraitPage = portrait != nil ? try? await lookAtPage(app) : nil
+        var rotated = false, landscape: BarLook?, landscapePage: PageLook?
         if portrait != nil {
             XCUIDevice.shared.orientation = .landscapeLeft
             for _ in 0..<25 {
@@ -743,6 +811,7 @@ final class SessionTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(200))
             }
             if rotated { landscape = try await lookAtBar(app) }
+            if landscape != nil { landscapePage = try? await lookAtPage(app) }
             XCUIDevice.shared.orientation = .portrait
             for _ in 0..<25 {
                 let f = app.windows.firstMatch.frame
@@ -776,7 +845,7 @@ final class SessionTests: XCTestCase {
             sheetShown: sheetShown, redemptions: counter(state, "redemptions"),
             authChecks: counter(state, "app_auth_checks"), clipboardHadStrings: clipboardHadStrings,
             signInButtonShown: signInButtonShown, portrait: portrait, rotated: rotated, landscape: landscape,
-            panel: panel, sessionExpires: app.statusRow("diag-session-expires", in: list),
+            portraitPage: portraitPage, landscapePage: landscapePage, panel: panel, sessionExpires: app.statusRow("diag-session-expires", in: list),
             accessExpires: app.statusRow("diag-access-expires", in: list))
         Self.signedIn = run
         return run
@@ -784,7 +853,7 @@ final class SessionTests: XCTestCase {
 
     /// The instance bar once settled, and its chips, read without failing.
     private func lookAtBar(_ app: XCUIApplication) async throws -> BarLook? {
-        guard let bar = try await settledBar(app), let chips = try? instanceChips(bar) else { return nil }
+        guard let bar = try await settledBar(app), let chips = try? labelledItems(bar) else { return nil }
         return BarLook(chips: chips, bar: bar.frame, window: app.windows.firstMatch.frame,
                        localHittable: labelled(app, "Local dashboard").isHittable,
                        chevronHittable: labelled(app, "Switch instance").isHittable)
@@ -821,11 +890,11 @@ final class SessionTests: XCTestCase {
         return nil
     }
 
-    /// Every control and labelled leaf in the bar, from one snapshot, with
-    /// its frame as is: a chip squeezed to nothing is still a chip, and the
-    /// overlap and window checks then fail on it. A control's own children
-    /// are its content, not chips.
-    private func instanceChips(_ bar: XCUIElement) throws -> [Chip] {
+    /// Every control and labelled leaf under `root` (the bar, or the whole
+    /// page for F10 §4.5), from one snapshot, with its frame as is: a chip
+    /// squeezed to nothing is still a chip, and the overlap and window checks
+    /// then fail on it. A control's own children are its content, not chips.
+    private func labelledItems(_ root: XCUIElement) throws -> [Chip] {
         var chips: [Chip] = []
         func labelled(_ node: XCUIElementSnapshot) -> Bool {
             node.children.contains { !$0.label.isEmpty || labelled($0) }
@@ -842,7 +911,7 @@ final class SessionTests: XCTestCase {
                 }
             }
         }
-        walk(try bar.snapshot())
+        walk(try root.snapshot())
         return chips
     }
 

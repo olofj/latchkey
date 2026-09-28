@@ -33,6 +33,7 @@
 39.6 SessionTests/testSwitchingBackToAGatewayNeedsNoNewSignIn
 0.1 SessionTests/testTheInstanceChipsDoNotOverlapInPortrait
 0.1 SessionTests/testTheInstanceChipsStayInOneRowInLandscape
+0.1 SessionTests/testThePagesOwnContentDoesNotCollide
 0.1 SessionTests/testTheSessionsPanelStillOpensInPortrait
 27.9 ShareTests/testASharedLinkReachesTheChosenSession
 25.0 ShareTests/testARefusedPostOffersPrefill

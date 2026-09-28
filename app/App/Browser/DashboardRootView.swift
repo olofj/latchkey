@@ -321,6 +321,10 @@ private struct DashboardContent: View {
                 // that flashes by is not missed) and the content-process
                 // deaths a 50 MB upload must not cause.
                 ShareInstruments(delivery: ShareDelivery.shared, diagnostics: AppDiagnostics.shared)
+                // F10 §4.5: the page's own report of its colliding items.
+                if TestHooks.flag(PageSweep.flag) {
+                    PageSweepInstrument(model: tab.viewModel)
+                }
                 if TSNetManager.tcpChaosTestRequested(),
                    let status = workspace.model.tcpChaosTestStatus {
                     Text(status)
