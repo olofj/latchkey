@@ -3667,3 +3667,31 @@ Suite results:
 **Not yet:** the full sharded L1, whose simulators were in use by other
 work. Also still to do: a device log that would show a defuncted
 listener dropping SYNs, or a relay listener sitting in `.waiting`.
+
+## 2026-09-27 — F22: the app bar lists the gateways, lit like the dashboard's instances
+
+Olof asked for a row of his dashboards on the cogwheel's row, looking like
+the dashboard's instance list, with its coloured health lights, connecting
+directly rather than through the dashboard. Built overnight; he was asleep,
+so every product call below is the building worker's, open to reversal
+(F22 §8).
+
+Decided: the row lives in F15's app bar, so it is absent until the bar is
+summoned and adds no height. It lists the remembered gateways (F5 §7's
+list), in use first, and hides when there is only one. The lights are
+KiroCrew's instance-bar colours (`connected` ok, `connecting` warn, `error`
+danger, else muted, read from the 0.7.1 bundle): the chip in use follows its
+page's load, the others a direct probe of their own origin with discovery's
+fingerprint, only while the row is on screen, every 30 s. Not the
+dashboard's `/api/instances`: those remotes are loopback HTTP frames a
+phone cannot load (F5 §5). No sweep from the bar.
+
+Decided: a red chip still switches (the light is a forecast; F4 reports the
+load), a host off the tailnet is disabled, and the chip in use does nothing
+when tapped. The sign-in capsule and the row share the bar: hiding the row
+while signed out would remove the way to another gateway exactly when it
+matters.
+
+Found while building: the row is usually on screen before the node has a
+proxy and a rule set, and the first refresh then probed nothing for 30 s.
+The probe loop is keyed on readiness as well as the list.

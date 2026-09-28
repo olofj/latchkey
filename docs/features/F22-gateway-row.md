@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | spec (2026-09-27); decided by the building worker overnight, Olof asleep (§8) |
+| **Status** | **built** 2026-09-28, overnight; product calls by the building worker, Olof asleep (§8). Issue [#6](https://github.com/olofj/latchkey/issues/6). Owner's device look (§7.5) outstanding |
 | **Requested** | 2026-09-27, by Olof: "Idea: in the iOS UI, on the row with the cogwheel, do a row of the different remote dashboards available. Similar UI / look as the list on the dashboards but this is for direct connection instead of via the dashboard. Colored lights to indicate health of connection in the same way. Flesh out and file feature and work on it overnight for me." |
 | **Revision** | none: F5 §7's switch path, reached from one more place |
 | **Touches** | `App/Browser/AppBar.swift`, `App/Browser/DashboardRootView.swift`, new `App/Browser/GatewayRow.swift` and `App/Discovery/GatewayHealth.swift`, `App/Workspace/Workspace.swift`, `UITests/DiscoveryTests.swift`, a host test |
@@ -80,8 +80,8 @@ Failing:
 workspace, beside `discovery` (`Workspace.gatewayHealth`, lazy). It probes a
 given list of origins, each with the discovery fingerprint on **its own port
 only** (the origin's), through the node's proxy, no cookies, no redirects,
-4 s per request: the same request shape as `GatewayDiscovery`'s probe, which
-it shares rather than copies. It publishes `[origin: Verdict]` where
+4 s per request: `GatewayDiscovery.probe(_:port:session:)` and
+`makeSession(proxy:)`, made internal for this, not copied. It publishes `[origin: Verdict]` where
 `Verdict` is `.checking`, `.answering`, `.notGateway`, `.notAnswering`, and
 the time of each result.
 
@@ -90,7 +90,8 @@ the time of each result.
   keeps showing until the new one lands: no flicker to amber every 30 s.
 - While the row is on screen it calls `refresh` on appear and every 30 s;
   when the row goes, the timer stops and in-flight probes are cancelled. So
-  a retracted bar costs nothing.
+  a retracted bar costs nothing. The loop restarts when the node becomes
+  ready (a proxy and a rule set): the row is often up before the node is.
 
 **`GatewayChipState` (pure, in `GatewayRow.swift`).** `of(origin:current:
 pageState:carried:ready:verdict:)` → a light (`.ok`, `.warn`, `.danger`,
@@ -119,9 +120,9 @@ each chip `gateway-chip-<host[:port]>`, label the full name ("…, in use" for
 the current one), value the word. It is shown only when there is at least
 one other known gateway.
 
-**`AppBar`.** Takes an optional row view in the middle slot. The sign-in
-capsule keeps the middle when it shows (it pins the bar and is the only way
-in, F15 §9 item 3); the row gives way to it rather than both squeezing.
+**`AppBar`.** Takes an optional row view in the middle slot. When the
+sign-in capsule shows too, it keeps its full width first (it pins the bar and
+is the only way in, F15 §9 item 3) and the row scrolls in what is left.
 
 **`DashboardContent`.** Builds the row from `homePage.url`,
 `workspace.definition.knownGatewayOrigins`, `tab.viewModel.pageState` and
@@ -176,7 +177,9 @@ Decided overnight, each open to reversal:
 2. **Tapping the chip in use does nothing.** A reload on tap was considered
    and rejected: an accidental reload of a live session is worse than a
    missing shortcut; the error page already has Try again.
-3. **The sign-in capsule wins the middle** of the bar when it shows.
+3. **The sign-in capsule and the row share the bar**, capsule first at full
+   width. The first draft hid the row while signed out; that removed the way
+   to another gateway exactly when the one in use will not let him in.
 4. **Red chips still switch** (Settings' rule): the light is a forecast.
 5. **Short names**: the first DNS label, plus `:port` off 443. Two gateways
    with the same first label on different tailnets cannot be remembered by
@@ -188,4 +191,51 @@ whether the bar should come in by itself when the page in use fails.
 
 ## 9. Log
 
-Opened 2026-09-27.
+Opened 2026-09-27; filed as issue #6.
+
+### 2026-09-28 — built
+
+Commits: `discovery: let one port of one host be probed on its own` (the
+per-port probe and the session made internal, not copied),
+`browser: f22, the gateway row's chip states` (pure, host-tested),
+`browser: f22, the app bar lists the gateways with a light for each`,
+`uitests: f22, …`.
+
+**Found by the first run.** `gw is lit answering: checking` after 15 s, and
+gw's log had no probe at all. The row was on screen before the node had a
+proxy and a rule set; `refresh` returned early and the loop slept 30 s. The
+loop is now keyed on readiness as well as the list (§4).
+
+**Changed from the spec's first draft:** decision 3. Hiding the row behind
+the sign-in capsule would have removed the way to another gateway while
+signed out of this one; the Discovery test now checks the row beside the
+capsule after the switch.
+
+**Shown able to fail** (each built and run on a simpool slot):
+
+| Mutation | Failing assertion, as printed |
+|---|---|
+| The app code before F22 (tests only) | `the app bar carries the gateway row` |
+| `order` keeps a lone gateway | `and has no gateway row` |
+| Probing never reaches the node (the readiness bug above) | `gw is lit answering: checking` |
+
+**Tests:** both new Discovery tests pass (11.6 s and 15.9 s); host
+`test-gateway-row.sh` 43/43.
+
+**Full tier, on main at `9348733a6` plus these commits:**
+
+- `make test-policy`: green.
+- `scripts/test-discovery.sh --build`: 22/22, R26 sweep timing checked,
+  373 s. An earlier full run on a busier host failed two picker and
+  Settings tests on "not hittable once settled"; each then passed 3 of 3
+  with `REPEAT=3`.
+- `scripts/test-offline.sh --build` (L1): 45/46 in 357 s. F15's app-bar
+  tests pass unmodified (§7.4). The one failure is
+  `testTypingInThePageKeepsItOnScreen` on Latchkey Shard 2: no software
+  keyboard comes up. F10 recorded the same on the same simulator, and the
+  test has no gateway row (one gateway). It also failed once on Shard 3
+  before the rebase.
+
+**Not covered end to end:** the colours themselves (XCUITest sees the word,
+not the dot), and the 30 s re-probe. Horizontal overflow is SwiftUI's
+`ScrollView`; with the cap of 8 it was not driven.
