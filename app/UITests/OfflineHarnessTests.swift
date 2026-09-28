@@ -1862,17 +1862,7 @@ final class OfflineHarnessTests: XCTestCase {
     }
 
     private func appSupportDirectory() throws -> URL {
-        // .../Containers/Data/Application/<runner>/ → its siblings.
-        let applications = URL(fileURLWithPath: NSHomeDirectory()).deletingLastPathComponent()
-        let fm = FileManager.default
-        for dir in try fm.contentsOfDirectory(at: applications, includingPropertiesForKeys: nil) {
-            let meta = dir.appending(path: ".com.apple.mobile_container_manager.metadata.plist")
-            guard let plist = NSDictionary(contentsOf: meta),
-                  plist["MCMMetadataIdentifier"] as? String == "net.lixom.latchkey" else { continue }
-            return dir.appending(path: "Library/Application Support/Latchkey-UI-Test-iOS",
-                                 directoryHint: .isDirectory)
-        }
-        throw NSError(domain: "OfflineHarnessTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "the app's container is not visible from the test runner"])
+        try AppContainer.appSupportDirectory()
     }
 
     private func asideDirectories(beside state: URL) throws -> [URL] {

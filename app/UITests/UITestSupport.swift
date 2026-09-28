@@ -56,6 +56,38 @@ enum HarnessControl {
     }
 }
 
+/// The app's own files, as the test runner sees them: on the simulator the
+/// runner's container sits beside the app's.
+enum AppContainer {
+    static func appSupportDirectory() throws -> URL {
+        // .../Containers/Data/Application/<runner>/ → its siblings.
+        let applications = URL(fileURLWithPath: NSHomeDirectory()).deletingLastPathComponent()
+        let fm = FileManager.default
+        for dir in try fm.contentsOfDirectory(at: applications, includingPropertiesForKeys: nil) {
+            let meta = dir.appending(path: ".com.apple.mobile_container_manager.metadata.plist")
+            guard let plist = NSDictionary(contentsOf: meta),
+                  plist["MCMMetadataIdentifier"] as? String == "net.lixom.latchkey" else { continue }
+            return dir.appending(path: "Library/Application Support/Latchkey-UI-Test-iOS",
+                                 directoryHint: .isDirectory)
+        }
+        throw NSError(domain: "AppContainer", code: 1, userInfo: [NSLocalizedDescriptionKey: "the app's container is not visible from the test runner"])
+    }
+
+    /// The app's log files (its own, tsnet's and filch's) that contain
+    /// `needle`, and how many log files were read: none read proves nothing.
+    static func logFiles(containing needle: String) throws -> (hits: [String], read: Int) {
+        let logs = try appSupportDirectory().appending(path: "Logs", directoryHint: .isDirectory)
+        let files = try FileManager.default.contentsOfDirectory(at: logs, includingPropertiesForKeys: nil)
+        var hits: [String] = [], read = 0
+        for file in files {
+            guard let data = FileManager.default.contents(atPath: file.path) else { continue }
+            read += 1
+            if data.range(of: Data(needle.utf8)) != nil { hits.append(file.lastPathComponent) }
+        }
+        return (hits, read)
+    }
+}
+
 /// Which harness instance a run talks to, and on which ports (F14).
 ///
 /// Two suite runs at once need two harnesses, so the ports are not constants:

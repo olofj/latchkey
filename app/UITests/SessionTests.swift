@@ -101,6 +101,12 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(sheet.exists, "the sheet stays up (testABadTokenSaysSoAndKeepsTheSheet)")
         let redemptions = counter(try await gatewayState(), "redemptions")
         XCTAssertEqual(redemptions, 0, "a dead link redeems nothing (testABadTokenSaysSoAndKeepsTheSheet)")
+        // R1: the link just typed is in the sheet's field, which XCTest's
+        // accessibility server reads and logs. None of it may reach the
+        // app's log files (filch once captured that mirror, unredacted).
+        let logs = try AppContainer.logFiles(containing: "fk1.")
+        XCTAssertGreaterThan(logs.read, 0, "the app's log files were read")
+        XCTAssertEqual(logs.hits, [], "no sign-in link in the app's log files")
     }
 
     /// R22's fallback, and the positive control for the hidden-banner check:
