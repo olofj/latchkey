@@ -900,6 +900,30 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertFalse(element(app, "gateway-row").exists, "and has no gateway row")
     }
 
+    /// While the row is up, each other gateway is asked again every
+    /// `freshFor` (30 s, F22 §4), not every other pass: the pass that finds
+    /// the last verdict a few milliseconds short of 30 s old must not skip it.
+    func testTheAppBarRowAsksAgainEveryThirtySeconds() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestHomePage", "https://dash.tail-scale.ts.net",
+                                 "-UITestKnownGateways",
+                                 "https://dash.tail-scale.ts.net,https://\(Self.gatewayHost)"])
+        defer { app.terminate() }
+        try await waitForDashPage()
+        showAppBar(app)
+        let gw = element(app, "gateway-chip-\(Self.gatewayHost)")
+        XCTAssertTrue(waitForValue(gw, "answering", timeout: 15), "gw is lit answering: \(gw.value ?? "nil")")
+        try await resetFakes()
+        let asked = Date()
+        var probed = false
+        while !probed, Date().timeIntervalSince(asked) < 42 {
+            try await Task.sleep(for: .milliseconds(500))
+            probed = (try await gatewayState()["requests"] as? [String] ?? []).contains("GET /manifest.json")
+        }
+        XCTAssertTrue(probed, "gw is asked again within 30 s and a margin")
+        XCTAssertTrue(app.buttons["settings-button"].firstMatch.isHittable, "with the bar up all along")
+    }
+
     /// Brings the app bar in if the page has taken it away (F15): a drag down.
     private func showAppBar(_ app: XCUIApplication) {
         let gear = app.buttons["settings-button"].firstMatch

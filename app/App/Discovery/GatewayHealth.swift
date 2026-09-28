@@ -47,13 +47,17 @@ final class GatewayHealth: ObservableObject {
             guard let endpoint = GatewayEndpoint(origin: origin),
                   policy.matchingRule(for: endpoint.host) != nil else { continue }
             if verdicts[origin] == nil { verdicts[origin] = .checking }
+            // Timed from the asking, not the answer: the row's next pass is
+            // `freshFor` after this one, and a verdict timed from its answer
+            // is then a few milliseconds short of stale, so every other pass
+            // skipped it and the row asked every 60 s.
+            checkedAt[origin] = now
             inFlight[origin] = Task { [weak self] in
                 let session = GatewayDiscovery.makeSession(proxy: proxy)
                 defer { session.invalidateAndCancel() }
                 let verdict = await GatewayDiscovery.probe(endpoint.host, port: endpoint.port, session: session)
                 guard !Task.isCancelled, let self else { return }
                 self.inFlight[origin] = nil
-                self.checkedAt[origin] = .now
                 self.verdicts[origin] = switch verdict {
                 case .gateway: .answering
                 case .notGateway: .notGateway
@@ -67,7 +71,10 @@ final class GatewayHealth: ObservableObject {
     /// The row has gone: nothing is probed for a bar no one can see. A
     /// cancelled probe leaves no verdict time, so the next show asks again.
     func stop() {
-        for task in inFlight.values { task.cancel() }
+        for (origin, task) in inFlight {
+            task.cancel()
+            checkedAt[origin] = nil
+        }
         inFlight = [:]
     }
 }
