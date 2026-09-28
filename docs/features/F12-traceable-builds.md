@@ -120,7 +120,7 @@ demonstrate itself is only an opinion.
 | The guard proves itself | `app/scripts/testflight.sh` self-test, run on every invocation | In a throwaway `git init` repo: clean passes; one modified tracked file is refused; one **untracked** `.swift` under `App/` is refused | Removing the untracked case from the guard: the self-test reports that it failed to catch a planted file, and the script aborts before archiving |
 | A real dirty tree is refused | manual, recorded in the spec log | `touch` a tracked file, run `make tf`, observe refusal *before* the archive starts | It is the observation |
 | The commit reaches the artefact | `app/scripts/testflight.sh`, after every archive (was: a `make test-policy` host test; see the log) | The archive's `Info.plist` carries `LatchkeyGitSHA` equal to the stamp taken from `git rev-parse --short=12 HEAD` | Dropping the `LATCHKEY_GIT_SHA=` argument: the key is empty and the script names both values |
-| The row renders | L1, `testStatusNamesTheCommitTheAppWasBuiltFrom` | Settings → Status shows a 12-hex commit row (`scripts/test-offline.sh` stamps its build as `make tf` does) | Building without the setting: the row reads `—` and the assertion names it |
+| The row renders | L1, at the end of `testNothingOfOursSitsOnThePageAndSettingsIsReachable` (formerly `testStatusNamesTheCommitTheAppWasBuiltFrom`) | Settings → Status shows a 12-hex commit row (`scripts/test-offline.sh` stamps its build as `make tf` does) | Building without the setting: the row reads `—` and the assertion names it |
 
 ## 7. Acceptance criteria
 

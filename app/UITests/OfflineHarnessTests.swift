@@ -343,6 +343,18 @@ final class OfflineHarnessTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(toDash.count, 1, "the load must have dialled: \(connects)")
         XCTAssertLessThanOrEqual(toDash.count, 3,
                                  "the silent retry loop must NOT have run past its window: \(connects)")
+
+        // Try again, with the proxy answering: the load must really be
+        // retried, proven by the gateway reporting itself. A control drawn at
+        // less than full opacity over a WKWebView receives no taps (found in
+        // M8), so being present is not enough. Formerly the first launch of
+        // testTheErrorPageOffersRetryAndAnotherGateway, on a blackholed proxy.
+        try await Self.post("\(Self.proxyControl)/mode?stall=0")
+        let retry = element(app, "nav-error-retry")
+        XCTAssertTrue(retry.isHittable, "Try again must be tappable, not merely present")
+        retry.tap()
+        _ = try await waitForReport(host: "dash.\(Self.tailnetSuffix)", timeout: 40) { _ in true }
+        XCTAssertFalse(element(app, "nav-error-overlay").exists, "Try again: the page replaces the error")
     }
 
     /// A healthy load must not leave the connecting block on screen — and must
@@ -360,25 +372,11 @@ final class OfflineHarnessTests: XCTestCase {
     /// Both buttons on the error page work. They are the reason the block is
     /// opaque: a control drawn at less than full opacity over a WKWebView
     /// receives no taps (found in M8), so a test that only asserts they EXIST
-    /// would pass with them dead.
+    /// would pass with them dead. Try again is tapped at the end of
+    /// testStalledLoadShowsTheConnectingStateForItsWholeDuration, which is
+    /// already on the error page; this one taps Choose another gateway.
     func testTheErrorPageOffersRetryAndAnotherGateway() async throws {
         addTeardownBlock { try? await Self.post("\(Self.proxyControl)/mode?blackhole=0") }
-        try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
-        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
-        XCTAssertTrue(element(app, "nav-error-overlay").appears(within: 40),
-                      "a refused connection fails onto the error page")
-
-        // Try again, with the proxy working: the load must really be retried,
-        // proven by the gateway reporting itself.
-        try await Self.post("\(Self.proxyControl)/mode?blackhole=0")
-        let retry = element(app, "nav-error-retry")
-        XCTAssertTrue(retry.isHittable, "Try again must be tappable, not merely present")
-        retry.tap()
-        _ = try await waitForReport(host: "dash.\(Self.tailnetSuffix)", timeout: 40) { _ in true }
-        XCTAssertFalse(element(app, "nav-error-overlay").exists, "and the page replaces the error")
-        app.terminate()
-
-        // Choose another gateway opens the picker.
         try await Self.post("\(Self.proxyControl)/mode?blackhole=1")
         let again = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
                            extra: ["-UITestReportSafeArea"])
@@ -1038,20 +1036,6 @@ final class OfflineHarnessTests: XCTestCase {
 
     // MARK: - F12: the build names its commit
 
-    /// Status names the commit the app was built from: the row read out when
-    /// a TestFlight build misbehaves. scripts/test-offline.sh stamps it as
-    /// make tf does; a build without LATCHKEY_GIT_SHA shows "—" here.
-    func testStatusNamesTheCommitTheAppWasBuiltFrom() async throws {
-        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
-        defer { app.terminate() }
-        _ = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 30) { $0["ws"] as? String == "ws:open" }
-
-        let list = app.openStatus()
-        let commit = app.statusRow("diag-commit", in: list)
-        XCTAssertNotNil(commit.firstMatch(of: /(^|[ ,])[0-9a-f]{12}(-dirty)?$/),
-                        "Status names a 12-digit commit: \(commit)")
-    }
-
     /// F9 §0.2: the web view is laid out inside the top safe area, so nothing
     /// is above the page and every probe — `viewport-fit=cover`, an ordinary
     /// page, and the product's complete viewport tag — is told a top inset of
@@ -1067,10 +1051,15 @@ final class OfflineHarnessTests: XCTestCase {
     /// really below the island. Restoring `.ignoresSafeArea(.container, edges:
     /// .top)` in `BrowserView` fails it: cover and product report 62px again
     /// and the frame starts at 0.
+    ///
+    /// The `plain` probe is not launched: without `viewport-fit=cover` WebKit
+    /// insets the viewport itself and tells the page 0 wherever the frame is,
+    /// so its "told 0" could not fail, and the frame, gap and strip it would
+    /// check are the app's layout, the same under every page.
     func testInsetProbesReportWhatThePageIsTold() async throws {
         addTeardownBlock { try? await Self.post("\(Self.dashboardControl)/__mode?root=page") }
         var seen: [String: [String: Any]] = [:]
-        for probe in ["cover", "plain", "product"] {
+        for probe in ["cover", "product"] {
             try await Self.post("\(Self.dashboardControl)/__mode?root=\(probe)")
             let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
                              extra: ["-UITestReportSafeArea"])
@@ -1121,7 +1110,7 @@ final class OfflineHarnessTests: XCTestCase {
                           "\(probe): the strip above the web view is the page's own colour, got \(String(describing: strip))")
             seen[probe] = r
         }
-        XCTAssertEqual(seen.count, 3, "every probe reported")
+        XCTAssertEqual(seen.count, 2, "every probe reported")
     }
 
     // MARK: - F15: Latchkey does not own the page's corners
@@ -1214,6 +1203,22 @@ final class OfflineHarnessTests: XCTestCase {
         XCTAssertEqual(Double(web.frame.minY), safeTop + Self.appBarHeight, accuracy: 0.5,
                        "a page too short to scroll keeps the bar, however hard it is dragged")
         XCTAssertTrue(gear.isHittable, "and the gear with it")
+
+        // testTypingInThePageKeepsItOnScreen's half on the fake, which is
+        // this page: too short to scroll, so the bar is shown and the
+        // keyboard must not take it away.
+        let check = try await typeInThePage(app, web: web, root: "page", safeTop: safeTop)
+        check("keyboard up", true)
+
+        // F12, formerly testStatusNamesTheCommitTheAppWasBuiltFrom's own
+        // launch: Status names the commit the app was built from, the row read
+        // out when a TestFlight build misbehaves. scripts/test-offline.sh
+        // stamps it as make tf does; a build without LATCHKEY_GIT_SHA shows
+        // "—" here.
+        let list = app.openStatus()
+        let commit = app.statusRow("diag-commit", in: list)
+        XCTAssertNotNil(commit.firstMatch(of: /(^|[ ,])[0-9a-f]{12}(-dirty)?$/),
+                        "F12: Status names a 12-digit commit: \(commit)")
     }
 
     /// F15 §4a/§4b on a page shaped like KiroCrew 0.7.0 — a full-height shell
@@ -1313,82 +1318,86 @@ final class OfflineHarnessTests: XCTestCase {
     /// keyboard's bars, the keyboard stays up and the field stays on screen.
     /// Showing the bar resizes the web view as the keyboard does, and a
     /// keyboard inset taken twice is what went black in 42af25d.
+    ///
+    /// The fake's half runs at the end of
+    /// testNothingOfOursSitsOnThePageAndSettingsIsReachable, which already has
+    /// that page up with the bar shown; this one launches the shell.
     func testTypingInThePageKeepsItOnScreen() async throws {
         addTeardownBlock { try? await Self.post("\(Self.dashboardControl)/__mode?root=page") }
-        for root in ["page", "shell"] {
-            try await Self.post("\(Self.dashboardControl)/__mode?root=\(root)")
-            let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
-                             extra: ["-UITestReportSafeArea"])
-            let web = app.webViews.firstMatch
-            XCTAssertTrue(web.appears(within: 30), "\(root): the web view is on screen")
-            let safeTop = windowSafeTop(app)
-            let field = web.textFields["Message"]
-            XCTAssertTrue(field.appears(within: 30), "\(root): the page has a text field")
-            if root == "shell" {
-                let start = try await waitForMinY(web, safeTop, timeout: 5)
-                XCTAssertEqual(start, safeTop, accuracy: 0.5, "shell: a page that scrolls starts without the bar")
-            }
-            // The field is in the tree once parsed, before WebKit can hit-test
-            // it; a tap then focuses nothing (Shard 2, 2026-09-28, warm after
-            // testStartingANewNode...). Wait for the page's rendered, as F17's.
-            if root == "shell" {
-                _ = try await waitForInsets("shell", timeout: 30) { $0["rendered"] as? Bool == true }
-            } else {
-                _ = try await waitForReport(host: "dash.\(Self.tailnetSuffix)", timeout: 30) {
-                    $0["rendered"] as? Bool == true
-                }
-            }
-            field.tapWhenSettled(in: app)
-            let keyboard = app.keyboards.firstMatch
-            XCTAssertTrue(keyboard.appears(within: 10), "\(root): tapping the field brings up the keyboard")
-            try await settle(app, web: web, landscape: false)
-            // Longer than the page script's 500 ms measure of the new viewport.
-            try await Task.sleep(for: .seconds(1))
+        try await Self.post("\(Self.dashboardControl)/__mode?root=shell")
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"],
+                         extra: ["-UITestReportSafeArea"])
+        defer { app.terminate() }
+        let web = app.webViews.firstMatch
+        XCTAssertTrue(web.appears(within: 30), "shell: the web view is on screen")
+        let safeTop = windowSafeTop(app)
+        let start = try await waitForMinY(web, safeTop, timeout: 5)
+        XCTAssertEqual(start, safeTop, accuracy: 0.5, "shell: a page that scrolls starts without the bar")
+        let check = try await typeInThePage(app, web: web, root: "shell", safeTop: safeTop)
+        check("keyboard up", false)
+        drag(web, dy: 150)
+        _ = try await waitForMinY(web, safeTop + Self.appBarHeight, timeout: 5)
+        try await settle(app, web: web, landscape: false)
+        check("scrolled up", true)
+        drag(web, dy: -150)
+        _ = try await waitForMinY(web, safeTop, timeout: 5)
+        try await settle(app, web: web, landscape: false)
+        check("scrolled down", false)
+    }
 
-            func check(_ step: String, barShown: Bool) {
-                let webFrame = web.frame, keyboardTop = Double(keyboard.frame.minY)
-                let midY = Double(webFrame.midY)
-                // Right of the page's text, which is left-aligned and short.
-                // The fake is white; the shell is its own blue, rgb(32, 96,
-                // 160), under rows ruled in 20% white.
-                let colour = pixel(app, x: Double(app.frame.width) - 24, y: midY)
-                let line = "KEYBOARD \(root) \(step): webViewFrame=\(webFrame) keyboardTop=\(keyboardTop)"
-                    + " windowSafeTop=\(safeTop) pixelAt(\(midY))=\(colour.map { "\($0)" } ?? "-")"
-                print(line)
-                add(XCTAttachment(string: line))
-                add(XCTAttachment(screenshot: XCUIScreen.main.screenshot()))
-
-                XCTAssertTrue(keyboard.exists, "\(root) \(step): the keyboard is still up")
-                XCTAssertEqual(Double(webFrame.minY), safeTop + (barShown ? Self.appBarHeight : 0), accuracy: 0.5,
-                               "\(root) \(step): the page starts " + (barShown ? "below the bar" : "at the safe-area top"))
-                // XCUITest's keyboard is the keys alone. Above them sit the
-                // prediction row and WebKit's form bar (^ v ✓), 112 pt on the
-                // iPhone 17, and the page ends on top of those. 377c539 left
-                // 484 pt; the home-indicator padding kept with the keyboard up
-                // would leave 136.
-                let gap = keyboardTop - Double(webFrame.maxY)
-                XCTAssertTrue((0...120).contains(gap),
-                              "\(root) \(step): the page ends just above the keyboard's bars, not \(gap) pt above the keys: \(line)")
-                let (r, g, b) = colour ?? (0, 0, 0)
-                XCTAssertTrue(root == "page" ? r > 200 && g > 200 && b > 200 : b > 120 && b > r + 60,
-                              "\(root) \(step): the page is drawn between the top and the keyboard, not black: \(line)")
-                XCTAssertTrue(field.isHittable, "\(root) \(step): and the field being typed into is on screen")
+    /// testTypingInThePageKeepsItOnScreen's steps: taps the page's text field
+    /// and returns the check to run with the keyboard up, taking the step's
+    /// name and whether the bar is shown then. `root` is the page on screen,
+    /// "page" (the fake) or "shell".
+    private func typeInThePage(_ app: XCUIApplication, web: XCUIElement, root: String,
+                               safeTop: Double) async throws -> @MainActor (String, Bool) -> Void {
+        let field = web.textFields["Message"]
+        XCTAssertTrue(field.appears(within: 30), "\(root): the page has a text field")
+        // The field is in the tree once parsed, before WebKit can hit-test
+        // it; a tap then focuses nothing (Shard 2, 2026-09-28, warm after
+        // testStartingANewNode...). Wait for the page's rendered, as F17's.
+        if root == "shell" {
+            _ = try await waitForInsets("shell", timeout: 30) { $0["rendered"] as? Bool == true }
+        } else {
+            _ = try await waitForReport(host: "dash.\(Self.tailnetSuffix)", timeout: 30) {
+                $0["rendered"] as? Bool == true
             }
+        }
+        field.tapWhenSettled(in: app)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 10), "\(root): tapping the field brings up the keyboard")
+        try await settle(app, web: web, landscape: false)
+        // Longer than the page script's 500 ms measure of the new viewport.
+        try await Task.sleep(for: .seconds(1))
 
-            if root == "page" {
-                check("keyboard up", barShown: true)
-            } else {
-                check("keyboard up", barShown: false)
-                drag(web, dy: 150)
-                _ = try await waitForMinY(web, safeTop + Self.appBarHeight, timeout: 5)
-                try await settle(app, web: web, landscape: false)
-                check("scrolled up", barShown: true)
-                drag(web, dy: -150)
-                _ = try await waitForMinY(web, safeTop, timeout: 5)
-                try await settle(app, web: web, landscape: false)
-                check("scrolled down", barShown: false)
-            }
-            app.terminate()
+        return { step, barShown in
+            let webFrame = web.frame, keyboardTop = Double(keyboard.frame.minY)
+            let midY = Double(webFrame.midY)
+            // Right of the page's text, which is left-aligned and short.
+            // The fake is white; the shell is its own blue, rgb(32, 96,
+            // 160), under rows ruled in 20% white.
+            let colour = self.pixel(app, x: Double(app.frame.width) - 24, y: midY)
+            let line = "KEYBOARD \(root) \(step): webViewFrame=\(webFrame) keyboardTop=\(keyboardTop)"
+                + " windowSafeTop=\(safeTop) pixelAt(\(midY))=\(colour.map { "\($0)" } ?? "-")"
+            print(line)
+            self.add(XCTAttachment(string: line))
+            self.add(XCTAttachment(screenshot: XCUIScreen.main.screenshot()))
+
+            XCTAssertTrue(keyboard.exists, "\(root) \(step): the keyboard is still up")
+            XCTAssertEqual(Double(webFrame.minY), safeTop + (barShown ? Self.appBarHeight : 0), accuracy: 0.5,
+                           "\(root) \(step): the page starts " + (barShown ? "below the bar" : "at the safe-area top"))
+            // XCUITest's keyboard is the keys alone. Above them sit the
+            // prediction row and WebKit's form bar (^ v ✓), 112 pt on the
+            // iPhone 17, and the page ends on top of those. 377c539 left
+            // 484 pt; the home-indicator padding kept with the keyboard up
+            // would leave 136.
+            let gap = keyboardTop - Double(webFrame.maxY)
+            XCTAssertTrue((0...120).contains(gap),
+                          "\(root) \(step): the page ends just above the keyboard's bars, not \(gap) pt above the keys: \(line)")
+            let (r, g, b) = colour ?? (0, 0, 0)
+            XCTAssertTrue(root == "page" ? r > 200 && g > 200 && b > 200 : b > 120 && b > r + 60,
+                          "\(root) \(step): the page is drawn between the top and the keyboard, not black: \(line)")
+            XCTAssertTrue(field.isHittable, "\(root) \(step): and the field being typed into is on screen")
         }
     }
 
