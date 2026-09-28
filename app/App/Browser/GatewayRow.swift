@@ -5,8 +5,8 @@
 //  GatewayRow.swift
 //  Latchkey
 //
-//  F22: the app bar's row of gateways. One chip per remembered gateway, the
-//  one in use first, each with the dashboard's instance-bar light; one tap
+//  F22: the app bar's row of gateways. One chip per remembered gateway, by
+//  name, each with the dashboard's instance-bar light; one tap
 //  on another switches to it directly. The dashboard's own instance bar
 //  cannot do this from a phone: its remotes are plain-HTTP frames on the
 //  gateway's loopback (F5 §5). These are gateways the app itself opens.
@@ -18,7 +18,7 @@
 import SwiftUI
 
 struct GatewayRow: View {
-    /// In order, in use first (`GatewayChipState.order`); never empty.
+    /// In order, by name (`GatewayChipState.order`); never empty.
     let origins: [String]
     let current: String
     /// The page in use: its load is the in-use chip's light.
@@ -86,7 +86,12 @@ struct GatewayRow: View {
 }
 
 /// One chip: the dashboard's `e8`, in SwiftUI. A bordered 26 pt capsule-ish
-/// button, 12 pt text and a 6 pt light; the one in use filled and bold.
+/// button, 12 pt text and a light; the one in use filled solid.
+///
+/// Its width is the name's and nothing else (issue #7): no state, load or
+/// switch may resize a chip and shift the ones after it. So the state is a
+/// symbol in a fixed slot, its shape as well as its colour, and the word is
+/// the accessibility value; and the name reserves its bold width always.
 private struct GatewayChip: View {
     let origin: String
     let inUse: Bool
@@ -96,35 +101,34 @@ private struct GatewayChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Circle()
-                    .fill(Self.color(state.light))
-                    .frame(width: 6, height: 6)
-                Text(GatewayChipState.shortName(origin))
-                    .font(.system(size: 12, weight: inUse ? .bold : .regular))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: 140, alignment: .leading)
-                    .fixedSize(horizontal: true, vertical: false)
-                if !state.word.isEmpty && state.light != .ok {
-                    Text(state.word)
-                        .font(.system(size: 11))
-                        .foregroundStyle(state.light == .muted ? Color.secondary : Self.color(state.light))
-                        .lineLimit(1)
-                        .fixedSize()
+                Image(systemName: Self.symbol(state.light))
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(inUse ? Color.white : Self.color(state.light))
+                    .frame(width: 12, height: 12)
+                let name = GatewayChipState.shortName(origin)
+                ZStack(alignment: .leading) {
+                    Text(name).font(.system(size: 12, weight: .bold)).hidden()
+                    Text(name).font(.system(size: 12, weight: inUse ? .bold : .regular))
                 }
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 140, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
             }
-            .foregroundStyle(inUse ? Color.accentColor : Color.primary)
+            .foregroundStyle(inUse ? Color.white : Color.primary)
             .padding(.horizontal, 8)
             .frame(height: 26)
+            // Solid accent under white text: the one in use reads at a glance
+            // over any page colour, light or dark. Every chip keeps an outline.
             .background {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(inUse ? Color.accentColor.opacity(0.15) : Color.clear)
+                if inUse {
+                    RoundedRectangle(cornerRadius: 6).fill(Color.accentColor)
+                }
             }
             .overlay {
-                if !inUse {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(Color.secondary.opacity(0.35), lineWidth: 1)
-                }
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(inUse ? Color.accentColor : Color.secondary.opacity(0.35),
+                                  lineWidth: inUse ? 1.5 : 1)
             }
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
             .frame(minHeight: 44)
@@ -148,6 +152,16 @@ private struct GatewayChip: View {
         case .warn: return .orange
         case .danger: return .red
         case .muted: return .gray
+        }
+    }
+
+    /// The light's shape, so colour is never the only signal (F22 §2).
+    static func symbol(_ light: GatewayChipState.Light) -> String {
+        switch light {
+        case .ok: return "checkmark.circle.fill"
+        case .warn: return "ellipsis.circle.fill"
+        case .danger: return "exclamationmark.circle.fill"
+        case .muted: return "minus.circle.fill"
         }
     }
 }
