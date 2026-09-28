@@ -28,6 +28,7 @@ if ! xcrun swiftc -O -swift-version 6 -strict-concurrency=complete -default-isol
         App/Browser/ContentRules.swift App/Browser/ContentRulesInstaller.swift \
         App/Browser/AppBarRetraction.swift App/Browser/AppBarController.swift \
         App/Session/SessionManager.swift App/Session/TokenInput.swift App/Session/DashboardSignOut.swift \
+        App/Discovery/GatewayCandidates.swift \
         App/Network/SocksRelayPolicy.swift App/Logging/LogRedaction.swift App/TestHooks.swift \
         scripts/test-proxy-policy-stubs.swift scripts/test-socks-relay-stubs.swift \
         scripts/test-browser-view-model-stubs.swift \
