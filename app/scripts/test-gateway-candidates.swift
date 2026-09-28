@@ -107,6 +107,9 @@ expect(GatewayEndpoint(origin: "http://h.ts.net") == nil && GatewayEndpoint(orig
        "http and a bare name are not gateway origins")
 expect(GatewayEndpoint(host: "h", port: 0) == nil && GatewayEndpoint(host: "h", port: 65536) == nil
        && GatewayEndpoint(host: "", port: 443) == nil, "a port out of range, or no host, is not an endpoint")
+expect(GatewayEndpoint(host: "box.ts.net:8443") == nil && GatewayEndpoint(host: "box.ts.net/x") == nil
+       && GatewayEndpoint(host: "fd7a:115c::1")?.host == "fd7a:115c::1",
+       "a host:port label is not a host (the share picker passed one); an IPv6 literal is")
 expect(GatewayEndpoint.standardPorts == [443, 8443], "discovery probes 443 and 8443")
 let saved9443 = GatewayEndpoint(origin: "https://box.ts.net:9443")
 expect(GatewayEndpoint.ports(for: "box.ts.net.", saved: saved9443) == [9443, 443, 8443],

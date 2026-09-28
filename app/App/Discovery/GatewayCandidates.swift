@@ -70,10 +70,14 @@ nonisolated struct GatewayEndpoint: Hashable, Sendable, Identifiable {
     /// 1...65535.
     let port: Int
 
+    /// Nil for a `host:port` label (one colon; an IPv6 literal has more) or
+    /// anything with a path: the port would be read as part of the host, and
+    /// the endpoint would name no peer and the wrong origin.
     init?(host: String, port: Int = GatewayEndpoint.standardPort) {
         var h = host.lowercased()
         while h.hasSuffix(".") { h.removeLast() }
-        guard !h.isEmpty, (1...65535).contains(port) else { return nil }
+        guard !h.isEmpty, (1...65535).contains(port), !h.contains("/"),
+              h.filter({ $0 == ":" }).count != 1 else { return nil }
         self.host = h
         self.port = port
     }

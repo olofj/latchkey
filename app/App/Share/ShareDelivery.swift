@@ -951,6 +951,9 @@ final class ShareDelivery: ObservableObject {
     }
 
     var gatewayHost: String? { gatewayOrigin.map(ShareMirror.hostLabel(origin:)) }
+    /// The gateway as the picker probes it first: `gatewayHost` is a label
+    /// and carries the port, so it names no peer.
+    var gatewayEndpoint: GatewayEndpoint? { gatewayOrigin.flatMap(GatewayEndpoint.init(origin:)) }
     var workspaceForPicker: Workspace? { workspace }
 }
 
