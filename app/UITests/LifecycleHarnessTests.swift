@@ -224,6 +224,108 @@ final class LifecycleHarnessTests: XCTestCase {
         }
     }
 
+    // MARK: - F16 stage 2: a bus restart that finishes after the recovery that superseded it
+
+    /// An ordinary IPN-bus restart is in flight when a loopback recovery
+    /// supersedes it, and its start finishes AFTER the recovery has installed
+    /// its own bus (F16 §1.3). Before F16 the stale start installed its
+    /// watcher anyway, for the OLD consumer, so the live bus's next death went
+    /// unobserved and the bus was never restarted. The Login banner still
+    /// appeared (the status poll mirrors NeedsLogin by itself) and opened
+    /// nothing: the login link travels only over the bus. The caller's check
+    /// alone is not enough: the stale watcher sees its processor fail against
+    /// the replaced loopback and would schedule a restart for the old
+    /// consumer before the start is discarded, so a watcher acts only once
+    /// installed (`StartedBus.armed`).
+    ///
+    /// The interleaving is FORCED, not waited for (F16 §6.1): the bus dies 2 s
+    /// after the first Running poll (`-UITestBusErrorAfter`), the restart that
+    /// starts is held for 8 s (`-UITestBusInstallDelay`), and the loopback is
+    /// closed at 4 s so the poll at 5 s replaces it inside the hold. A second
+    /// death at 13 s is the one a stale watcher would miss. So this proves the
+    /// guard, not how often the race happens on its own. The app's log must
+    /// show the stale start discarded and no `BUS WATCHER MISMATCH`
+    /// (scripts/test-lifecycle.sh).
+    func testABusRestartOverlappingRecoveryLeavesTheBusObserved() async throws {
+        try await resetHarness(auth: true)
+        let app = launch(extra: ["-UITestDefunctLoopback", "-UITestTCPChaosDelay", "4",
+                                 "-UITestBusErrorAfter", "2,13", "-UITestBusInstallDelay", "8"])
+        defer { app.terminate() }
+
+        // A login first: a re-login is the assertion, and it needs a tailnet
+        // that asks for one.
+        let login = app.buttons["login-button"]
+        XCTAssertTrue(login.waitForExistence(timeout: Self.joinTimeout), "the gate offers Login at NeedsLogin")
+        login.tap()
+        acceptSignInPromptIfShown()
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        let loginsBefore = try await completedLogins()
+
+        // The race, in the app's own order: death, held restart, damage,
+        // recovery inside the hold, then the death a stale watcher would miss.
+        let chaos = app.staticTexts["tcp-chaos-test-status"]
+        let damagedAt = try await waitForChaosStatus(app, chaos, oneOf: ["damaged", "recovered"], timeout: 30)
+        let recoveredAt = try await waitForChaosStatus(app, chaos, oneOf: ["recovered"], timeout: 45)
+        let secondDeathAt = try await waitForChaosStatus(app, chaos, oneOf: ["bus death 2"], timeout: 30)
+
+        // The key expires. The banner proves nothing about the bus: the
+        // status poll mirrors NeedsLogin on its own.
+        let node = try await appNode()
+        _ = try await Self.post("\(Self.harnessAPI)/expire?hostname=\(node.hostname)&in=-60")
+        let again = app.buttons["login-banner-button"]
+        XCTAssertTrue(again.waitForExistence(timeout: 30), "an expired key: the dashboard offers Login")
+
+        // The tap does: its login link arrives only over the bus.
+        again.tap()
+        let tappedAt = Date()
+        acceptSignInPromptIfShown()
+        XCTAssertTrue(again.waitForNonExistence(timeout: Self.joinTimeout),
+                      "the new login ends the banner: its link arrived over a bus that is still observed")
+        let loginsAfter = try await completedLogins()
+        XCTAssertGreaterThan(loginsAfter, loginsBefore, "a NEW login completed through the harness's login page")
+        XCTAssertEqual(app.state, .runningForeground, "the app survived the race")
+
+        print("LIFECYCLE bus restart race: " + String(
+            format: "damage -> recovered %.1f s; recovered -> second bus death %.1f s; Login tap -> logged in %.1f s",
+            recoveredAt.timeIntervalSince(damagedAt), secondDeathAt.timeIntervalSince(recoveredAt),
+            Date().timeIntervalSince(tappedAt)))
+    }
+
+    /// The same defect on the `shutdown()` path (F16 §1.3): a loopback
+    /// recovery is inside its bus start when the manager is shut down, as a
+    /// workspace deletion does. Before F16 the start installed its watcher
+    /// itself, after shutdown had cleared it, and the recovery's generation
+    /// check came too late: a deleted workspace kept a live watcher on a
+    /// closed node. `-UITestShutdownDuringRecovery` holds the recovery's start
+    /// 4 s and shuts down 1 s into it; the app reports what is installed
+    /// afterwards.
+    func testShutdownDuringRecoveryInstallsNoWatcher() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestDefunctLoopback", "-UITestTCPChaosDelay", Self.chaosDelay,
+                                 "-UITestShutdownDuringRecovery"])
+        defer { app.terminate() }
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        let chaos = app.staticTexts["tcp-chaos-test-status"]
+        _ = try await waitForChaosStatus(app, chaos, oneOf: ["damaged"], timeout: 30)
+        let verdict = try await waitForChaosStatus(app, chaos, oneOf: ["shutdown clean", "bus after shutdown"],
+                                                   timeout: 30)
+        XCTAssertEqual(chaos.label, "shutdown clean",
+                       "no bus watcher or processor is installed after shutdown (read at \(verdict))")
+        XCTAssertEqual(app.state, .runningForeground, "the app survived the shutdown")
+    }
+
+    /// With prefersEphemeralWebBrowserSession iOS normally skips the "wants to
+    /// use … to Sign In" prompt; accept it if a release shows it anyway.
+    private func acceptSignInPromptIfShown() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let proceed = springboard.buttons["Continue"]
+        if proceed.waitForExistence(timeout: 3) { proceed.tap() }
+    }
+
+    private func completedLogins() async throws -> Int {
+        (try await harnessState()["logins"] as? [[String: Any]] ?? []).filter { $0["completed"] as? Bool == true }.count
+    }
+
     // MARK: - R30: the relay's own listener, restarted by a failed page load
 
     /// Only the app's SOCKS relay listener dies (`-UITestDefunctRelayListener`),
@@ -473,8 +575,8 @@ final class LifecycleHarnessTests: XCTestCase {
 
     // MARK: - Harness (testing/tsnet-harness)
 
-    private func resetHarness() async throws {
-        let data = try await Self.post("\(Self.harnessAPI)/reset?auth=0&machine=0", timeout: 90)
+    private func resetHarness(auth: Bool = false) async throws {
+        let data = try await Self.post("\(Self.harnessAPI)/reset?auth=\(auth ? 1 : 0)&machine=0", timeout: 90)
         let state = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         XCTAssertNotNil(state["generation"], "reset failed: \(String(decoding: data, as: UTF8.self))")
     }

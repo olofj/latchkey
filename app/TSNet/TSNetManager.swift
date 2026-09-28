@@ -310,7 +310,8 @@ final class TSNetManager {
     }
 
     func tailscaleUp(localAPI: LocalAPIClient, consumer: TSNetConsumer) async throws {
-        setProcessor(try await startEventBus(localAPI: localAPI, consumer: consumer))
+        // The first install: nothing can have superseded it.
+        installBus(try await startEventBus(localAPI: localAPI, consumer: consumer))
 
         // Deliberately do NOT call `node?.up()`. `up()` calls Go's
         // `Up(context.Background())` (non-cancellable), which blocks until the
@@ -376,13 +377,64 @@ final class TSNetManager {
             }
     }
 
-    func startEventBus(localAPI: LocalAPIClient,
-                       consumer: TSNetConsumer) async throws -> MessageProcessor {
+    /// A bus watch that has been started and not yet installed (F16 §4.2).
+    /// `consumer` is what `errorWatcher` observes, so an install can be
+    /// checked against the current one. The watcher acts only once `armed`,
+    /// which `installBus` sets: a start that is never installed never
+    /// schedules a restart, whatever its consumer reports.
+    struct StartedBus {
+        let processor: MessageProcessor
+        let errorWatcher: AnyCancellable
+        let consumer: TSNetConsumer
+        let localAPI: LocalAPIClient
+        let armed: BusArm
+
+        /// For a start that turned out stale: neither part may live on.
+        func cancel() {
+            errorWatcher.cancel()
+            processor.cancel()
+        }
+    }
+
+    /// Whether a started bus's error watcher may act yet (F16 §4.2).
+    final class BusArm {
+        var armed = false
+    }
+
+    /// Starts a bus watch and its error observer, and installs NOTHING (F16
+    /// §4.2): whoever decided to start it installs both with `installBus`
+    /// after its own staleness check, or cancels both. Before F16 the watcher
+    /// was installed here, unconditionally. A restart superseded by a loopback
+    /// recovery while its start was in flight then replaced the recovery's
+    /// watcher with one for the OLD consumer, and the live bus's first death
+    /// (the idle -1001, about a minute later) went unobserved: no restart,
+    /// and a Login whose BrowseToURL never arrived.
+    ///
+    /// `holdForTest` makes this start take that long (`-UITestBusInstallDelay`,
+    /// test builds): a start that finishes after the recovery that superseded
+    /// it, on demand rather than by scheduling accident.
+    func startEventBus(localAPI: LocalAPIClient, consumer: TSNetConsumer,
+                       holdForTest: Duration? = nil) async throws -> StartedBus {
         // This sets up a bus watcher to listen for changes in the netmap.  These will be sent to the given consumer, in
         // this case, a TSNetModel which will keep track of the changes and publish them.
+        //
+        // The consumer's error is cleared first (F16 §4.2): it is the one that
+        // caused this start, if any. `scheduleBusRestart` clears it too, but
+        // that clear runs inside the @Published willSet of the failing
+        // assignment, which then stores the error again. Left in place,
+        // `installBus` would take it for a new death and restart once more.
+        await MainActor.run { consumer.error = nil }
         let busEventMask: Ipn.NotifyWatchOpt = [.initialState]
         let processor = try await localAPI.watchIPNBus(mask: busEventMask,
                                                        consumer: consumer)
+#if LATCHKEY_TEST_HOOKS
+        if let holdForTest {
+            logger.log("Bus start held for \(holdForTest.components.seconds) s (test hook)")
+            // Not Task.sleep: a recovery cancels this task, and the hold is
+            // there to finish after that cancellation, as a slow start would.
+            await Self.holdIgnoringCancellation(holdForTest)
+        }
+#endif
 
         // Any error on the bus consumer indicates the watcher died and needs to
         // be restarted. The watch-ipn-bus long-poll has no keep-alive, so
@@ -398,20 +450,47 @@ final class TSNetManager {
         // "click Login/Logout and nothing happens for minutes/ever" hang).
         // Now we catch, log, back off, and retry until the bus comes back or
         // the node is torn down (background).
+        //
+        // Unarmed until installed (F16 §4.2). A start superseded while in
+        // flight watches a consumer whose processor is failing against a
+        // replaced loopback; acting on that would schedule a restart for the
+        // OLD consumer before the caller could discard the start, and that
+        // restart would install past every check. An error that arrives
+        // before the install is not lost: `installBus` looks for it.
+        let arm = BusArm()
         let busObserver = await consumer.$error
             .sink { [weak self] error in
-                guard let self, let error else { return }
+                guard let self, let error, arm.armed else { return }
                 self.scheduleBusRestart(localAPI: localAPI, consumer: consumer,
                                         error: error)
             }
+        return StartedBus(processor: processor, errorWatcher: busObserver,
+                          consumer: consumer, localAPI: localAPI, armed: arm)
+    }
 
-        // Cancel any prior observer before installing the new one, so the old
-        // watcher's sink can't fire again and cascade into concurrent restarts.
-        await MainActor.run {
-            busErrorWatcher?.cancel()
-            busErrorWatcher = busObserver
+    /// Installs a started bus, replacing the processor and the error watcher
+    /// before it. Only after the caller's own staleness check (F16 §4.2).
+    /// The prior observer is cancelled first, so the old watcher's sink can't
+    /// fire again and cascade into concurrent restarts.
+    @MainActor
+    private func installBus(_ bus: StartedBus) {
+#if LATCHKEY_TEST_HOOKS
+        // The instrument for a fault whose natural trigger was not shown (F16
+        // §4.2): an installed watcher observes the current consumer, always.
+        // scripts/test-lifecycle.sh fails on this line.
+        if bus.consumer !== consumer {
+            logger.log("BUS WATCHER MISMATCH: observing \(ObjectIdentifier(bus.consumer)), current \(ObjectIdentifier(consumer))")
         }
-        return processor
+#endif
+        busErrorWatcher?.cancel()
+        busErrorWatcher = bus.errorWatcher
+        setProcessor(bus.processor)
+        bus.armed.armed = true
+        // A death between the start and this install reached an unarmed
+        // watcher; it is acted on here instead.
+        if let pending = bus.consumer.error {
+            scheduleBusRestart(localAPI: bus.localAPI, consumer: bus.consumer, error: pending)
+        }
     }
 
     @MainActor
@@ -431,13 +510,23 @@ final class TSNetManager {
             do {
                 try await Task.sleep(for: delay)
                 guard !Task.isCancelled else { return }
-                let processor = try await self.startEventBus(
-                    localAPI: localAPI, consumer: consumer)
+#if LATCHKEY_TEST_HOOKS
+                let hold = self.takeBusInstallHoldForTest()
+#else
+                let hold: Duration? = nil
+#endif
+                let bus = try await self.startEventBus(
+                    localAPI: localAPI, consumer: consumer, holdForTest: hold)
+                // Checked AFTER the start (F16 §4.2): a loopback recovery that
+                // cancelled this task while the start was in flight has
+                // installed its own bus by now, for a new consumer. What was
+                // started here observes the old one and must not go in.
                 guard !Task.isCancelled else {
-                    processor.cancel()
+                    logger.log("Bus restart superseded while starting; its bus is discarded")
+                    bus.cancel()
                     return
                 }
-                self.setProcessor(processor)
+                self.installBus(bus)
                 self.busRestartTask = nil
             } catch is CancellationError {
                 return
@@ -507,16 +596,24 @@ final class TSNetManager {
                 // config, now replaced above. Restart the stream immediately.
                 let newConsumer = TSNetConsumer(logger: logger, model: self.model)
                 let newClient = LocalAPIClient(localNode: node, logger: logger)
-                let newProcessor = try await self.startEventBus(
-                    localAPI: newClient, consumer: newConsumer)
+#if LATCHKEY_TEST_HOOKS
+                let hold = self.shutDownDuringRecoveryIfRequested()
+#else
+                let hold: Duration? = nil
+#endif
+                let bus = try await self.startEventBus(
+                    localAPI: newClient, consumer: newConsumer, holdForTest: hold)
+                // Covers the watcher too (F16 §4.2): a shutdown() during the
+                // start bumped the generation, and before F16 the watcher had
+                // already been installed on a manager whose node was closing.
                 guard !Task.isCancelled,
                       generation == self.loopbackRecoveryGeneration else {
-                    newProcessor.cancel()
+                    bus.cancel()
                     return
                 }
                 self.consumer = newConsumer
                 self.localAPIClient = newClient
-                self.setProcessor(newProcessor)
+                self.installBus(bus)
 
                 // Replace the app-owned relay too: its upstream port and SOCKS
                 // credential changed with the tsnet loopback listener. The
@@ -571,6 +668,9 @@ final class TSNetManager {
                             self.model.localStatus = status
                             if status.BackendState == "Running" {
                                 self.runTCPChaosTestIfNeeded()
+#if LATCHKEY_TEST_HOOKS
+                                self.scheduleBusDeathsIfRequested()
+#endif
                             }
                             // Fallback state signal: model.state is normally
                             // driven by the IPN bus, but if the bus watcher is
@@ -1040,6 +1140,73 @@ final class TSNetManager {
         } catch {
             model.tcpChaosTestStatus = "failed: \(error)"
             logger.log("TCP chaos test failed: \(error)")
+        }
+    }
+
+    /// `-UITestBusErrorAfter <s>[,<s>...]` (F16 §6.1): at each offset from
+    /// the first Running status poll, the IPN bus dies as it does every idle
+    /// minute: its processor stops and the current consumer gets a -1001. An
+    /// ordinary restart follows, IF a watcher observes that consumer; the
+    /// lifecycle test's Login is what tells. The chaos label reads
+    /// `bus death N` so a test can order itself after one.
+    @MainActor private var didScheduleBusDeaths = false
+    @MainActor
+    private func scheduleBusDeathsIfRequested() {
+        guard !didScheduleBusDeaths, let spec = TestHooks.value("-UITestBusErrorAfter") else { return }
+        didScheduleBusDeaths = true
+        let offsets = spec.split(separator: ",").compactMap { Double($0) }
+        for (i, offset) in offsets.enumerated() {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(offset))
+                guard let self else { return }
+                logger.log("TCP chaos test: killing the IPN bus (death \(i + 1) of \(offsets.count))")
+                self.processor?.cancel()
+                self.consumer.error = URLError(.timedOut)
+                self.model.tcpChaosTestStatus = "bus death \(i + 1)"
+            }
+        }
+    }
+
+    /// `-UITestBusInstallDelay <s>` (F16 §6.1): the FIRST ordinary bus
+    /// restart takes this long to start, so a loopback recovery fired inside
+    /// it supersedes it with its start in flight. Once only: the restarts
+    /// after it must be prompt, or the test's Login has no bus to arrive on.
+    @MainActor private var busInstallHoldTaken = false
+    @MainActor
+    private func takeBusInstallHoldForTest() -> Duration? {
+        guard !busInstallHoldTaken,
+              let s = TestHooks.value("-UITestBusInstallDelay").flatMap(Double.init) else { return nil }
+        busInstallHoldTaken = true
+        return .seconds(s)
+    }
+
+    /// `-UITestShutdownDuringRecovery` (F16 §6.3): the first loopback
+    /// recovery's bus start is held 4 s, and 1 s into the hold the manager is
+    /// shut down as a workspace deletion does. When the hold is long over,
+    /// the chaos label reads whether a watcher or processor was installed
+    /// after shutdown cleared them: `bus after shutdown` or `shutdown clean`.
+    @MainActor private var shutdownDuringRecoveryTaken = false
+    @MainActor
+    private func shutDownDuringRecoveryIfRequested() -> Duration? {
+        guard TestHooks.flag("-UITestShutdownDuringRecovery"), !shutdownDuringRecoveryTaken else { return nil }
+        shutdownDuringRecoveryTaken = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self else { return }
+            logger.log("TCP chaos test: shutting the manager down inside the recovery's bus start")
+            await self.shutdown()
+            try? await Task.sleep(for: .seconds(6))
+            let installed = self.busErrorWatcher != nil || self.processor != nil
+            logger.log("TCP chaos test: after shutdown, bus \(installed ? "INSTALLED" : "not installed")")
+            self.model.tcpChaosTestStatus = installed ? "bus after shutdown" : "shutdown clean"
+        }
+        return .seconds(4)
+    }
+
+    nonisolated private static func holdIgnoringCancellation(_ hold: Duration) async {
+        let seconds = Double(hold.components.seconds) + Double(hold.components.attoseconds) / 1e18
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { c.resume() }
         }
     }
 #endif

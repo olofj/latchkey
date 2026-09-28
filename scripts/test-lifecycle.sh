@@ -5,10 +5,12 @@
 #
 # The app's real tsnet node joins testing/tsnet-harness and loads the fake
 # dashboard; then its sockets are damaged by the app's own chaos hooks
-# (-UITestShutdownTCPConnections, -UITestDefunctLoopback), and its process is
-# frozen from the host with SIGSTOP while it sits in the background -- the
-# closest a simulator gets to a suspended app (after app/scripts/
-# test-lock-resume.sh, which needed a real tailnet). Needs no account.
+# (-UITestShutdownTCPConnections, -UITestDefunctLoopback, -UITestStallLoopback),
+# its IPN bus killed under a held restart (-UITestBusErrorAfter,
+# -UITestBusInstallDelay; F16), and its process is frozen from the host with
+# SIGSTOP while it sits in the background -- the closest a simulator gets to a
+# suspended app (after app/scripts/test-lock-resume.sh, which needed a real
+# tailnet). Needs no account.
 #
 #   1. preflight   refuse a real tailnet name in the test config (R10)
 #   2. harness     self-test the tsnet harness host-side (make check), then
@@ -221,7 +223,7 @@ fi
 # tests hold the budgets.
 say "timings"
 grep -h "^LIFECYCLE " "$LOG_DIR/test.log" | sed 's/^/    /' || true
-grep -E "LocalAPI loopback (failure|recovered|replacement)|Status request abandoned|TCP chaos test|sockslog: restarting|sockslog: relay listener|proxyConfig: endpoint replaced|Proxy endpoint republished" "$UNIFIED" \
+grep -E "LocalAPI loopback (failure|recovered|replacement)|Status request abandoned|TCP chaos test|sockslog: restarting|sockslog: relay listener|proxyConfig: endpoint replaced|Proxy endpoint republished|Bus watcher error|Bus start held|Bus restart superseded|BUS WATCHER MISMATCH" "$UNIFIED" \
     | sed -E 's/^([^ ]+ [^ ]+) .*\] /    \1  /' || true
 sed 's/^/    freezer: /' "$FREEZER_LOG" || true
 # R30's instrument: the relay test must have made the app restart its relay
@@ -244,6 +246,16 @@ if [[ $TEST_RC -eq 0 ]] && { ! grep -q "Status request abandoned after 3 s (1 of
         || ! grep -q "Status request abandoned after 3 s (2 of 2 before loopback recovery)" "$UNIFIED" \
         || ! grep -q "LocalAPI loopback failure: LoopbackStatusTimeout" "$UNIFIED"; }; then
     echo "error: the app's log shows no two-strike loopback recovery after abandoned status requests (F16)" >&2
+    TEST_RC=1
+fi
+
+# F16 stage 2's instrument: the bus-restart race test must have had its held
+# restart superseded and discarded, by the app's own log, and no bus watcher
+# may ever have been installed for a consumer that is not the current one.
+# The mismatch line is test-build only, logged at the install itself.
+if [[ $TEST_RC -eq 0 ]] && { ! grep -q "Bus restart superseded while starting" "$UNIFIED" \
+        || grep -q "BUS WATCHER MISMATCH" "$UNIFIED"; }; then
+    echo "error: the app's log shows no superseded bus restart discarded, or a bus watcher installed for a stale consumer (F16 stage 2)" >&2
     TEST_RC=1
 fi
 
