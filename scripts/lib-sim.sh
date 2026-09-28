@@ -1,4 +1,5 @@
-# Sourced by the suite runners: sim_setup NAME UDID boots a simulator.
+# Sourced by the suite runners: sim_setup NAME UDID boots a simulator and
+# sets it up for the tests (scripts/simpool.py prepare).
 #
 # A serial run on a pool simulator ("Latchkey Shard k") first holds slot k of
 # scripts/simpool.py, waiting if another run has it, so it never shares the
@@ -22,4 +23,5 @@ sim_setup() {
         printf '::: simpool: holding slot %s\n' "$k"
     fi
     xcrun simctl bootstatus "$udid" -b >/dev/null
+    python3 "$LIB_SIM_ROOT/scripts/simpool.py" prepare "$udid"
 }
