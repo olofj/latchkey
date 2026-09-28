@@ -123,10 +123,15 @@ Control (plain HTTP on 127.0.0.1:<control-port>):
                                403 + X-Auth-Required, until the next sign-in
                                link is redeemed; the page's own requests are
                                served, so the page cannot notice first
-  POST /__slow?slots=S&post=S  hold a share's GET /api/chat/slots for S
+  POST /__slow?slots=S&post=S&assets=S
+                               hold a share's GET /api/chat/slots for S
                                seconds before answering, and a POST /api/chat
                                for S seconds AFTER it is recorded (the
-                               gateway has the message; the answer is late)
+                               gateway has the message; the answer is late);
+                               `assets` holds every /assets/ file for S
+                               seconds (F21: over loopback the bundle's module
+                               graph boots before its shell gets a frame, so a
+                               phone's tailnet path is stood in for here)
   GET  /__state                counters, violations, recent requests, unknown paths,
                                and which harness instance this is (F14, --instance)
   `--no-control` leaves the control port out entirely (the review gateway).
@@ -467,6 +472,7 @@ class Gateway:
         self.app_signed_out = False
         self.slow_slots = 0.0
         self.slow_post = 0.0
+        self.slow_assets = 0.0   # F21: per /assets/ file, a stand-in for a slow path
         self.uploads = {}        # returned path -> bytes
         self.posts = []          # {"slot", "message", "item", "at"}
         self.navigations = []    # {"sid", "prefill"} for GET /chat?...
@@ -896,6 +902,10 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         if rel.endswith((".js", ".mjs")):
             ctype = "text/javascript; charset=utf-8"
         cache = "public, max-age=31536000, immutable" if path.startswith("/assets/") else None
+        if path.startswith("/assets/") and self.gw.slow_assets:
+            # Each thread sleeps on its own; WebKit's six connections pay it
+            # in parallel, as they would a real round trip.
+            time.sleep(self.gw.slow_assets)
         return self.send(200, data, ctype, cookies=cookies, cache=cache)
 
     def exempt(self, path):
@@ -1239,6 +1249,7 @@ class Control(BaseHTTPRequestHandler):
         if u.path == "/__slow":
             with self.gw.lock:
                 self.gw.slow_slots, self.gw.slow_post = num("slots"), num("post")
+                self.gw.slow_assets = num("assets")
             return self.reply({"ok": True})
         if u.path == "/__drop-next-refresh":
             with self.gw.lock:
