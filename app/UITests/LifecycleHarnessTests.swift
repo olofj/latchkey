@@ -338,6 +338,44 @@ final class LifecycleHarnessTests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground, "the app survived the race")
     }
 
+    /// The launch's own bus start is held 3 s, and half a second into it the
+    /// loopback is replaced (`-UITestRecoverDuringFirstBusStart`): the
+    /// recovery installs its bus, for a new consumer, first. The launch's
+    /// start then finishes stale and must be discarded. Before, it went in
+    /// over the recovery's, with its watcher on the replaced consumer; the
+    /// app logged `BUS WATCHER MISMATCH`, which scripts/test-lifecycle.sh
+    /// fails on, and its log must show the stale start discarded.
+    func testARecoveryDuringTheFirstBusStartKeepsItsOwnBus() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestRecoverDuringFirstBusStart"])
+        defer { app.terminate() }
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        // Past the held start's end, so its install (or discard) is logged.
+        try await Task.sleep(for: .seconds(4))
+        XCTAssertEqual(app.state, .runningForeground, "the app survived the race")
+    }
+
+    /// A loopback failure on a recovery's new bus while the recovery waits
+    /// for its relay (`-UITestLoopbackErrorDuringRecoveryRelay`) finds the
+    /// recovery still in flight, so `recoverLoopbackAfterFailure` drops it.
+    /// It must be acted on once the recovery ends: a second recovery, the
+    /// chaos label's `recovered again`. Before, it was dropped for good and
+    /// the bus stayed dead with nothing to restart it: a Login whose link
+    /// never arrived.
+    func testALoopbackFailureDuringARecoveryIsNotDropped() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestDefunctLoopback", "-UITestTCPChaosDelay", Self.chaosDelay,
+                                 "-UITestLoopbackErrorDuringRecoveryRelay"])
+        defer { app.terminate() }
+        _ = try await waitForReport(timeout: Self.joinTimeout) { $0["ws"] as? String == "ws:open" }
+        let chaos = app.staticTexts["tcp-chaos-test-status"]
+        _ = try await waitForChaosStatus(app, chaos, oneOf: ["damaged"], timeout: 30)
+        let verdict = try await waitForChaosStatus(app, chaos, oneOf: ["recovered again"], timeout: 45)
+        XCTAssertEqual(chaos.label, "recovered again",
+                       "the failure reported during the recovery started another (read at \(verdict))")
+        XCTAssertEqual(app.state, .runningForeground, "the app survived both recoveries")
+    }
+
     /// With prefersEphemeralWebBrowserSession iOS normally skips the "wants to
     /// use … to Sign In" prompt; accept it if a release shows it anyway.
     private func acceptSignInPromptIfShown() {

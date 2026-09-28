@@ -224,7 +224,7 @@ fi
 # tests hold the budgets.
 say "timings"
 grep -h "^LIFECYCLE " "$LOG_DIR/test.log" | sed 's/^/    /' || true
-grep -E "LocalAPI loopback (failure|recovered|replacement)|Status request abandoned|TCP chaos test|sockslog: restarting|sockslog: relay listener|proxyConfig: endpoint replaced|Proxy endpoint republished|Bus watcher error|Bus start held|Bus restart superseded|BUS WATCHER MISMATCH|relay start was superseded|holding the listener|relay listening|proxyConfig: superseded" "$UNIFIED" \
+grep -E "LocalAPI loopback (failure|recovered|replacement)|Status request abandoned|TCP chaos test|sockslog: restarting|sockslog: relay listener|proxyConfig: endpoint replaced|Proxy endpoint republished|Bus watcher error|Bus start held|Bus restart superseded|First bus start superseded|BUS WATCHER MISMATCH|relay start was superseded|holding the listener|relay listening|proxyConfig: superseded" "$UNIFIED" \
     | sed -E 's/^([^ ]+ [^ ]+) .*\] /    \1  /' || true
 sed 's/^/    freezer: /' "$FREEZER_LOG" || true
 # R30's instrument: the relay test must have made the app restart its relay
@@ -265,6 +265,13 @@ fi
 if [[ $TEST_RC -eq 0 ]] && { ! grep -q "sockslog: a relay start was superseded while in flight" "$UNIFIED" \
         || ! grep -q "replacing the loopback inside the first relay start" "$UNIFIED"; }; then
     echo "error: the app's log shows no superseded relay start stopped (F16 stage 3)" >&2
+    TEST_RC=1
+fi
+
+# The first bus start a recovery overtook must have been discarded, not
+# installed over the recovery's (the MISMATCH check above covers the install).
+if [[ $TEST_RC -eq 0 ]] && ! grep -q "First bus start superseded while starting" "$UNIFIED"; then
+    echo "error: the app's log shows no superseded first bus start discarded" >&2
     TEST_RC=1
 fi
 

@@ -318,8 +318,24 @@ final class TSNetManager {
     }
 
     func tailscaleUp(localAPI: LocalAPIClient, consumer: TSNetConsumer) async throws {
-        // The first install: nothing can have superseded it.
-        installBus(try await startEventBus(localAPI: localAPI, consumer: consumer))
+        // Read before anything is awaited. The status poll is already running
+        // (setLocalAPIClient), so a loopback recovery can start and install
+        // its own bus, for a new consumer, while this one's start is in
+        // flight; a shutdown() can clear everything. Either bumps the
+        // generation, and then what this start made must not go in.
+        let generation = loopbackRecoveryGeneration
+#if LATCHKEY_TEST_HOOKS
+        let hold = recoverDuringFirstBusStartIfRequested()
+#else
+        let hold: Duration? = nil
+#endif
+        let bus = try await startEventBus(localAPI: localAPI, consumer: consumer, holdForTest: hold)
+        guard generation == loopbackRecoveryGeneration else {
+            logger.log("First bus start superseded while starting; its bus is discarded")
+            bus.cancel()
+            return
+        }
+        installBus(bus)
 
         // Deliberately do NOT call `node?.up()`. `up()` calls Go's
         // `Up(context.Background())` (non-cancellable), which blocks until the
@@ -349,8 +365,7 @@ final class TSNetManager {
         // Suspended, not blocked, while the relay starts (F16 §4.3). A loopback
         // recovery in that time publishes its own configuration; this one is
         // then stale and is dropped.
-        if let loopback = try await self.node?.loopback() {
-            let generation = loopbackRecoveryGeneration
+        if let loopback = try await self.node?.loopback(), generation == loopbackRecoveryGeneration {
             let config = await proxyConfig(loopback)
             if generation == loopbackRecoveryGeneration {
                 model.proxyConfiguration = config
@@ -637,6 +652,9 @@ final class TSNetManager {
                 self.socksLogProxy?.stop()
                 self.socksLogProxy = nil
                 self.socksLogProxyPort = nil
+#if LATCHKEY_TEST_HOOKS
+                self.loopbackErrorDuringRecoveryRelayIfRequested(generation: generation)
+#endif
                 let config = await self.proxyConfig(loopback)
                 // Rechecked after the relay's start (F16 §4.3): a shutdown()
                 // or a newer recovery in that time owns what is published.
@@ -645,8 +663,22 @@ final class TSNetManager {
                 self.model.proxyConfiguration = config
                 self.busRestartBackoff = .milliseconds(500)
                 self.loopbackRecoveryTask = nil
+#if LATCHKEY_TEST_HOOKS
+                self.model.tcpChaosTestStatus = self.loopbackErrorInjectedGeneration.map {
+                    $0 < generation ? "recovered again" : "recovered" } ?? "recovered"
+#else
                 self.model.tcpChaosTestStatus = "recovered"
+#endif
                 logger.log("LocalAPI loopback recovered at \(loopback.address), generation \(generation)")
+                // The new bus is armed from its install, and the relay start
+                // above is awaited: a loopback failure it reported in that
+                // time found this recovery still in flight and was dropped
+                // (recoverLoopbackAfterFailure's guard). It is acted on now,
+                // or the bus stays dead with nothing left to restart it. Any
+                // other error took the ordinary restart path when it arrived.
+                if let pending = self.consumer.error, LoopbackHealth.isLocalLoopbackConnectionFailure(pending) {
+                    self.scheduleBusRestart(localAPI: newClient, consumer: newConsumer, error: pending)
+                }
             } catch {
                 guard !Task.isCancelled,
                       generation == self.loopbackRecoveryGeneration else { return }
@@ -1237,6 +1269,47 @@ final class TSNetManager {
                 self.model.tcpChaosTestStatus = "bus death \(i + 1)"
             }
         }
+    }
+
+    /// `-UITestRecoverDuringFirstBusStart`: the launch's own bus start is
+    /// held 3 s, and half a second into it the loopback is closed and
+    /// replaced, so the recovery installs its bus first. The launch's start
+    /// then finishes stale, for the replaced consumer; installing it logs
+    /// `BUS WATCHER MISMATCH` (scripts/test-lifecycle.sh).
+    @MainActor private var recoverDuringFirstBusStartTaken = false
+    @MainActor
+    private func recoverDuringFirstBusStartIfRequested() -> Duration? {
+        guard TestHooks.flag("-UITestRecoverDuringFirstBusStart"), !recoverDuringFirstBusStartTaken,
+              let node else { return nil }
+        recoverDuringFirstBusStartTaken = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self else { return }
+            logger.log("TCP chaos test: replacing the loopback inside the first bus start")
+            do {
+                try await node.debugDefunctLoopback()
+            } catch {
+                logger.log("TCP chaos test failed: \(error)")
+                return
+            }
+            self.recoverLoopbackAfterFailure(URLError(.cannotConnectToHost))
+        }
+        return .seconds(3)
+    }
+
+    /// `-UITestLoopbackErrorDuringRecoveryRelay`: the first recovery's new
+    /// bus reports a loopback failure while the recovery waits for its relay.
+    /// Acted on, it is a second recovery: the chaos label reads `recovered
+    /// again`. Dropped, it stays `recovered`, with a bus nothing restarts.
+    @MainActor private var loopbackErrorInjectedGeneration: UInt64?
+    @MainActor
+    private func loopbackErrorDuringRecoveryRelayIfRequested(generation: UInt64) {
+        guard TestHooks.flag("-UITestLoopbackErrorDuringRecoveryRelay"),
+              loopbackErrorInjectedGeneration == nil,
+              let failing = URL(string: "http://127.0.0.1/localapi/v0/watch-ipn-bus") else { return }
+        loopbackErrorInjectedGeneration = generation
+        logger.log("TCP chaos test: a loopback failure on the new bus while the recovery's relay starts")
+        consumer.error = URLError(.networkConnectionLost, userInfo: [NSURLErrorFailingURLErrorKey: failing])
     }
 
     /// `-UITestBusInstallDelay <s>` (F16 §6.1): the FIRST ordinary bus
