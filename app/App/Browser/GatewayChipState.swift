@@ -72,13 +72,14 @@ nonisolated struct GatewayChipState: Equatable, Sendable {
         return label
     }
 
-    /// The row's chips, in order: the one in use, then the others as the
-    /// remembered list has them (most recent first), each once. Empty when
-    /// there is nothing to switch to: one chip alone is no row (F22 §2).
+    /// The row's chips, in order: every gateway, the one in use among them,
+    /// sorted by name, each once. Never by recency: a switch must not move
+    /// any chip (issue #7). Empty when there is nothing to switch to: one
+    /// chip alone is no row (F22 §2).
     static func order(current: String, known: [String]) -> [String] {
         var seen: Set<String> = [current]
         let others = known.filter { seen.insert($0).inserted }
         guard !current.isEmpty, !others.isEmpty else { return [] }
-        return [current] + others
+        return ([current] + others).sorted { shown($0) < shown($1) }
     }
 }

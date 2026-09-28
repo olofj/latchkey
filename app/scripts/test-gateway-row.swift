@@ -55,9 +55,10 @@ let a = "https://a.ts.net", b = "https://b.ts.net", c = "https://c.ts.net:8443"
 expect(S.order(current: a, known: [a]) == [], "one gateway: no row")
 expect(S.order(current: a, known: []) == [], "nothing known: no row")
 expect(S.order(current: "", known: [a, b]) == [], "no gateway in use: no row")
-expect(S.order(current: b, known: [a, b, c]) == [b, a, c], "in use first, then as remembered")
+expect(S.order(current: b, known: [a, b, c]) == [a, b, c], "by name, the one in use in its place")
+expect(S.order(current: a, known: [c, b, a]) == [a, b, c], "a switch reorders nothing: recency is ignored")
 expect(S.order(current: a, known: [b, b, c]) == [a, b, c], "each once")
-expect(S.order(current: c, known: [a]) == [c, a], "in use even if not remembered")
+expect(S.order(current: c, known: [a]) == [a, c], "in use even if not remembered")
 
 print("\n\(checks - failures)/\(checks) checks passed")
 exit(failures == 0 ? 0 : 1)
