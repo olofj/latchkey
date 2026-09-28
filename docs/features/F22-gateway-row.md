@@ -29,10 +29,11 @@ Working:
 
 - He scrolls up a little; the app bar comes in as it does today (F15). Between
   the leading "Dashboard" button (when there is one) and the cogwheel is a row
-  of chips, one per gateway he has used: the one in use first, filled and bold
-  like the dashboard's active chip, then the others, most recent first.
+  of chips, one per gateway he has used, sorted by name and never reordered;
+  the one in use is filled solid with the accent, in place (§8 item 6).
 - Each chip is a short name (`mac-studio`, or `mac-studio:8443` off 443) and a
-  small dot. The dots are KiroCrew's instance-bar colours (`App-*.js`,
+  small light, a symbol whose shape as well as colour is the state (✓, …, !,
+  –). The lights are KiroCrew's instance-bar colours (`App-*.js`,
   `Y6`/`XEe`: `connected` → `--ok`, `connecting` → `--warn`, `error` →
   `--danger`, anything else → `--muted`), with the same meanings:
   - **green**: answering as a KiroCrew gateway. For the one in use: the page
@@ -44,8 +45,10 @@ Working:
   - **grey**: not checked, or cannot be: the tailnet is not up yet, or the
     host is not on this tailnet. The last one is disabled (it would load
     off the tailnet — F5 §7, the M5 review).
-  As in the dashboard, a chip that is not green says its state in words after
-  the name, in the dot's colour, so colour is never the only signal.
+  The state's words (the table in §4) are the chip's accessibility value, not
+  drawn: a word after the name resized the chip on every probe and load and
+  shifted every chip after it (issue #7). The symbol's shape keeps colour
+  from being the only signal.
 - One tap on another chip switches to it: the page reopens at that gateway,
   and it becomes the chip in use. No sheet.
 - More gateways than fit: the row scrolls sideways; chips keep their width,
@@ -114,15 +117,19 @@ Host-tested by `scripts/test-gateway-row.sh`, every row of the table.
 
 **`GatewayRow` (SwiftUI, same file).** A horizontal `ScrollView`, no
 indicators, of `GatewayChip` buttons: 26 pt tall, 6 pt corner radius, 12 pt
-text, a 6 pt dot, a hairline border; the one in use filled with the accent
-at low opacity and bold, as `e8`'s active style. Identifier `gateway-row`;
+text, a 12 pt symbol slot, a hairline border; the one in use filled solid
+with the accent under white text and bold, with a 1.5 pt accent border. A
+chip's width is its name's alone: the name always reserves its bold width
+(a hidden bold copy under it), and the state takes no width. Identifier `gateway-row`;
 each chip `gateway-chip-<host[:port]>`, label the full name ("…, in use" for
 the current one), value the word. It is shown only when there is at least
 one other known gateway.
 
-**`AppBar`.** Takes an optional row view in the middle slot. When the
-sign-in capsule shows too, it keeps its full width first (it pins the bar and
-is the only way in, F15 §9 item 3) and the row scrolls in what is left.
+**`AppBar`.** Takes an optional row view in the middle slot, always starting
+at the same leading edge. When signed out, a compact text-only "Sign in"
+button (orange outline, fixed 12 pt, label "Signed out — Sign in") sits after
+the row, beside the gear; the row scrolls in what is left. Without a row the
+F15 capsule is unchanged.
 
 **`DashboardContent`.** Builds the row from `homePage.url`,
 `workspace.definition.knownGatewayOrigins`, `tab.viewModel.pageState` and
@@ -160,7 +167,7 @@ Host: `scripts/test-gateway-row.sh`, the §4 table, in `make test-policy`.
 ## 7. Acceptance criteria
 
 1. With two or more remembered gateways, the summoned bar shows one chip per
-   gateway, in-use first — the Discovery test.
+   gateway, sorted by name — the Discovery test.
 2. Each other chip's light matches a probe of that gateway, as the gateway's
    own request log confirms — the Discovery test.
 3. One tap switches, proved by the new gateway's log — the Discovery test.
@@ -177,14 +184,30 @@ Decided overnight, each open to reversal:
 2. **Tapping the chip in use does nothing.** A reload on tap was considered
    and rejected: an accidental reload of a live session is worse than a
    missing shortcut; the error page already has Try again.
-3. **The sign-in capsule and the row share the bar**, capsule first at full
-   width. The first draft hid the row while signed out; that removed the way
-   to another gateway exactly when the one in use will not let him in.
+3. **Sign-in and the row share the bar.** The first draft hid the row while
+   signed out; that removed the way to another gateway exactly when the one
+   in use will not let him in. Revised by item 8: the capsule no longer comes
+   first.
 4. **Red chips still switch** (Settings' rule): the light is a forecast.
 5. **Short names**: the first DNS label, plus `:port` off 443. Two gateways
    with the same first label on different tailnets cannot be remembered by
    one workspace, so this does not collide in practice; the accessibility
    label carries the full name.
+
+After Olof's device report (issue #7: chips move, the active one is faint,
+an icon pops in on sign-out):
+
+6. **Chips sorted by name, never by recency.** Every switch used to move the
+   tapped chip to the front. Alphabetical needs no stored order and holds
+   whatever the remembered list does; the chip in use is marked in place.
+7. **Fixed chip widths, a solid active chip.** No drawn status word and a
+   reserved bold width, so no state, load or switch resizes a chip. The chip
+   in use is solid accent with white text and an accent border, where the
+   15 % tint over material over the page's colour was hard to see.
+8. **Sign-in after the row, beside the gear**, a compact text button with no
+   icon. Signing out narrows the row's viewport from the right but moves no
+   chip. It still hides while the token sheet is up (F15); that no longer
+   shifts anything.
 
 For Olof: whether the row should also offer "Find gateways…" at its end, and
 whether the bar should come in by itself when the page in use fails.
@@ -239,3 +262,14 @@ capsule after the switch.
 **Not covered end to end:** the colours themselves (XCUITest sees the word,
 not the dot), and the 30 s re-probe. Horizontal overflow is SwiftUI's
 `ScrollView`; with the cap of 8 it was not driven.
+
+### 2026-09-28 — issue #7: stable, fixed-width chips; sign-in after the row
+
+§8 items 6-8. `testTheAppBarRowLightsEachGatewayAndSwitchesInOneTap` now
+checks the chips are by name, and that every chip's frame is unchanged
+across the verdicts landing, and across the switch to `gw` with its sign-out
+(dash in use and signed in, then gw in use, signed out, sign-in up, dash
+red); and that sign-in sits after the row. Run on the old `GatewayRow` and
+`AppBar` (new order kept), it fails: `neither the switch nor the sign-out
+moved a chip`, every chip 208 pt to the right and dash 71 pt wider. Host
+`test-gateway-row.sh` 44/44; Discovery 21/21 (484 s); L1 45/45 (204 s).

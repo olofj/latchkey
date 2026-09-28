@@ -3695,3 +3695,21 @@ matters.
 Found while building: the row is usually on screen before the node has a
 proxy and a rule set, and the first refresh then probed nothing for 30 s.
 The probe loop is keyed on readiness as well as the list.
+
+## 2026-09-28 — F22 revised: chips stay put, the one in use is solid, sign-in after the row
+
+Olof on a device (issue #7): the gateways move around on the bar, the active
+one is hard to pick out, and signing out made an icon appear from nowhere.
+Each was F22 working as specced: in-use-first order with the rest by
+recency, a status word after the name, bold only in use, a 15 % accent tint,
+and the sign-in capsule laid out ahead of the row.
+
+Decided (F22 §8 items 6-8): chips are sorted by name and never reorder; the
+chip in use is marked in place. A chip's width is its name's alone: the
+state is a shape-coded symbol in a fixed slot with the word as the
+accessibility value, and the name always reserves its bold width. The chip
+in use is solid accent under white text with an accent border. While signed
+out, a compact text-only "Sign in" sits after the row beside the gear, so
+the row's leading edge never moves. The Discovery test now asserts every
+chip's frame is unchanged across verdicts, a switch and a sign-out, and
+fails on the old chip and bar code.
