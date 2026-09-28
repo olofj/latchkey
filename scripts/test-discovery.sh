@@ -27,11 +27,38 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/app"
 HARNESS="$ROOT/testing/harness"
 TSNET="$ROOT/testing/tsnet-harness"
+# A simpool slot k is simulator "Latchkey Shard k" and harness instance k, so
+# a run never shares ports with another worktree's. With neither SIM_NAME nor
+# LATCHKEY_INSTANCE given, take a free slot and run in it.
+if [[ -z "${SIM_NAME:-}${LATCHKEY_INSTANCE:-}${LATCHKEY_SLOTS:-}" ]]; then
+    exec python3 "$ROOT/scripts/simpool.py" run --want 1 -- "$0" "$@"
+fi
+if [[ -z "${SIM_NAME:-}${LATCHKEY_INSTANCE:-}" ]]; then
+    LATCHKEY_INSTANCE=${LATCHKEY_SLOTS%% *}
+    SIM_NAME="Latchkey Shard $LATCHKEY_INSTANCE"
+fi
+if [[ -z "${LATCHKEY_INSTANCE:-}" && "$SIM_NAME" =~ ^Latchkey\ Shard\ ([0-9])$ ]]; then
+    LATCHKEY_INSTANCE=${BASH_REMATCH[1]}
+fi
 SIM_NAME="${SIM_NAME:-iPhone 17}"
+INSTANCE="${LATCHKEY_INSTANCE:-0}"
+[[ "$INSTANCE" =~ ^[0-9]$ ]] || { echo "error: LATCHKEY_INSTANCE must be 0-9, not '$INSTANCE'" >&2; exit 1; }
+TMAKE=(make -C "$TSNET" --no-print-directory INSTANCE="$INSTANCE")
+HMAKE=(make -C "$HARNESS" --no-print-directory INSTANCE="$INSTANCE")
+# This instance's ports, for the tests (TEST_RUNNER_<NAME> reaches the test
+# runner as <NAME>: UITestSupport.swift, HarnessInstance) and for this script.
+while IFS='=' read -r name value; do
+    case "$name" in
+        RUN_DIR) ;;
+        INSTANCE) export "TEST_RUNNER_LATCHKEY_HARNESS_INSTANCE=$value" ;;
+        *) export "TEST_RUNNER_LATCHKEY_$name=$value" ;;
+    esac
+done < <("${TMAKE[@]}" -s ports; "${HMAKE[@]}" -s ports)
 BUILD=0
 [[ "${1:-}" == "--build" ]] && BUILD=1
 
 LOG_DIR="$APP/build/discovery-logs/$(date +%Y%m%d-%H%M%S)"
+[[ "$INSTANCE" == 0 ]] || LOG_DIR+="-i$INSTANCE"
 mkdir -p "$LOG_DIR"
 START=$(date +%s)
 say() { printf '::: %s\n' "$*"; }
@@ -63,18 +90,6 @@ if [[ -n "${REPEAT:-}" ]]; then
     EXPECTED=$(( EXPECTED * REPEAT ))
 fi
 
-# ------------------------------------------------------------------ harness --
-teardown() {
-    make -C "$HARNESS" --no-print-directory gateway-down >/dev/null 2>&1 || true
-    make -C "$TSNET" --no-print-directory down >/dev/null 2>&1 || true
-}
-trap teardown EXIT
-say "bundle pin (the fake gateway serves the real KiroCrew bundle)"
-python3 "$HARNESS/fake_gateway.py" --check-bundle | sed 's/^/    /'
-say "harness up (tsnet harness with gw and slow peers, fake dashboard, fake gateway)"
-make -C "$TSNET" --no-print-directory up HARNESS_ARGS="-gateway 127.0.0.1:8444 -slow-peer"
-make -C "$HARNESS" --no-print-directory gateway-up
-
 # ---------------------------------------------------------------- simulator --
 say "simulator: $SIM_NAME"
 UDID=$(xcrun simctl list devices available -j | python3 -c "
@@ -87,6 +102,18 @@ sys.exit(1)") || { echo "error: no simulator named $SIM_NAME" >&2; exit 1; }
 source "$ROOT/scripts/lib-sim.sh"
 sim_setup "$SIM_NAME" "$UDID"
 xcrun simctl keychain "$UDID" add-root-cert "$HARNESS/ca.der"
+
+# ------------------------------------------------------------------ harness --
+teardown() {
+    "${HMAKE[@]}" gateway-down >/dev/null 2>&1 || true
+    "${TMAKE[@]}" down >/dev/null 2>&1 || true
+}
+trap teardown EXIT
+say "bundle pin (the fake gateway serves the real KiroCrew bundle)"
+python3 "$HARNESS/fake_gateway.py" --check-bundle | sed 's/^/    /'
+say "harness $INSTANCE up (tsnet harness with gw and slow peers, fake dashboard, fake gateway)"
+"${TMAKE[@]}" up HARNESS_ARGS="-gateway 127.0.0.1:$TEST_RUNNER_LATCHKEY_GW_PORT -slow-peer"
+"${HMAKE[@]}" gateway-up
 
 # -------------------------------------------------------------------- build --
 SANDBOX_FLAGS=()
@@ -133,9 +160,9 @@ fi
 ELAPSED=$(( $(date +%s) - START ))
 if [[ $TEST_RC -ne 0 ]]; then
     xcrun simctl io "$UDID" screenshot "$LOG_DIR/failure.png" >/dev/null 2>&1 || true
-    cp "$TSNET/.run/"*.log "$HARNESS/.run/"*.log "$LOG_DIR/" 2>/dev/null || true
-    curl -s http://127.0.0.1:8491/state > "$LOG_DIR/harness-state.json" 2>/dev/null || true
-    curl -s http://127.0.0.1:8481/__state > "$LOG_DIR/gateway-state.json" 2>/dev/null || true
+    cp "$TSNET/.run/"*.log "$HARNESS/.run/"*.log "$TSNET/.run/i$INSTANCE/"*.log "$HARNESS/.run/i$INSTANCE/"*.log "$LOG_DIR/" 2>/dev/null || true
+    curl -s http://127.0.0.1:$TEST_RUNNER_LATCHKEY_API_PORT/state > "$LOG_DIR/harness-state.json" 2>/dev/null || true
+    curl -s http://127.0.0.1:$TEST_RUNNER_LATCHKEY_GW_CONTROL_PORT/__state > "$LOG_DIR/gateway-state.json" 2>/dev/null || true
     xcrun simctl spawn "$UDID" log show --last 10m --predicate 'subsystem == "net.lixom.latchkey"' \
         --style compact 2>/dev/null | grep -i "discovery" > "$LOG_DIR/discovery.log" || true
     say "FAILED in ${ELAPSED}s — logs, screenshot and xcresult in $LOG_DIR"

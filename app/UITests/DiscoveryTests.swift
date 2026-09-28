@@ -30,10 +30,11 @@ import XCTest
 @MainActor
 final class DiscoveryTests: XCTestCase {
 
-    static let controlURL = "http://127.0.0.1:8490"
-    static let harnessAPI = "http://127.0.0.1:8491"
-    static let gatewayControl = "http://127.0.0.1:8481"
-    static let dashboardControl = "http://127.0.0.1:8480"
+    // The instance scripts/test-discovery.sh started (HarnessInstance, F14).
+    static let controlURL = "http://127.0.0.1:\(HarnessInstance.port("CONTROL_PORT", default: 8490))"
+    static let harnessAPI = "http://127.0.0.1:\(HarnessInstance.port("API_PORT", default: 8491))"
+    static let gatewayControl = "http://127.0.0.1:\(HarnessInstance.port("GW_CONTROL_PORT", default: 8481))"
+    static let dashboardControl = "http://127.0.0.1:\(HarnessInstance.port("DASH_CONTROL_PORT", default: 8480))"
     static let gatewayHost = "gw.tail-scale.ts.net"
 
     override func setUp() async throws {
@@ -44,6 +45,7 @@ final class DiscoveryTests: XCTestCase {
             XCTFail("The discovery harness is not running. Use scripts/test-discovery.sh (parent repo).")
             return
         }
+        try await HarnessInstance.assertIsOurs("\(Self.dashboardControl)/__state")
         try await resetFakes()
     }
 

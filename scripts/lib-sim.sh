@@ -12,7 +12,10 @@ LIB_SIM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sim_setup() {
     local name=$1 udid=$2 k lock
     k=${name#Latchkey Shard }
-    if [[ "$k" != "$name" && "$k" =~ ^[0-9]+$ && -z "${LATCHKEY_SHARD_TESTS:-}" ]]; then
+    # A slot this run already holds through `simpool.py run` (LATCHKEY_SLOTS)
+    # is not taken again: a second flock on it would wait for ourselves.
+    if [[ "$k" != "$name" && "$k" =~ ^[0-9]+$ && -z "${LATCHKEY_SHARD_TESTS:-}" \
+          && " ${LATCHKEY_SLOTS:-} " != *" $k "* ]]; then
         lock="${LATCHKEY_SIMPOOL_DIR:-$HOME/Library/Caches/latchkey-simpool}/slot-$k.lock"
         mkdir -p "$(dirname "$lock")"
         exec 9>>"$lock" || { echo "error: cannot open $lock" >&2; exit 1; }
