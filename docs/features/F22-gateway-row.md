@@ -307,3 +307,12 @@ fail: `the + is in the bar` and `one gateway still has a row`. With the
 sign-in slot not reserved, the switch test fails on `neither the switch nor
 the sign-out moved a chip or the +`. Host `test-gateway-row.sh` 44/44.
 
+**L1's audit, new with the row for one gateway.** L1 runs with one gateway,
+so its accessibility audit met the chip in use for the first time: "Contrast
+failed" on `dash`, on the dashboard and the error page. White 12 pt on the
+system accent is 4.0:1. A fill 30 % darker than the accent was still flagged,
+so the look is unchanged and the finding is held in `auditBaseline` as open.
+
+**Tests:** Discovery 21/21 (415 s); L1 45/45 (194 s), after one run at 43/45
+on the audit finding above.
+
