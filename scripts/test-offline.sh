@@ -116,7 +116,8 @@ for devs in json.load(sys.stdin)['devices'].values():
         if d['name'] == '$SIM_NAME':
             print(d['udid']); sys.exit(0)
 sys.exit(1)") || { echo "error: no simulator named $SIM_NAME" >&2; exit 1; }
-xcrun simctl bootstatus "$UDID" -b >/dev/null
+source "$ROOT/scripts/lib-sim.sh"
+sim_setup "$SIM_NAME" "$UDID"
 xcrun simctl keychain "$UDID" add-root-cert "$HARNESS/ca.der"
 # A fresh app container, so R1's disk scan below reads only what THIS run
 # wrote. Other suites (M4's session tests serve the real KiroCrew bundle,

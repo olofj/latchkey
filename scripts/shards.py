@@ -7,6 +7,9 @@ shard is the suite's own script, run as a worker on its own simulator
 testing/harness/Makefile), with a list of tests: preflight, self-tests, the
 tests, the log scans and the teardown are the serial path's own, not a copy.
 
+  0. slots       take up to N slots of the host's simulator pool
+                 (scripts/simpool.py), at least 2, waiting if fewer are free,
+                 so concurrent runs never share a simulator or an instance.
   1. simulators  create and boot any shard simulator that is not booted,
                  one at a time, before anything is timed (a first boot is
                  20-23 s; twelve at once took minutes, F14 §9). They stay
@@ -44,13 +47,13 @@ import subprocess
 import sys
 import time
 
+import simpool
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, "app")
 HARNESS = os.path.join(ROOT, "testing", "harness")
 PRODUCTS = os.path.join(APP, "build", "DerivedData", "Build", "Products")
-DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
-SIM_PREFIX = "Latchkey Shard "
-MAX_SHARDS = 9         # harness instances 1-9; 0 is the serial path's
+MAX_SHARDS = simpool.SIZE   # harness instances 1..SIZE; 0 is the serial path's
 
 
 class Suite:
@@ -125,69 +128,10 @@ def shared_runs(path, names):
 
 
 # ------------------------------------------------------------ simulators ----
-def devices():
-    """name -> (udid, state) for every available simulator."""
-    out = json.loads(run("xcrun", "simctl", "list", "devices", "available", "-j"))["devices"]
-    return {d["name"]: (d["udid"], d["state"]) for ds in out.values() for d in ds}
-
-
-def shard_sims():
-    """(k, name, udid, state) for every existing shard simulator, by k."""
-    found = []
-    for name, (udid, state) in devices().items():
-        m = re.fullmatch(re.escape(SIM_PREFIX) + r"(\d+)", name)
-        if m:
-            found.append((int(m.group(1)), name, udid, state))
-    return sorted(found)
-
-
-def ios_runtime():
-    runtimes = json.loads(run("xcrun", "simctl", "list", "runtimes", "-j"))["runtimes"]
-    ios = [r for r in runtimes if r["platform"] == "iOS" and r["isAvailable"]]
-    if not ios:
-        sys.exit("error: no iOS simulator runtime is installed")
-    return max(ios, key=lambda r: [int(x) for x in r["version"].split(".")])["identifier"]
-
-
-def sims_up(n, prog):
-    """Create and boot shards 1..n, one at a time. Returns [(name, udid)]."""
-    have = devices()
-    out = []
-    for k in range(1, n + 1):
-        name = f"{SIM_PREFIX}{k}"
-        udid, state = have.get(name, (None, None))
-        if udid is None:
-            say(f"creating simulator {name}")
-            udid = run("xcrun", "simctl", "create", name, DEVICE_TYPE, ios_runtime()).strip()
-            state = "Shutdown"
-        if state != "Booted":
-            say(f"booting {name} (a first boot is ~20 s; it stays booted: {prog} sims down)")
-            t0 = time.monotonic()
-            run("xcrun", "simctl", "bootstatus", udid, "-b")
-            print(f"    booted in {time.monotonic() - t0:.0f} s", flush=True)
-        out.append((name, udid))
-    return out
-
-
+# The shard simulators are the slots of scripts/simpool.py, the host's pool:
+# slot k is "Latchkey Shard k" and harness instance k.
 def sims_command(args, prog):
-    sims = shard_sims()
-    if args.action in (None, "status"):
-        if not sims:
-            print("no shard simulators")
-        for k, name, udid, state in sims:
-            print(f"{name:20} {state:9} {udid}")
-    elif args.action == "up":
-        sims_up(args.n or args.shards, prog)
-    elif args.action in ("down", "delete"):
-        for k, name, udid, state in sims:
-            if state != "Shutdown":
-                run("xcrun", "simctl", "shutdown", udid, check=False)
-                print(f"shut down {name}")
-            if args.action == "delete":
-                run("xcrun", "simctl", "delete", udid)
-                print(f"deleted {name}")
-        if not sims:
-            print("no shard simulators")
+    simpool.sims_command(args.action, args.n or (args.shards if args.action == "up" else None), prog)
 
 
 # ------------------------------------------------------------------ plan ----
@@ -338,13 +282,6 @@ def log_tests(suite, shard_dir):
     return found
 
 
-def sim_state(udid):
-    for name, (u, state) in devices().items():
-        if u == udid:
-            return state
-    return "gone"
-
-
 # ----------------------------------------------------------------- main ----
 def main(suite, doc):
     prog = os.path.relpath(sys.argv[0], ROOT)
@@ -367,8 +304,16 @@ def main(suite, doc):
     log_dir = os.path.join(suite.log_root, f"{stamp}-shards")
     os.makedirs(log_dir)
 
-    # Untimed: simulators, the one build, the suite's own preparation.
-    sims = sims_up(n, prog)
+    # Untimed: the slots, simulators, the one build, the suite's own
+    # preparation. The slots are held until this process exits; a shard runs
+    # on its slot's simulator and harness instance, so k is the slot.
+    held, _ = simpool.acquire(n, min(n, 2))
+    slots = sorted(held)
+    if len(slots) < n:
+        say(f"{len(slots)} of the {n} shards asked for: the other slots are held "
+            f"(scripts/simpool.py status)")
+    n = len(slots)
+    sims = simpool.sims_up(slots, prog)
     build_s = build(suite, sims[0][0]) if args.build else None
     testrun = xctestrun()
     suite.prepare()
@@ -376,9 +321,9 @@ def main(suite, doc):
     start = time.monotonic()
     names, planned = plan(suite, n)
     shards = {}
-    say(f"{suite.name} on {n} simulators: {len(names)} tests, "
+    say(f"{suite.name} on {n} simulators (slots {' '.join(map(str, slots))}): {len(names)} tests, "
         f"{os.path.relpath(testrun, ROOT)}")
-    for k, (shard, (sim, udid)) in enumerate(zip(planned, sims), start=1):
+    for k, shard, (sim, udid) in zip(slots, planned, sims):
         shard.update(sim=sim, udid=udid, dir=os.path.join(log_dir, f"shard-{k}"),
                      limit=2 * shard["planned"] + 300)
         shards[k] = shard
@@ -402,7 +347,7 @@ def main(suite, doc):
             for t, (result, secs, msgs) in xcresult_tests(suite, bundle).items():
                 # The log's messages carry file:line; the xcresult's do not.
                 got[t] = (result, secs, got.get(t, (0, 0, []))[2] or msgs)
-        s["state_after"] = sim_state(s["udid"])
+        s["state_after"] = simpool.sim_state(s["udid"])
         for t in s["tests"]:
             result, secs, msgs = got.pop(t, ("Not run", 0.0, []))
             results.setdefault(t, []).append(

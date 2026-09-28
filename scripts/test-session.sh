@@ -116,7 +116,8 @@ for devs in json.load(sys.stdin)['devices'].values():
         if d['name'] == '$SIM_NAME':
             print(d['udid']); sys.exit(0)
 sys.exit(1)") || { echo "error: no simulator named $SIM_NAME" >&2; exit 1; }
-xcrun simctl bootstatus "$UDID" -b >/dev/null
+source "$ROOT/scripts/lib-sim.sh"
+sim_setup "$SIM_NAME" "$UDID"
 xcrun simctl keychain "$UDID" add-root-cert "$HARNESS/ca.der"
 # A fresh app container, so the R1 scan below reads only this run's data.
 xcrun simctl uninstall "$UDID" net.lixom.latchkey >/dev/null 2>&1 || true

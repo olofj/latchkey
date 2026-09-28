@@ -84,7 +84,8 @@ for devs in json.load(sys.stdin)['devices'].values():
         if d['name'] == '$SIM_NAME':
             print(d['udid']); sys.exit(0)
 sys.exit(1)") || { echo "error: no simulator named $SIM_NAME" >&2; exit 1; }
-xcrun simctl bootstatus "$UDID" -b >/dev/null
+source "$ROOT/scripts/lib-sim.sh"
+sim_setup "$SIM_NAME" "$UDID"
 xcrun simctl keychain "$UDID" add-root-cert "$HARNESS/ca.der"
 
 # -------------------------------------------------------------------- build --
