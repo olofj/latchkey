@@ -3575,3 +3575,35 @@ frame 34.3; built, no dark run, darkest 114.2 (the launch fade). Each
 test shown able to fail by mutation (F21 §9). `ShareTests` and
 `CalmLaunchTests` 17/17 serially; host: 22/22 calm-shell checks,
 page scripts and `make test-policy` green.
+
+## 2026-09-27 — the suite asks the page what it drew; the accessibility tree cannot say
+
+F10's remaining checks are built. In L1, a sweep fails on any of our own
+hittable controls that reaches an unsafe region (four insets from a new
+probe; scroll content and system-placed bar items held only to the edges
+that apply to them), and `performAccessibilityAudit` runs at the same
+points: the gate, the dashboard, Settings, the error page, the picker.
+
+Decided: the page's own layout, not the accessibility tree, is the
+instrument for the page. F10 had assumed F5's chip check could be widened
+to the whole page through XCUITest's snapshot. On the real 0.7.1 bundle it
+reported collisions that were not drawn: chips scrolled out of the
+instance bar (F5's fix clips that row) and a heading under a fade overlay.
+For web content the tree has no clipping and no z-order, and `isHittable`
+said "on top" for all of them. A test-hooks script (`PageSweep.swift`)
+now measures drawn items in the page — clipped by overflow ancestors,
+covered only by what paints — with `pointer-events` forced on for its
+duration, because the page's fades ignore the pointer and
+`elementFromPoint` looks through them. Removing F5's style makes it fail
+on the chevron and the list-failed chip without being pointed there.
+
+Decided: the audit's first run (37 findings: contrast on system and
+tinted colours, possible clipping at large Dynamic Type) is held as a
+baseline, not suppressed as intended. A new finding fails; each baseline
+entry is an owner item in F10 §8. The error page's text is the one worth
+acting on: a plain `VStack`, the shape F11 moved the gate out of.
+
+**Evidence:** L1, the five tests carrying the sweep and audit, green;
+session, the five tests on the shared signed-in run, green; each check
+shown to fail by a mutation (F10 §9). Full-tier runs: see the commit that
+records them.
