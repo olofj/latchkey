@@ -1,6 +1,6 @@
 # L1 per-test durations in seconds, for balancing shards (F14 stage 2).
 #
-# Measured from app/build/offline-logs/20260926-092351-shards (42/42 in 184 s
+# Measured from app/build/offline-logs/20260928-014235-shards (45/45 in 218 s
 # on four simulators). scripts/test-offline-shards.py packs tests onto
 # simulators longest first by these numbers; a test missing here is given a
 # default and named in a warning. Each sharded run writes the durations it
@@ -13,48 +13,47 @@
 # read the same run, which is why they measure about 0.1 s. Do not reorder a
 # group's members expecting the cost to move with them.
 0.1 testDashboardLoadsThroughTheProxy
-9.1 testNonTailnetOriginLoadsDirectAndNeverTouchesTheProxy
-8.6 testBlackholedProxyFailsWithoutDirectFallback
-9.4 testProxyGoneFailsWithoutDirectFallback
-10.1 testProxyGoneWithoutRelayFailsWithoutDirectFallback
-10.8 testAGatewayAnswering502ShowsTheErrorPageInsteadOfABlankScreen
-38.8 testStalledLoadShowsTheConnectingStateForItsWholeDuration
-12.4 testAFastLoadDoesNotLeaveTheConnectingStateOnScreen
-33.6 testTheErrorPageOffersRetryAndAnotherGateway
-8.4 testCertificateNameMismatchShowsTheErrorPage
-8.4 testUnreachableGatewayShowsTheErrorPage
-13.8 testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard
-19.6 testATappedLinkToAnotherAppAsksFirst
-15.2 testAScriptCannotOpenAnotherAppWithoutATap
-16.7 testAnUntappedLinkAwayAsksOnlyOnce
-10.8 testATapThatNavigatesByScriptStillOpensSafari
+9.4 testNonTailnetOriginLoadsDirectAndNeverTouchesTheProxy
+9.5 testBlackholedProxyFailsWithoutDirectFallback
+10.0 testProxyGoneFailsWithoutDirectFallback
+9.8 testProxyGoneWithoutRelayFailsWithoutDirectFallback
+11.1 testAGatewayAnswering502ShowsTheErrorPageInsteadOfABlankScreen
+39.7 testStalledLoadShowsTheConnectingStateForItsWholeDuration
+10.0 testAFastLoadDoesNotLeaveTheConnectingStateOnScreen
+28.7 testTheErrorPageOffersRetryAndAnotherGateway
+9.1 testCertificateNameMismatchShowsTheErrorPage
+9.2 testUnreachableGatewayShowsTheErrorPage
+15.8 testRedirectToAnotherOriginLeavesTheAppAndKeepsTheDashboard
+18.2 testATappedLinkToAnotherAppAsksFirst
+15.6 testAScriptCannotOpenAnotherAppWithoutATap
+16.6 testAnUntappedLinkAwayAsksOnlyOnce
+11.1 testATapThatNavigatesByScriptStillOpensSafari
 0.1 testOffOriginLoadsNeverReachTheAwayOrigin
-13.4 testWithoutTheRuleListTheAwayOriginIsReached
+14.5 testWithoutTheRuleListTheAwayOriginIsReached
 15.7 testAnAllowlistedCDNIsFetchedAndItsLookalikesAreNot
 0.1 testTheFontHostsStayBlockedWhileTheCDNsAreAllowed
 0.1 testThePageCannotWidenTheAllowlist
 0.1 testTheGatewaysOwnMachineryStillWorks
-12.8 testFailedRuleCompileLoadsNothing
-15.8 testWindowOpenToAnotherOriginStillOpensSafari
-23.1 testBlockedImageShowsAMarkerThatOpensSafari
-31.4 testStrictModeBlocksTheAllowlistedCDNs
-10.6 testSignInTokenIsStrippedFromTheAddress
-27.6 testStatusNamesTheCommitTheAppWasBuiltFrom
-30.1 testInsetProbesReportWhatThePageIsTold
-37.9 testNothingOfOursSitsOnThePageAndSettingsIsReachable
+12.5 testFailedRuleCompileLoadsNothing
+18.4 testWindowOpenToAnotherOriginStillOpensSafari
+23.4 testBlockedImageShowsAMarkerThatOpensSafari
+31.8 testStrictModeBlocksTheAllowlistedCDNs
+11.2 testSignInTokenIsStrippedFromTheAddress
+21.2 testInsetProbesReportWhatThePageIsTold
+75.0 testNothingOfOursSitsOnThePageAndSettingsIsReachable
 30.6 testTheAppBarRetractsOnADeliberateScrollAndComesBack
-31.3 testTypingInThePageKeepsItOnScreen
-14.6 testAFirstLaunchExplainsItself
+21.1 testTypingInThePageKeepsItOnScreen
+16.1 testAFirstLaunchExplainsItself
 0.1 testTheGateIsClearOfTheScreensEdges
 0.1 testTheIntroductionNamesThePostLoginSteps
-7.0 testTheSignInButtonSurvivesItsOwnCopy
-14.9 testAReturningUserIsNotReintroduced
-37.9 testANodeThatCannotStartShowsAScreenInsteadOfDying
-11.2 testTheNodeStartRetryIsVisibleAndSucceeds
-15.6 testTryNowRestartsTheNodeImmediately
-19.5 testStartingANewNodeMovesTheOldStateAsideAndKeepsIt
-17.5 testAnUnwritableStateDirectoryIsSurvived
+7.3 testTheSignInButtonSurvivesItsOwnCopy
+14.6 testAReturningUserIsNotReintroduced
+36.4 testANodeThatCannotStartShowsAScreenInsteadOfDying
+11.7 testTheNodeStartRetryIsVisibleAndSucceeds
+16.8 testTryNowRestartsTheNodeImmediately
+19.1 testStartingANewNodeMovesTheOldStateAsideAndKeepsIt
+17.6 testAnUnwritableStateDirectoryIsSurvived
 17.6 testLoggingSetupFailureStopsTheNodeRatherThanStartingItBlind
-10.1 LoopbackStallOfflineTests/testABlackholedProxyBehindASlowRelayStartFailsWithoutDirectFallback
-8.6 LoopbackStallOfflineTests/testAGoneProxyBehindASlowRelayStartFailsWithoutDirectFallback
-9.1 LoopbackStallOfflineTests/testASlowRelayListenerDoesNotFreezeTheApp
+11.7 LoopbackStallOfflineTests/testABlackholedProxyBehindASlowRelayStartFailsWithoutDirectFallback
+9.1 LoopbackStallOfflineTests/testAGoneProxyBehindASlowRelayStartFailsWithoutDirectFallback
+11.0 LoopbackStallOfflineTests/testASlowRelayListenerDoesNotFreezeTheApp
