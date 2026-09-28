@@ -859,8 +859,11 @@ final class DiscoveryTests: XCTestCase {
         let away = element(app, "gateway-chip-gateway.example.com")
         XCTAssertTrue(dash.exists && gw.exists && plain.exists && away.exists, "a chip per gateway")
         XCTAssertEqual(dash.label, "dash.tail-scale.ts.net, in use", "dash is the one in use")
-        XCTAssertLessThan(dash.frame.minX, gw.frame.minX, "the one in use comes first")
-        XCTAssertLessThan(gw.frame.minX, plain.frame.minX, "then the others as remembered")
+        XCTAssertLessThan(dash.frame.minX, away.frame.minX, "the chips are by name")
+        XCTAssertLessThan(away.frame.minX, gw.frame.minX, "not by recency")
+        XCTAssertLessThan(gw.frame.minX, plain.frame.minX, "every one of them")
+        let frames = { [dash, away, gw, plain].map { $0.frame } }
+        let early = frames()
 
         XCTAssertTrue(waitForValue(gw, "answering", timeout: 15), "gw is lit answering: \(gw.value ?? "nil")")
         let probed = try await gatewayState()["requests"] as? [String] ?? []
@@ -869,6 +872,9 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertTrue(plain.isEnabled, "a red chip still switches: the light is a forecast")
         XCTAssertEqual(away.value as? String, "not on this tailnet")
         XCTAssertFalse(away.isEnabled, "a host off the tailnet cannot be chosen")
+        // Issue #7: a probe's verdict resizes no chip, so none moves.
+        let before = frames()
+        XCTAssertEqual(before, early, "the verdicts landing moved no chip")
 
         try await resetFakes()
         gw.tap()
@@ -885,6 +891,15 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertEqual(gwNow.label, "\(Self.gatewayHost), in use", "gw is now the one in use")
         XCTAssertTrue(waitForValue(element(app, "gateway-chip-dash.tail-scale.ts.net"), "not KiroCrew", timeout: 15),
                       "dash answers, but not as KiroCrew")
+        // Issue #7: the switch and the sign-out moved no chip. dash was in
+        // use and signed in; now gw is, signed out, with the sign-in button
+        // up and dash lit red. Every chip is where it was, at its width.
+        XCTAssertTrue(element(app, "session-signin-button").exists, "signed out: the sign-in button")
+        XCTAssertTrue(app.settles(within: 10), "nothing is sliding")
+        XCTAssertEqual(frames(), before, "neither the switch nor the sign-out moved a chip")
+        XCTAssertLessThanOrEqual(element(app, "gateway-row").frame.maxX,
+                                 element(app, "session-signin-button").frame.minX,
+                                 "sign-in comes after the row, not before it")
     }
 
     /// One remembered gateway: nothing to switch to, so no row, and the bar
