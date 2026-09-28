@@ -15,12 +15,16 @@ cd "$(dirname "$0")/.."
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 cp scripts/test-session-manager.swift "$OUT/main.swift"
+# GatewayCandidates (GatewayEndpoint, the origin check's classifier) needs
+# the real proxy policy, as scripts/test-gateway-candidates.sh compiles it.
+sed 's/^import TailscaleKit$//' TSNet/TailnetProxyPolicy.swift > "$OUT/policy.swift"
 # -O, as the other host tests (AGENTS.md); the isolation flags are the app's,
 # so a `nonisolated` that is missing here is missing in xcodebuild too. The
 # logger stub is the relay tests' (scripts/test-socks-relay-stubs.swift).
 if ! xcrun swiftc -O -swift-version 6 -strict-concurrency=complete -default-isolation MainActor \
         App/Session/SessionManager.swift App/Session/TokenInput.swift App/Session/DashboardSignOut.swift \
         App/Browser/PageScriptSources.swift App/Logging/LogRedaction.swift scripts/test-socks-relay-stubs.swift \
+        App/Discovery/GatewayCandidates.swift "$OUT/policy.swift" scripts/test-proxy-policy-stubs.swift \
         "$OUT/main.swift" -o "$OUT/session-manager-tests" > "$OUT/build.log" 2>&1; then
     cat "$OUT/build.log" >&2
     echo "error: the session manager host tests do not compile" >&2
