@@ -57,7 +57,12 @@ func TsnetSetupLogs(dir *C.char) C.int {
 	if root == "" {
 		return C.EINVAL
 	}
-	lg, buf, public, err := newProcessLogger(root, true)
+	// Latchkey: fd 2 is filch's only when it carries this process's own
+	// output. Under Xcode and XCTest os_log is mirrored to it, every
+	// subsystem's messages -- XCTest's accessibility server logs a text
+	// field's value, a pasted sign-in link among them -- and filch would
+	// write them unredacted to aperture.log*.txt (latchkey_locallog.go).
+	lg, buf, public, err := newProcessLogger(root, !osLogMirrored())
 	if err != nil {
 		return C.EIO
 	}

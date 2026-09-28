@@ -49,7 +49,9 @@
 // sits between logtail and filch and redacts every entry first, by the same
 // rules, verbose lines included; the drain reads back valid JSON, as before.
 // What it cannot see is what the process writes to fd 2 itself, which filch
-// captures directly: Go's panic output, and under Xcode the os_log mirror.
+// captures directly: Go's panic output. Under Xcode and XCTest fd 2 also
+// carries the os_log mirror, so there filch is not given fd 2 at all
+// (TsnetSetupLogs): a panic then reaches the attached console instead.
 //
 // It never leaves the device: they are local files, and the directory is
 // excluded from backup (App/Workspace/BackupExclusion.swift).
