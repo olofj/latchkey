@@ -924,6 +924,30 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertTrue(app.buttons["settings-button"].firstMatch.isHittable, "with the bar up all along")
     }
 
+    /// Signed out at the largest text size, the sign-in capsule shares the
+    /// bar with the row, and neither pushes the gear off the screen: it is
+    /// the way to Settings, and F15 §9 makes it always reachable.
+    func testTheAppBarRowKeepsTheGearOnScreenAtTheLargestText() async throws {
+        try await resetHarness()
+        let app = launch(extra: ["-UITestHomePage", "https://\(Self.gatewayHost)",
+                                 "-UITestKnownGateways",
+                                 "https://\(Self.gatewayHost),https://dash.tail-scale.ts.net",
+                                 "-UIPreferredContentSizeCategoryName",
+                                 "UICTContentSizeCategoryAccessibilityXXXL"])
+        defer { app.terminate() }
+        let sheet = element(app, "token-sheet")
+        XCTAssertTrue(sheet.appears(within: 45), "gw loads and asks for a token")
+        element(app, "token-sheet-close").tapWhenSettled(in: app)
+        XCTAssertTrue(sheet.disappears(within: 10), "Close closes the token sheet")
+        XCTAssertTrue(element(app, "session-signin-button").appears(within: 10), "signed out: the capsule")
+        XCTAssertTrue(element(app, "gateway-row").exists, "beside the row")
+        XCTAssertTrue(app.settles(within: 10), "nothing is sliding")
+        let gear = app.buttons["settings-button"].firstMatch
+        let screen = app.windows.firstMatch.frame
+        XCTAssertTrue(screen.contains(gear.frame), "the gear is on the screen: \(gear.frame) in \(screen)")
+        XCTAssertTrue(gear.isHittable, "and can be tapped")
+    }
+
     /// Brings the app bar in if the page has taken it away (F15): a drag down.
     private func showAppBar(_ app: XCUIApplication) {
         let gear = app.buttons["settings-button"].firstMatch

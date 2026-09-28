@@ -89,11 +89,13 @@ struct AppBar: View {
                 HStack(spacing: 8) {
                     ReturnToDashboardAffordance(model: model)
                     if let gatewayRow {
-                        // F22: the sign-in capsule keeps its full width, as
-                        // the only way in (F15 §9); the row scrolls in what
-                        // is left. Signed out is when a way to another
-                        // gateway matters most, so neither hides the other.
-                        if showsSignIn { signIn.fixedSize() }
+                        // F22: the sign-in capsule is sized first, as the
+                        // only way in (F15 §9); the row scrolls in what is
+                        // left. Signed out is when a way to another gateway
+                        // matters most, so neither hides the other. Not
+                        // fixedSize: at the largest text the capsule alone
+                        // is wider than the screen, and pushed the gear off.
+                        if showsSignIn { signIn.layoutPriority(1) }
                         gatewayRow
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
