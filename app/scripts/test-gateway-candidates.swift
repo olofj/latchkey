@@ -108,6 +108,14 @@ expect(GatewayEndpoint(origin: "http://h.ts.net") == nil && GatewayEndpoint(orig
 expect(GatewayEndpoint(host: "h", port: 0) == nil && GatewayEndpoint(host: "h", port: 65536) == nil
        && GatewayEndpoint(host: "", port: 443) == nil, "a port out of range, or no host, is not an endpoint")
 expect(GatewayEndpoint.standardPorts == [443, 8443], "discovery probes 443 and 8443")
+let saved9443 = GatewayEndpoint(origin: "https://box.ts.net:9443")
+expect(GatewayEndpoint.ports(for: "box.ts.net.", saved: saved9443) == [9443, 443, 8443],
+       "a saved non-standard port is probed first, then the standard ones")
+expect(GatewayEndpoint.ports(for: "air.ts.net", saved: saved9443) == [443, 8443], "only on the saved host")
+expect(GatewayEndpoint.ports(for: "box.ts.net", saved: GatewayEndpoint(origin: "https://box.ts.net:8443")) == [443, 8443]
+       && GatewayEndpoint.ports(for: "box.ts.net", saved: nil) == [443, 8443], "a standard saved port adds nothing")
+expect(GatewayCandidates.originRefusedText(origin: "https://b:8443").hasPrefix("This gateway refuses the origin https://b:8443. "),
+       "the refusal names the origin first")
 expect(gate("dash:0").failureMessage == "Enter a host, or host:port (1–65535).", "the bad-port wording (F1 §2)")
 expect(gate("dash", suffix: nil) == .success("https://dash"), "no suffix known: left bare, carried by the short-name rule")
 expect(gate("shared.example.ts.net") == .success("https://shared.example.ts.net"),

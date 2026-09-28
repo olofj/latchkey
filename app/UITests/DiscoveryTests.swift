@@ -177,7 +177,7 @@ final class DiscoveryTests: XCTestCase {
     /// KiroCrew 0.6.0, allows only the portless origin, so the page loads and
     /// does nothing (F1 §4a) until the origin check exists to say so.
     func testAGatewayServingOnly8443IsFoundAndLoads() async throws {
-        try await resetHarness(gatewayOn8443: true)
+        try await resetHarness(gatewayPort: 8443)
         let app = launch()
         defer { app.terminate() }
         var requests: [String] = []
@@ -766,6 +766,36 @@ final class DiscoveryTests: XCTestCase {
                       "and dash is remembered")
     }
 
+    /// F1 §4.2: the saved gateway on a port discovery does not probe by
+    /// default (9443) is probed on it by Settings → Find gateways…, and listed.
+    func testFindGatewaysProbesTheSavedNonStandardPort() async throws {
+        try await resetHarness(gatewayPort: 9443)
+        let app = launch(extra: ["-UITestHomePage", "https://\(Self.gatewayHost):9443"])
+        defer { app.terminate() }
+        var requests: [String] = []
+        for _ in 0..<120 where !requests.contains("GET /") {
+            try await Task.sleep(for: .milliseconds(500))
+            requests = try await gatewayState()["requests"] as? [String] ?? []
+        }
+        XCTAssertTrue(requests.contains("GET /"), "the saved gateway loads on 9443: \(requests.prefix(6))")
+        let sheet = element(app, "token-sheet")
+        if sheet.appears(within: 5) {
+            element(app, "token-sheet-close").tapWhenSettled(in: app)
+            XCTAssertTrue(sheet.disappears(within: 10))
+        }
+        try await resetFakes()
+        try openSettings(app)
+        let find = element(app, "settings-find-gateways")
+        for _ in 0..<4 where !(find.exists && find.isHittable) { app.swipeUp() }
+        find.tap()
+        XCTAssertTrue(element(app, "gateway-\(Self.gatewayHost):9443").appears(within: 15),
+                      "the saved port was probed and answered as a gateway")
+        // gw serves 9443 only, so the row can only have come from a probe
+        // there. (The request log cannot show it: the loaded page keeps
+        // making its own requests.)
+        XCTAssertFalse(element(app, "gateway-\(Self.gatewayHost)").exists, "nothing answered on 443")
+    }
+
     /// A known gateway that does not answer (plain serves nothing) says so
     /// once the sweep ends, and stays tappable: the label is a forecast, and
     /// F4 reports the real load, with its way to another gateway.
@@ -853,10 +883,10 @@ final class DiscoveryTests: XCTestCase {
     }
 
     private func resetHarness(withGateway: Bool = true, purgatory: Bool = false,
-                              gatewayOn8443: Bool = false) async throws {
+                              gatewayPort: Int? = nil) async throws {
         var query: [String] = []
         if !withGateway { query.append("gw=0") }
-        if gatewayOn8443 { query.append("gw=8443") }
+        if let gatewayPort { query.append("gw=\(gatewayPort)") }
         if purgatory { query.append("purgatory=1") }
         let suffix = query.isEmpty ? "" : "?" + query.joined(separator: "&")
         let data = try await Self.post("\(Self.harnessAPI)/reset\(suffix)", timeout: 90)

@@ -260,7 +260,7 @@ private struct DashboardContent: View {
             } else {
                 // First run (M5): no gateway yet. Its own navigation stack,
                 // not nested in the dashboard's toolbar-less one (M5 review).
-                GatewayPickerView(discovery: workspace.discovery, model: model, savedHost: nil,
+                GatewayPickerView(discovery: workspace.discovery, model: model, saved: nil,
                                   autoSelectSingle: true,
                                   onSelect: { workspace.selectGateway($0) })
             }
@@ -284,7 +284,7 @@ private struct DashboardContent: View {
             }
         }) {
             GatewayPickerView(discovery: workspace.discovery, model: model,
-                              savedHost: URL(string: homePage.url)?.host(),
+                              saved: GatewayEndpoint(origin: homePage.url),
                               autoSelectSingle: false,
                               sweepOnAppear: true,
                               onSelect: { origin in
@@ -378,6 +378,7 @@ private struct DashboardContent: View {
         // retracts (F15 §9 argues their place).
         AppBarColumn(model: tab.viewModel, controller: tab.viewModel.appBar,
                      showsSignIn: showsSignIn,
+                     pinnedForTrouble: session.originCheck == .refused,
                      onSignIn: { session.isTokenSheetPresented = true },
                      onSettings: onSettings) {
             // The node's own trouble first, in the layout rather than over it
@@ -396,6 +397,9 @@ private struct DashboardContent: View {
             if homePageAvailability == .unavailable {
                 GatewayUnreachableBanner(onSettings: onSettings,
                                          onFindGateways: { showingGatewayPicker = true })
+            }
+            if let text = session.originRefusedText {
+                OriginRefusedBanner(text: text)
             }
             // The one picker presentation lives here (F4 §4.7), so Find, Change,
             // the connecting hint's button and the error page's all go through
@@ -550,6 +554,30 @@ private struct GatewayUnreachableBanner: View {
         // own, and a UI test could not find Find (M5).
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home-page-warning-banner")
+    }
+}
+
+/// The gateway loads but refuses this page's origin on every POST and the
+/// WebSocket (F1 §4a): a dashboard served on a port its operator did not
+/// allow. Nothing in the app can fix it, so it says what to change there.
+private struct OriginRefusedBanner: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(text)
+                .font(.subheadline.weight(.medium))
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.thinMaterial)
+        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("gateway-origin-refused-banner")
     }
 }
 

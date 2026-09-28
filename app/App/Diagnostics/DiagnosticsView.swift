@@ -118,6 +118,14 @@ struct DiagnosticsView: View {
                 Row(label: "Session expires", value: cookies.map { SessionCookies.describe($0, \.refresh, now: Date()) } ?? "reading…"),
                 Row(label: "Access expires", value: cookies.map { SessionCookies.describe($0, \.access, now: Date()) } ?? "reading…"),
                 Row(label: "Last message", value: session.message ?? "—"),
+                // F1 §4a: does the gateway accept this origin on a POST?
+                Row(label: "Origin accepted", value: {
+                    switch session.originCheck {
+                    case .accepted: "yes"
+                    case .refused: "no"
+                    case .unknown: "not checked"
+                    }
+                }()),
             ]),
             Block(title: "Proxy", rows: [
                 Row(label: "Endpoint", value: workspace.manager.proxyEndpointSummary ?? "not published"),

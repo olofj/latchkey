@@ -52,6 +52,17 @@ final class SilentPage: SessionHost {
     func loadSessionURL(_ url: URL) { loaded.append(url) }
     func revealSessionBanner() {}
 
+    /// F1's origin check: recorded apart from `calls`, which the M4/R30
+    /// checks assert on, and answered with `originAnswer`.
+    private(set) var originChecks = 0
+    var originAnswer: Int?
+    func sessionFetchStatus(_ path: String, method: String, timeout: Duration?,
+                            omitCredentials: Bool) async -> Int? {
+        guard omitCredentials else { return await sessionFetchStatus(path, method: method, timeout: timeout) }
+        originChecks += 1
+        return originAnswer
+    }
+
     func sessionFetchStatus(_ path: String, method: String, timeout: Duration?) async -> Int? {
         calls.append(Call(path: path, method: method, timeout: timeout))
         guard timeout != nil else {
@@ -159,6 +170,35 @@ do {
     expect(status == 200, "the gateway's answer is returned: \(status.map(String.init) ?? "nil")")
     expect(page.calls == [SilentPage.Call(path: "/api/auth/logout", method: "POST", timeout: DashboardSignOut.requestTimeout)],
            "POST /api/auth/logout with DashboardSignOut.requestTimeout: \(page.calls)")
+}
+
+print("== the origin check (F1 §4a)")
+do {
+    let page = SilentPage()
+    page.sessionOrigin = URL(string: "https://gw.tail-scale.ts.net:8443")
+    let session = makeSession(for: page)
+    page.originAnswer = 403
+    session.navigationFinished()
+    let decided = await waitUntil({ session.originCheck != .unknown }, within: .seconds(2))
+    expect(decided && session.originCheck == .refused, "a 403 from the credential-less refresh is a refusal")
+    expect(session.originRefusedText?.contains("https://gw.tail-scale.ts.net:8443") == true
+           && session.originRefusedText?.contains("KIROCREW_CORS_ORIGINS") == true,
+           "the banner names the origin and the variable: \(session.originRefusedText ?? "nil")")
+    expect(session.message == "This gateway refuses the origin https://gw.tail-scale.ts.net:8443.",
+           "the sheet carries the first sentence: \(session.message ?? "nil")")
+    session.navigationFinished()
+    try? await Task.sleep(for: .milliseconds(100))
+    expect(page.originChecks == 1, "one check per gateway, not per load: \(page.originChecks)")
+    session.reset()
+    expect(session.originCheck == .unknown, "a new gateway is unchecked")
+    page.originAnswer = 401
+    page.sessionOrigin = URL(string: "https://gw.tail-scale.ts.net")
+    session.navigationFinished()
+    let accepted = await waitUntil({ session.originCheck == .accepted }, within: .seconds(2))
+    expect(accepted && session.originRefusedText == nil, "401 (no refresh cookie) is accepted")
+    expect(GatewayCandidates.originCheck(status: 429) == .accepted
+           && GatewayCandidates.originCheck(status: nil) == .unknown
+           && GatewayCandidates.originCheck(status: 200) == .unknown, "429 accepted; no answer or 200 decides nothing")
 }
 
 print(failures == 0 ? "\(checks)/\(checks) session manager checks passed" : "\(failures) of \(checks) session manager checks FAILED")

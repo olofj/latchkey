@@ -123,11 +123,15 @@ enum PageScriptSources {
     /// and answers nothing; every caller in the app passes a timeout
     /// (`SessionManager.checkTimeout`, `DashboardSignOut.requestTimeout`).
     /// 0 still means none, for the contract's sake, but nothing sends it.
+    /// `credentials` is `'same-origin'` unless the caller passes `'omit'`,
+    /// which only F1's origin check does: a POST that must reach the CSRF
+    /// barrier and touch no session.
     static let sessionFetch = #"""
     const controller = new AbortController();
     const timer = timeoutMs > 0 ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
     try {
-      const r = await fetch(path, {method: method, credentials: 'same-origin', cache: 'no-store',
+      const mode = (typeof credentials === 'string' && credentials === 'omit') ? 'omit' : 'same-origin';
+      const r = await fetch(path, {method: method, credentials: mode, cache: 'no-store',
                                    headers: {'X-Latchkey-Check': '1'}, signal: controller.signal});
       return r.status;
     } finally {

@@ -23,7 +23,7 @@ struct GatewayPickerView: View {
     @ObservedObject var discovery: GatewayDiscovery
     @ObservedObject var model: TSNetModel
     /// The gateway to probe first (the one already chosen, if any).
-    let savedHost: String?
+    let saved: GatewayEndpoint?
     /// Choose automatically when exactly one gateway is found.
     let autoSelectSingle: Bool
     /// Sweep on appear even if an earlier sweep finished (Find, Settings):
@@ -235,7 +235,7 @@ struct GatewayPickerView: View {
                         // Continue from where a truncated sweep stopped, so a
                         // large tailnet's tail is reachable at all; a finished
                         // sweep starts over as before (F7 §4.3).
-                        discovery.start(savedHost: savedHost, shownAt: .now,
+                        discovery.start(saved: saved, shownAt: .now,
                                         continueFrom: discovery.sweepTruncated
                                             ? discovery.nextCandidateIndex : 0)
                     } label: {
@@ -305,12 +305,12 @@ struct GatewayPickerView: View {
         }
         .onAppear {
             shownAt = .now
-            if sweepOnAppear, ready { discovery.start(savedHost: savedHost, shownAt: shownAt) }
+            if sweepOnAppear, ready { discovery.start(saved: saved, shownAt: shownAt) }
         }
         // Start once the node has a status and a proxy to probe through.
         .task(id: ready) {
             if ready, discovery.phase == .idle {
-                discovery.start(savedHost: savedHost, shownAt: shownAt)
+                discovery.start(saved: saved, shownAt: shownAt)
             }
         }
         // Nothing outlives the picker: a sweep it no longer shows is stopped.
@@ -320,7 +320,7 @@ struct GatewayPickerView: View {
         // again when the peer list changes after an empty sweep.
         .onChange(of: model.localStatus?.Peer?.count ?? 0) { _, _ in
             if discovery.phase == .finished, discovery.candidateCount == 0 {
-                discovery.start(savedHost: savedHost, shownAt: shownAt)
+                discovery.start(saved: saved, shownAt: shownAt)
             }
         }
         .onChange(of: discovery.phase) { _, phase in

@@ -171,14 +171,14 @@ final class GatewayDiscovery: ObservableObject {
     ///   at (F7 §4.3). *Search again* passes `nextCandidateIndex` after a
     ///   truncated sweep and 0 otherwise; restarting from the top could never
     ///   reach the tail of a large tailnet however many times it was tapped.
-    func start(savedHost: String?, shownAt: ContinuousClock.Instant? = nil,
+    func start(saved: GatewayEndpoint?, shownAt: ContinuousClock.Instant? = nil,
                continueFrom: Int = 0) {
         run?.cancel()
         generation += 1
         let mine = generation
         self.shownAt = shownAt
         run = Task { [weak self] in
-            await self?.sweep(savedHost: savedHost, generation: mine, continueFrom: continueFrom)
+            await self?.sweep(saved: saved, generation: mine, continueFrom: continueFrom)
         }
     }
 
@@ -249,7 +249,7 @@ final class GatewayDiscovery: ObservableObject {
         case deadline
     }
 
-    private func sweep(savedHost: String?, generation mine: Int, continueFrom: Int = 0) async {
+    private func sweep(saved: GatewayEndpoint?, generation mine: Int, continueFrom: Int = 0) async {
         // A continuation keeps what the chain already established: the gateways
         // an earlier sweep found — they must not vanish from the picker on the
         // tap meant to find *more* — and which candidates already have a
@@ -285,7 +285,7 @@ final class GatewayDiscovery: ObservableObject {
         let policy = model.proxyPolicy
         let split = GatewayCandidates.selectWithSkipped(peers,
                                                         selfUserID: status.SelfStatus?.UserID,
-                                                        savedHost: savedHost)
+                                                        savedHost: saved?.host)
         let ordered = split.probe.filter { policy?.matchingRule(for: $0.host) != nil }
         skipped = split.skipped.filter { policy?.matchingRule(for: $0.host) != nil }
         // Resume where the last sweep ran out of time, but always keep the
@@ -350,7 +350,7 @@ final class GatewayDiscovery: ObservableObject {
             while inFlight < Self.concurrency, cursor < plan.count {
                 let next = plan[cursor].peer
                 cursor += 1
-                group.addTask { await Self.probe(next.host, session: session) }
+                group.addTask { await Self.probe(next.host, ports: GatewayEndpoint.ports(for: next.host, saved: saved), session: session) }
                 inFlight += 1
             }
             while let outcome = await group.next() {
@@ -388,7 +388,7 @@ final class GatewayDiscovery: ObservableObject {
                 if !pastDeadline, !Task.isCancelled, cursor < plan.count {
                     let next = plan[cursor].peer
                     cursor += 1
-                    group.addTask { await Self.probe(next.host, session: session) }
+                    group.addTask { await Self.probe(next.host, ports: GatewayEndpoint.ports(for: next.host, saved: saved), session: session) }
                     inFlight += 1
                 }
                 if inFlight == 0 { group.cancelAll() }
@@ -466,9 +466,10 @@ final class GatewayDiscovery: ObservableObject {
     /// host silent on all of them has failed. A port nothing listens on is
     /// refused at once by tsnet, so the second port costs a round trip, not a
     /// timeout.
-    nonisolated private static func probe(_ host: String, session: URLSession) async -> Outcome {
+    nonisolated private static func probe(_ host: String, ports: [Int] = GatewayEndpoint.standardPorts,
+                                          session: URLSession) async -> Outcome {
         let verdicts = await withTaskGroup(of: (Int, PortVerdict).self) { group in
-            for port in GatewayEndpoint.standardPorts {
+            for port in ports {
                 group.addTask { (port, await Self.probe(host, port: port, session: session)) }
             }
             var all: [(Int, PortVerdict)] = []

@@ -52,6 +52,9 @@ protocol SessionHost: AnyObject {
     /// with the page's cookies (PageScriptSources.sessionFetch). Nil when
     /// there is no page to ask, or none within `timeout` (nil: wait).
     func sessionFetchStatus(_ path: String, method: String, timeout: Duration?) async -> Int?
+    /// The same, with `credentials: 'omit'` when asked (F1's origin check).
+    func sessionFetchStatus(_ path: String, method: String, timeout: Duration?,
+                            omitCredentials: Bool) async -> Int?
     /// Removes the bridge's banner-hiding style (the R22 fallback).
     func revealSessionBanner()
 }
@@ -92,6 +95,12 @@ final class SessionManager: NSObject, ObservableObject {
     /// The last thing worth telling the user on the sheet, if any.
     @Published private(set) var message: String?
     @Published private(set) var isRedeeming = false
+    /// Whether the gateway accepts this page's origin on a mutating request
+    /// (F1 §4a): a gateway served on another port than it was configured for
+    /// loads, then refuses every POST and the WebSocket.
+    @Published private(set) var originCheck: GatewayCandidates.OriginCheck = .unknown
+    /// The origin `originCheck` was decided for; one check per gateway.
+    private var originCheckedFor: String?
 
     /// The content world the bridge runs in. The page cannot reach its
     /// message handler.
@@ -156,6 +165,35 @@ final class SessionManager: NSObject, ObservableObject {
         state = .unknown
         isTokenSheetPresented = false
         authGeneration += 1
+        originCheck = .unknown
+        originCheckedFor = nil
+    }
+
+    /// The owner-facing text when the gateway refuses this origin (F1 §2).
+    var originRefusedText: String? {
+        guard originCheck == .refused, let origin = host?.sessionOrigin.flatMap({
+            GatewayEndpoint(origin: $0.absoluteString)?.origin }) else { return nil }
+        return GatewayCandidates.originRefusedText(origin: origin)
+    }
+
+    /// Asks the gateway, once per gateway document, whether it accepts the
+    /// page's Origin: `POST /api/auth/refresh` without credentials, so no
+    /// session is rotated or read; only the CSRF barrier decides (F1 §4a B).
+    private func checkOrigin() async {
+        guard let host, let origin = host.sessionOrigin?.absoluteString,
+              originCheckedFor != origin else { return }
+        originCheckedFor = origin
+        let status = await host.sessionFetchStatus("/api/auth/refresh", method: "POST",
+                                                   timeout: .seconds(10), omitCredentials: true)
+        guard originCheckedFor == origin else { return }
+        let verdict = GatewayCandidates.originCheck(status: status)
+        guard verdict != .unknown else { originCheckedFor = nil; return }
+        originCheck = verdict
+        logger.log("Session: origin check at \(origin): \(verdict == .accepted ? "accepted" : "refused") (HTTP \(status.map(String.init) ?? "-"))")
+        if verdict == .refused, message == nil, let text = originRefusedText {
+            // The first sentence: the origin holds dots, so end at ". ".
+            message = text.range(of: ". ").map { String(text[..<$0.lowerBound]) + "." } ?? text
+        }
     }
 
     /// Asks the gateway to end the session (R32), as the page: the refresh
@@ -220,6 +258,7 @@ final class SessionManager: NSObject, ObservableObject {
     }
 
     func navigationFinished() {
+        Task { await checkOrigin() }
         if redemption != nil {
             Task { await verify(afterRedemption: true) }
         } else if state != .active {

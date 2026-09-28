@@ -32,7 +32,7 @@ struct ShareDestinationView: View {
             Group {
                 if delivery.choosingGateway, let workspace = delivery.workspaceForPicker {
                     GatewayPickerView(discovery: workspace.discovery, model: workspace.model,
-                                      savedHost: delivery.gatewayHost,
+                                      saved: delivery.gatewayHost.flatMap { GatewayEndpoint(host: $0) },
                                       autoSelectSingle: false,
                                       sweepOnAppear: true,
                                       onSelect: { delivery.chooseGateway($0) },

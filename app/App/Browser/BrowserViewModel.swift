@@ -1524,13 +1524,19 @@ extension BrowserViewModel: SessionHost {
     }
 
     func sessionFetchStatus(_ path: String, method: String, timeout: Duration?) async -> Int? {
+        await sessionFetchStatus(path, method: method, timeout: timeout, omitCredentials: false)
+    }
+
+    func sessionFetchStatus(_ path: String, method: String, timeout: Duration?,
+                            omitCredentials: Bool) async -> Int? {
         guard let webView else { return nil }
         do {
             // Whole seconds are all the callers use; 0 means no abort.
             let timeoutMs = timeout.map { Int($0.components.seconds) * 1000 } ?? 0
             let result = try await webView.callAsyncJavaScript(
                 PageScriptSources.sessionFetch,
-                arguments: ["path": path, "method": method, "timeoutMs": timeoutMs],
+                arguments: ["path": path, "method": method, "timeoutMs": timeoutMs,
+                            "credentials": omitCredentials ? "omit" : "same-origin"],
                 in: nil, contentWorld: SessionManager.world)
             return (result as? NSNumber)?.intValue
         } catch {

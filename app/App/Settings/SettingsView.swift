@@ -162,7 +162,7 @@ struct SettingsView: View {
         }) {
             GatewayPickerView(discovery: viewModel.workspaceForSettings.discovery,
                               model: viewModel.workspaceForSettings.model,
-                              savedHost: URL(string: viewModel.homePage)?.host(),
+                              saved: GatewayEndpoint(origin: viewModel.homePage),
                               autoSelectSingle: false,
                               sweepOnAppear: true,
                               onSelect: { origin in

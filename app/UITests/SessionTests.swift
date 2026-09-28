@@ -107,6 +107,63 @@ final class SessionTests: XCTestCase {
         let logs = try AppContainer.logFiles(containing: "fk1.")
         XCTAssertGreaterThan(logs.read, 0, "the app's log files were read")
         XCTAssertEqual(logs.hits, [], "no sign-in link in the app's log files")
+        // F1 §4a, the negative control: on 443 the origin check passes the
+        // CSRF barrier (a 401), so nothing is refused and no banner shows.
+        let state = try await gatewayState()
+        let requests = state["requests"] as? [String] ?? []
+        XCTAssertTrue(requests.contains("POST /api/auth/refresh"), "the origin check ran: \(requests.suffix(8))")
+        XCTAssertEqual(counter(state, "csrf_denials"), 0, "and 443's origin is accepted")
+        XCTAssertFalse(element(app, "gateway-origin-refused-banner").exists, "no refusal banner on 443")
+    }
+
+    // MARK: - F1 §4a: a gateway on 8443 and its origin allowlist
+
+    static let portedGateway = "https://gw.tail-scale.ts.net:8443"
+
+    /// The gateway allows only its portless origin, as KiroCrew 0.6.0 does:
+    /// the page loads, and the app says why it will not work.
+    func testAGatewayThatRefusesThePortedOriginSaysSo() async throws {
+        let app = launch(homePage: Self.portedGateway)
+        defer { app.terminate() }
+        let banner = element(app, "gateway-origin-refused-banner")
+        XCTAssertTrue(banner.appears(within: 30), "the refusal is shown, not hidden")
+        XCTAssertTrue(banner.label.contains(Self.portedGateway) && banner.label.contains("KIROCREW_CORS_ORIGINS"),
+                      "it names the origin and the fix: \(banner.label)")
+        let state = try await gatewayState()
+        XCTAssertGreaterThanOrEqual(counter(state, "csrf_denials"), 1, "the gateway did refuse the origin")
+        XCTAssertGreaterThanOrEqual(counter(state, "shell_loads"), 1, "while the page itself loaded")
+        let sheet = element(app, "token-sheet")
+        if sheet.appears(within: 5) {
+            XCTAssertEqual(element(app, "token-sheet-message").label,
+                           "This gateway refuses the origin \(Self.portedGateway).", "the sheet says it too")
+            element(app, "token-sheet-close").tapWhenSettled(in: app)
+            XCTAssertTrue(sheet.disappears(within: 10))
+        }
+        let list = app.openStatus()
+        let row = app.statusRow("diag-origin-accepted", in: list)
+        XCTAssertTrue(row.hasSuffix("no"), "Status says so: \(row)")
+    }
+
+    /// With the ported origin allowed (the operator set the variable), sign-in
+    /// works through 8443 and the live connection opens.
+    func testASignInThroughAPortedOriginWorksWhenTheGatewayAllowsIt() async throws {
+        _ = try await Self.post("\(Self.gatewayControl)/__config?allow_origin=https%3A%2F%2Fgw.tail-scale.ts.net%3A8443")
+        let app = launch(homePage: Self.portedGateway)
+        defer { app.terminate() }
+        XCTAssertTrue(element(app, "token-sheet").appears(within: 30), "the ported gateway asks for a token")
+        let target = element(app, "token-sheet-target").label
+        XCTAssertTrue(target.hasSuffix("\(Self.gatewayHost):8443"), "the sheet names the port: \(target)")
+        try await signIn(app, kind: "cli")
+        var ws = 0
+        for _ in 0..<40 where ws == 0 {
+            try await Task.sleep(for: .milliseconds(500))
+            ws = counter(try await gatewayState(), "ws_opens")
+        }
+        XCTAssertGreaterThanOrEqual(ws, 1, "the real bundle opened its WebSocket through the ported origin")
+        XCTAssertFalse(element(app, "gateway-origin-refused-banner").exists, "no refusal banner")
+        let list = app.openStatus()
+        let row = app.statusRow("diag-origin-accepted", in: list)
+        XCTAssertTrue(row.hasSuffix("yes"), "Status says the origin is accepted: \(row)")
     }
 
     /// R22's fallback, and the positive control for the hidden-banner check:
@@ -952,10 +1009,11 @@ final class SessionTests: XCTestCase {
 
     /// `reset` false relaunches the SAME workspace -- its data store, cookies
     /// and all -- as a user reopening the app does (R32's tests).
-    private func launch(extra: [String] = [], reset: Bool = true, peers: [String] = ["gw"]) -> XCUIApplication {
+    private func launch(extra: [String] = [], reset: Bool = true, peers: [String] = ["gw"],
+                        homePage: String = SessionTests.gateway) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = (reset ? ["-UITestResetWorkspaces"] : []) + [
-            "-UITestHomePage", Self.gateway,
+            "-UITestHomePage", homePage,
             "-TestStatusFixture", OfflineHarnessTests.fixture(suffix: "tail-scale.ts.net", peers: peers),
             "-TestProxyEndpoint", OfflineHarnessTests.proxyEndpoint,
             "-TestProxyCredential", OfflineHarnessTests.proxyCredential,

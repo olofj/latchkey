@@ -86,6 +86,15 @@ nonisolated struct GatewayEndpoint: Hashable, Sendable, Identifiable {
         self.init(host: host, port: parts.port ?? Self.standardPort)
     }
 
+    /// The ports to probe `host` on: the saved gateway's own port first when
+    /// it is this host's and not a standard one (F1 §4.2), then the
+    /// standard ports, since its owner may have moved it.
+    static func ports(for host: String, saved: GatewayEndpoint?) -> [Int] {
+        guard let saved, saved.host == GatewayEndpoint(host: host)?.host,
+              !standardPorts.contains(saved.port) else { return standardPorts }
+        return [saved.port] + standardPorts
+    }
+
     var id: String { "\(host):\(port)" }
     /// `https://host` for 443, `https://host:port` otherwise.
     var origin: String { "https://\(displayName)" }
@@ -186,6 +195,31 @@ enum GatewayCandidates {
     /// look-alike manifest alone is not enough.
     nonisolated static func authProbeIsKiroCrew(status: Int, authRequiredHeader: String?) -> Bool {
         status == 403 && authRequiredHeader?.lowercased() == "true"
+    }
+
+    // MARK: - The origin check (F1 §4a B)
+
+    enum OriginCheck: Equatable, Sendable {
+        case unknown, accepted, refused
+    }
+
+    /// A credential-less `POST /api/auth/refresh` from the page: 401 (no
+    /// refresh cookie) or 429 (the shared rate bucket) got past the CSRF
+    /// barrier, so the origin is accepted; 403 is the barrier refusing it.
+    /// Anything else, or no answer, decides nothing.
+    nonisolated static func originCheck(status: Int?) -> OriginCheck {
+        switch status {
+        case 401, 429: return .accepted
+        case 403: return .refused
+        default: return .unknown
+        }
+    }
+
+    /// What the owner reads when the gateway refuses `origin` (F1 §2).
+    static func originRefusedText(origin: String) -> String {
+        "This gateway refuses the origin \(origin). It will load but not work: no live updates, "
+            + "and sign-in will not last. On the gateway, set KIROCREW_CORS_ORIGINS=\(origin) and restart it, "
+            + "or serve on 443."
     }
 
     // MARK: - Manual entry (M5.3)

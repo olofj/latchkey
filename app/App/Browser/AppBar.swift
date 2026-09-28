@@ -31,6 +31,10 @@ struct AppBarColumn<Content: View>: View {
     @ObservedObject var model: BrowserViewModel
     @ObservedObject var controller: AppBarController
     let showsSignIn: Bool
+    /// Keep the bar on screen for a reason other than sign-in: the gateway
+    /// refusing this origin (F1 §4a) leaves the page inert, and the gear is
+    /// then the owner's only way out.
+    var pinnedForTrouble = false
     let onSignIn: () -> Void
     let onSettings: () -> Void
     @ViewBuilder let content: Content
@@ -51,7 +55,7 @@ struct AppBarColumn<Content: View>: View {
         .pageBackgroundInstrument(model)
         .animation(AppBar.animation(reduceMotion: reduceMotion), value: controller.retracted)
         // The sign-in button must not be scrolled away: it is the only one.
-        .onChange(of: showsSignIn, initial: true) { _, pinned in
+        .onChange(of: showsSignIn || pinnedForTrouble, initial: true) { _, pinned in
             controller.setPinned(pinned)
         }
     }

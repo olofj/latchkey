@@ -160,7 +160,7 @@ struct GatewaySwitcherRows: View {
         guard !pickerShown, !others.isEmpty, model.proxyConfiguration != nil,
               discovery.phase != .probing else { return }
         // Shown now, like the picker: R26's first-result budget holds here too.
-        discovery.start(savedHost: URL(string: current)?.host(), shownAt: .now)
+        discovery.start(saved: GatewayEndpoint(origin: current), shownAt: .now)
         sweeping = true
     }
 
