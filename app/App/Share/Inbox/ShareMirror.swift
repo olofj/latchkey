@@ -52,6 +52,28 @@ nonisolated struct ShareSession: Codable, Identifiable, Equatable, Sendable {
         }
         .sorted { $0.lastActivity > $1.lastActivity }
     }
+
+    /// The share order (issue #5): the sessions shared to, most recent
+    /// share first, then the rest by the gateway's activity. Activity alone
+    /// moves with every turn run anywhere, so it cannot say what the owner
+    /// last shared to.
+    static func shareOrdered(_ sessions: [ShareSession], sharedAt: (String) -> Date?) -> [ShareSession] {
+        sessions.enumerated().sorted { a, b in
+            switch (sharedAt(a.element.key), sharedAt(b.element.key)) {
+            case let (x?, y?) where x != y: return x > y
+            case (.some, nil): return true
+            case (nil, .some): return false
+            default: return a.offset < b.offset
+            }
+        }.map(\.element)
+    }
+
+    /// The keys whose title and folder another session on the same gateway
+    /// also has: their rows would read identically, so they name the key.
+    static func ambiguousKeys(_ sessions: [ShareSession]) -> Set<String> {
+        let groups = Dictionary(grouping: sessions) { "\($0.title)\u{0}\($0.folder ?? "")" }
+        return Set(groups.values.filter { $0.count > 1 }.flatMap { $0.map(\.key) })
+    }
 }
 
 nonisolated struct ShareMirror: Codable, Equatable, Sendable {
@@ -67,13 +89,29 @@ nonisolated struct ShareMirror: Codable, Equatable, Sendable {
 
     struct Gateway: Codable, Equatable, Sendable {
         var origin: String
-        /// The host, for the drop-down.
+        /// The host, and its port when the origin has one, for the drop-down.
         var label: String
         var fetchedAt: Date
         var sessions: [ShareSession]
         var lastDestination: Destination?
+        /// When each listed session was last shared to (issue #5). Optional
+        /// so a mirror written before it still decodes; pruned to the
+        /// listed sessions at every listing, which is its only bound.
+        var sharedAt: [String: Date]?
 
         func isStale(now: Date) -> Bool { now.timeIntervalSince(fetchedAt) > ShareMirror.staleAfter }
+
+        /// A mirror from before `sharedAt` still knows its last destination.
+        func sharedAt(_ key: String) -> Date? {
+            sharedAt?[key] ?? (lastDestination?.slotKey == key ? lastDestination?.at : nil)
+        }
+    }
+
+    /// `host[:port]`: two gateways on one host differ only by port, so a
+    /// label without it can name two origins at once.
+    static func hostLabel(origin: String) -> String {
+        guard let url = URL(string: origin), let host = url.host else { return origin }
+        return url.port.map { "\(host):\($0)" } ?? host
     }
 
     var version: Int = ShareMirror.currentVersion
@@ -85,16 +123,22 @@ nonisolated struct ShareMirror: Codable, Equatable, Sendable {
 
     /// Replaces `origin`'s entry with a fresh listing and makes it current.
     mutating func record(origin: String, label: String, sessions: [ShareSession], at now: Date) {
-        let last = gateway(origin)?.lastDestination
+        let previous = gateway(origin)
+        let listed = Set(sessions.map(\.key))
+        let shared = previous?.sharedAt?.filter { listed.contains($0.key) }
         gateways.removeAll { $0.origin == origin }
-        gateways.insert(Gateway(origin: origin, label: label, fetchedAt: now,
-                                sessions: sessions, lastDestination: last), at: 0)
+        gateways.insert(Gateway(origin: origin, label: label, fetchedAt: now, sessions: sessions,
+                                lastDestination: previous?.lastDestination,
+                                sharedAt: shared?.isEmpty == false ? shared : nil), at: 0)
         current = origin
     }
 
     mutating func remember(origin: String, _ destination: Destination) {
         guard let i = gateways.firstIndex(where: { $0.origin == origin }) else { return }
         gateways[i].lastDestination = destination
+        let was = gateways[i].sharedAt?[destination.slotKey] ?? .distantPast
+        gateways[i].sharedAt = (gateways[i].sharedAt ?? [:])
+            .merging([destination.slotKey: max(was, destination.at)]) { $1 }
     }
 
     /// Drops every gateway not in `origins` (F18 §6.1: a gateway's entry
@@ -134,6 +178,47 @@ nonisolated struct ShareMirror: Codable, Equatable, Sendable {
     func offered(now: Date) -> [Gateway] {
         gateways.filter { !$0.isStale(now: now) }
             .sorted { a, b in (a.origin == current ? 0 : 1) < (b.origin == current ? 0 : 1) }
+    }
+
+    /// One row of the drop-down.
+    struct Offer: Equatable, Sendable {
+        let gateway: Gateway
+        let session: ShareSession
+        /// The one session shared to most recently, on any gateway.
+        let isLast: Bool
+        /// More than one gateway is offered: the row names its host.
+        let namesGateway: Bool
+        /// Another session on its gateway has the same title and folder:
+        /// the row names its key.
+        let namesKey: Bool
+    }
+
+    /// Every fresh gateway's sessions as ONE list (issue #5): the sessions
+    /// shared to, most recent share first, whichever gateway they are on;
+    /// then the rest by the gateway's activity. Which gateway the app last
+    /// listed does not move anything: the foreground re-list would otherwise
+    /// outrank a share that went to another gateway.
+    func offers(now: Date) -> [Offer] {
+        let fresh = offered(now: now)
+        let several = fresh.count > 1
+        let pairs = fresh.flatMap { g in g.sessions.map { (g, $0) } }
+        let sorted = pairs.enumerated().sorted { a, b in
+            let (x, y) = (a.element.0.sharedAt(a.element.1.key), b.element.0.sharedAt(b.element.1.key))
+            switch (x, y) {
+            case let (x?, y?) where x != y: return x > y
+            case (.some, nil): return true
+            case (nil, .some): return false
+            default:
+                let (p, q) = (a.element.1.lastActivity, b.element.1.lastActivity)
+                return p != q ? p > q : a.offset < b.offset
+            }
+        }.map(\.element)
+        let last = sorted.first.flatMap { $0.0.sharedAt($0.1.key) != nil ? "\($0.0.origin) \($0.1.key)" : nil }
+        let ambiguous = Dictionary(uniqueKeysWithValues: fresh.map { ($0.origin, ShareSession.ambiguousKeys($0.sessions)) })
+        return sorted.map { g, s in
+            Offer(gateway: g, session: s, isLast: "\(g.origin) \(s.key)" == last, namesGateway: several,
+                  namesKey: ambiguous[g.origin]?.contains(s.key) == true)
+        }
     }
 
     private struct Header: Decodable { let version: Int? }

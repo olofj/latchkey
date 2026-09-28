@@ -353,6 +353,57 @@ mixed.current = "https://chonk.ts.net"
 expect(mixed.offered(now: fresh).map(\.label) == ["chonk", "a"], "the current gateway comes first")
 expect(ShareMirror.emptyReason(mixed, now: fresh) == nil, "another gateway's sessions are enough")
 
+print("== The share order and labels (issue #5)")
+func sess(_ key: String, _ title: String, folder: String? = nil, at: Double) -> ShareSession {
+    ShareSession(key: key, title: title, folder: folder, running: false, queueDepth: 0, lastActivity: at)
+}
+let aOrigin = "https://a.ts.net", bOrigin = "https://b.ts.net:8443"
+var two = ShareMirror()
+two.record(origin: bOrigin, label: "b", sessions: [sess("b1", "Beta", at: 50), sess("b2", "Bravo", at: 40)], at: now)
+two.remember(origin: bOrigin, .init(slotKey: "b2", slotTitle: "Bravo", at: now))
+// The foreground re-list of gateway a, after the share to b: a is current.
+two.record(origin: aOrigin, label: "a",
+           sessions: [sess("a1", "Alpha", at: 900), sess("a2", "Apple", at: 800)], at: now.addingTimeInterval(5))
+let keysOf = { (m: ShareMirror) in m.offers(now: fresh).map { "\($0.session.key)" } }
+expect(two.current == aOrigin, "the re-list made a current")
+expect(keysOf(two) == ["b2", "a1", "a2", "b1"],
+       "the last share target first across gateways, then activity, not a's listing first: \(keysOf(two))")
+expect(two.offers(now: fresh).filter(\.isLast).map(\.session.key) == ["b2"], "one last-time row")
+two.remember(origin: aOrigin, .init(slotKey: "a2", slotTitle: "Apple", at: now.addingTimeInterval(20)))
+two.remember(origin: bOrigin, .init(slotKey: "b1", slotTitle: "Beta", at: now.addingTimeInterval(10)))
+expect(keysOf(two) == ["a2", "b1", "b2", "a1"], "most recent share first, the older ones after it: \(keysOf(two))")
+expect(two.offers(now: fresh).filter(\.isLast).map(\.session.key) == ["a2"],
+       "still one last-time row with a last destination on each gateway")
+two.record(origin: bOrigin, label: "b", sessions: [sess("b1", "Beta", at: 50)], at: now.addingTimeInterval(30))
+expect(two.gateway(bOrigin)?.sharedAt == ["b1": now.addingTimeInterval(10)],
+       "a session that went is pruned from the share times: \(two.gateway(bOrigin)?.sharedAt ?? [:])")
+// A mirror written before the share times: its last destination still leads.
+var old = ShareMirror()
+old.gateways = [ShareMirror.Gateway(origin: aOrigin, label: "a", fetchedAt: now,
+                                    sessions: [sess("a1", "Alpha", at: 900), sess("a2", "Apple", at: 800)],
+                                    lastDestination: .init(slotKey: "a2", slotTitle: "Apple", at: now))]
+var oldJSON = try! JSONSerialization.jsonObject(with: try! old.encoded()) as! [String: Any]
+var oldGateways = oldJSON["gateways"] as! [[String: Any]]
+oldGateways[0].removeValue(forKey: "sharedAt")
+oldJSON["gateways"] = oldGateways
+let oldDecoded = ShareMirror.decode(try! JSONSerialization.data(withJSONObject: oldJSON))
+expect(oldDecoded.map(keysOf) == ["a2", "a1"], "a mirror without share times decodes and orders by its last destination")
+expect(ShareSession.shareOrdered([sess("x", "X", at: 3), sess("y", "Y", at: 2), sess("z", "Z", at: 1)]) {
+           ["z": now, "y": now.addingTimeInterval(-60)][$0] }.map(\.key) == ["z", "y", "x"],
+       "the picker's order: shared to, most recent first, then the listing's own order")
+// Labels: the host with its port when several gateways are offered, and the
+// key when a title and folder repeat on one gateway.
+expect(ShareMirror.hostLabel(origin: bOrigin) == "b.ts.net:8443" && ShareMirror.hostLabel(origin: aOrigin) == "a.ts.net",
+       "the port is named when the origin has one")
+var twins = ShareMirror()
+twins.record(origin: aOrigin, label: "a", sessions: [sess("k1", "Inbox", folder: "Notes", at: 3),
+                                                     sess("k2", "Inbox", folder: "Notes", at: 2),
+                                                     sess("k3", "Inbox", folder: "Work", at: 1)], at: now)
+let twinOffers = twins.offers(now: fresh)
+expect(twinOffers.filter(\.namesKey).map(\.session.key) == ["k1", "k2"] && !twinOffers.contains(where: \.namesGateway),
+       "same title and folder name their keys; a different folder is enough; one gateway is not named")
+expect(two.offers(now: fresh).allSatisfy(\.namesGateway), "several gateways: every row names its host")
+
 // On disk: the group container when there is one, else the app's own;
 // atomic, and gone with the test reset.
 let mirrorTmp = FileManager.default.temporaryDirectory.appending(path: "share-mirror-\(UUID().uuidString)")

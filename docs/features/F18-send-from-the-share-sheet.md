@@ -247,7 +247,14 @@ one moment in the flow.
   "obsidian · chonk ▾", a note, *Queue*. B and C: the Shortcut's prompt with
   the sessions listed.
 - **The drop-down open.** The sessions, newest activity first, with folder
-  and a running badge (the F3 §4.7 fields). The gateway is a section header
+  and a running badge (the F3 §4.7 fields). *Revised 2026-09-27 (issue
+  #5):* one list across gateways, the sessions shared to first (most
+  recent share first, from the mirror's per-session `sharedAt`), then the
+  rest by activity; which gateway the app last listed moves nothing. One
+  row is marked "last time". The subtitle is `host[:port] · folder · key
+  · busy · last time`: the host when more than one gateway is offered,
+  with its port when the origin has one, and the key only when another
+  session on that gateway has the same title and folder. The gateway is a section header
   when there is more than one known gateway. A footer reads "As of 14:02,
   when Latchkey was last open".
 - **Empty list.** There are three cases, each in its own words:

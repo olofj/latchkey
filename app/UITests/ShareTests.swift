@@ -419,30 +419,37 @@ final class ShareTests: XCTestCase {
     /// foreground, which shows the picker with the "queued for" line and
     /// posts nothing. Shown able to fail by skipping the verify in
     /// `deliver`: the post to the unlisted key is a recorded violation.
+    ///
+    /// The picker lists the session shared to first (issue #5): `notes`
+    /// has the older activity of the two left, so activity order puts it
+    /// second. Shown able to fail by listing in `ShareSession.list`'s
+    /// activity order, as before: `plan` is then above it.
     func testTheIntentDeliversInProcessWithoutASheetAndHandsOverWhenTheSessionIsGone() async throws {
         var app = try await launchSignedIn()
         app.terminate()
         // Signed in from the last launch: the cookie is in the kept web data.
-        app = launch(seed: "pdf:1024:dest=obsidian", reset: false, intent: true)
+        app = launch(seed: "pdf:1024:dest=notes", reset: false, intent: true)
         let awaited = try await lastResult(app, timeout: 60)
-        XCTAssertEqual(awaited, "sent:obsidian")
+        XCTAssertEqual(awaited, "sent:notes")
         XCTAssertFalse(element(app, "share-picker").exists, "no picker")
         XCTAssertFalse(element(app, "share-delivery").exists, "no sheet at all: the run was in-process")
         var state = try await gatewayState()
         XCTAssertEqual(counter(state, "share_posts"), 1)
         XCTAssertEqual(violations(state), 0, "\(state["violations"] ?? [])")
         let navs = state["navigations"] as? [[String: Any]] ?? []
-        XCTAssertTrue(navs.contains { $0["sid"] as? String == "obsidian" }, "the page was moved to the session: \(navs)")
+        XCTAssertTrue(navs.contains { $0["sid"] as? String == "notes" }, "the page was moved to the session: \(navs)")
         XCTAssertEqual(inboxCount(app), 0)
         app.terminate()
 
-        _ = try await Self.post("\(Self.gatewayControl)/__slots?keys=notes,plan")
+        _ = try await Self.post("\(Self.gatewayControl)/__slots?keys=plan,notes")
         app = launch(seed: "pdf:1024:dest=obsidian", reset: false, intent: true)
         defer { app.terminate() }
         XCTAssertTrue(element(app, "share-session-notes").appears(within: 45), "handed over: the picker comes up")
         let notice = element(app, "share-notice")
         XCTAssertTrue(notice.exists && notice.label.contains("obsidian"), "the owner is told which session went: \(notice.label)")
         XCTAssertEqual(element(app, "share-destination-selected").label, "none")
+        let notesY = element(app, "share-session-notes").frame.minY, planY = element(app, "share-session-plan").frame.minY
+        XCTAssertLessThan(notesY, planY, "the session shared to is listed first, above newer activity")
         state = try await gatewayState()
         XCTAssertEqual(counter(state, "share_posts"), 1, "nothing more was posted")
         XCTAssertEqual(violations(state), 0, "no post to the stale key: \(state["violations"] ?? [])")

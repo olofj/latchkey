@@ -392,7 +392,7 @@ else
         if python3 - "$MIRROR" <<'EOF'
 import json, sys
 m = json.load(open(sys.argv[1]))
-allowed_gw = {"origin", "label", "fetchedAt", "sessions", "lastDestination"}
+allowed_gw = {"origin", "label", "fetchedAt", "sessions", "lastDestination", "sharedAt"}
 allowed_s = {"key", "title", "folder", "running", "queueDepth", "lastActivity"}
 assert m.get("version") == 1, "version %r" % m.get("version")
 assert m.get("gateways"), "no gateway listed"
@@ -400,6 +400,10 @@ for g in m["gateways"]:
     extra = set(g) - allowed_gw
     assert not extra, "unexpected gateway fields %s" % extra
     assert g["origin"].startswith("https://"), g["origin"]
+    # Issue #5's share times: listed keys to dates, nothing else.
+    shared = g.get("sharedAt") or {}
+    assert set(shared) <= {s["key"] for s in g["sessions"]}, "share times for unlisted keys %s" % shared
+    assert all(isinstance(v, (int, float)) for v in shared.values()), shared
     for s in g["sessions"]:
         extra = set(s) - allowed_s
         assert not extra, "unexpected session fields %s" % extra

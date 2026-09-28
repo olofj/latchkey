@@ -464,7 +464,11 @@ obeying the one-sheet rule (it waits for Settings or the sign-in sheet):
   "Change gateway…" which runs the existing `GatewayPickerView` →
   `workspace.selectGateway` and then waits for the new page to sign in;
 - the list from §4.5 step 1: title (or key when untitled), folder, a
-  running/queued badge; accessibility ids `share-picker`, `share-session-<key>`,
+  running/queued badge. **Order (issue #5, 2026-09-27):** the sessions
+  shared to first, most recent share first (the mirror's `sharedAt`,
+  F18 §6.1), then the rest by the gateway's `last_activity_ts`. A row
+  whose title and folder another row also has shows its key in the
+  caption. Accessibility ids `share-picker`, `share-session-<key>`,
   `share-destination-selected` (label = key), `share-note`, `share-send`,
   `share-result` (label = `sent:<key>` | `queued:<key>` | `failed:<reason>`),
   `share-cancel`;

@@ -63,7 +63,7 @@ struct ShareDestinationView: View {
                     }
                 }
                 if let elsewhere = delivery.elsewhere {
-                    Button("Last time: \(elsewhere.title) on \(URL(string: elsewhere.origin)?.host ?? elsewhere.origin) — switch?") {
+                    Button("Last time: \(elsewhere.title) on \(ShareMirror.hostLabel(origin: elsewhere.origin)) — switch?") {
                         delivery.chooseGateway(elsewhere.origin)
                     }
                     .font(.footnote)
@@ -194,6 +194,7 @@ struct ShareDestinationView: View {
                 Text("No sessions on this gateway. Start one in the dashboard first.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
+            let ambiguous = ShareSession.ambiguousKeys(delivery.sessions)
             ForEach(delivery.sessions) { session in
                 Button {
                     delivery.selectedKey = session.key
@@ -201,8 +202,10 @@ struct ShareDestinationView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(session.title).foregroundStyle(.primary)
-                            if let folder = session.folder {
-                                Text(folder).font(.caption).foregroundStyle(.secondary)
+                            let caption = [session.folder, ambiguous.contains(session.key) ? session.key : nil]
+                                .compactMap { $0 }.joined(separator: " · ")
+                            if !caption.isEmpty {
+                                Text(caption).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         Spacer()

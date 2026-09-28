@@ -49,27 +49,32 @@ nonisolated struct ShareDestinationEntity: AppEntity {
     let slotTitle: String
     let folder: String?
     let running: Bool
-    /// The last session shared to on its gateway: offered first.
+    /// The session shared to most recently, on any gateway: offered first.
     let isLast: Bool
     /// Whether more than one gateway is offered, so the label says which.
     let namesGateway: Bool
+    /// Whether the title and folder alone would read like another row's.
+    let namesKey: Bool
 
-    init(_ s: ShareSession, gateway: ShareMirror.Gateway, namesGateway: Bool) {
-        id = "\(gateway.origin) \(s.key)"
-        origin = gateway.origin
-        gatewayLabel = gateway.label
+    init(_ offer: ShareMirror.Offer) {
+        let s = offer.session
+        id = "\(offer.gateway.origin) \(s.key)"
+        origin = offer.gateway.origin
+        gatewayLabel = ShareMirror.hostLabel(origin: offer.gateway.origin)
         slotKey = s.key
         slotTitle = s.title
         folder = s.folder
         running = s.running
-        isLast = gateway.lastDestination?.slotKey == s.key
-        self.namesGateway = namesGateway
+        isLast = offer.isLast
+        namesGateway = offer.namesGateway
+        namesKey = offer.namesKey
     }
 
     var displayRepresentation: DisplayRepresentation {
         var parts: [String] = []
-        if let folder { parts.append(folder) }
         if namesGateway { parts.append(gatewayLabel) }
+        if let folder { parts.append(folder) }
+        if namesKey { parts.append(slotKey) }
         if running { parts.append("busy") }
         if isLast { parts.append("last time") }
         return DisplayRepresentation(title: "\(slotTitle)",
@@ -80,16 +85,10 @@ nonisolated struct ShareDestinationEntity: AppEntity {
         ShareDestination(origin: origin, slotKey: slotKey, slotTitle: slotTitle, chosenAt: Date())
     }
 
-    /// What the drop-down offers now: fresh gateways, the current one
-    /// first, the last destination first within it, newest activity next.
+    /// What the drop-down offers now, in `ShareMirror.offers`' order: the
+    /// last share target first, whichever gateway it is on.
     static func offered(_ mirror: ShareMirror?, now: Date) -> [ShareDestinationEntity] {
-        guard let mirror else { return [] }
-        let gateways = mirror.offered(now: now)
-        let several = gateways.count > 1
-        return gateways.flatMap { g in
-            g.sessions.map { ShareDestinationEntity($0, gateway: g, namesGateway: several) }
-                .sorted { a, b in a.isLast && !b.isLast }
-        }
+        mirror?.offers(now: now).map(ShareDestinationEntity.init) ?? []
     }
 }
 

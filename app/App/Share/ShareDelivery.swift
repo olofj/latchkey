@@ -388,9 +388,10 @@ final class ShareDelivery: ObservableObject {
             switch await self.fetchSessions(shareId: item.id) {
             case .failure(let failure):
                 self.finish(failure.outcome, key: nil)
-            case .success(let listed):
+            case .success(let fetched):
+                let listed = self.shareOrdered(fetched, origin: origin)
                 self.sessions = listed
-                let host = URL(string: origin)?.host ?? origin
+                let host = ShareMirror.hostLabel(origin: origin)
                 logger.log("Share: listed \(listed.count) session(s) on \(host)")
                 self.writeMirror(origin: origin, sessions: listed)
                 let remembered = self.defaults.lastDestination(origin: origin)
@@ -432,10 +433,21 @@ final class ShareDelivery: ObservableObject {
 
     // MARK: - The mirror (F18 §6.1)
 
+    /// The picker's order (issue #5): last shared to first, from the
+    /// mirror's share times, the remembered destination standing in for a
+    /// gateway the mirror has not seen shared to; then gateway activity.
+    private func shareOrdered(_ sessions: [ShareSession], origin: String) -> [ShareSession] {
+        let known = mirror.load()?.gateway(origin)
+        let remembered = defaults.lastDestination(origin: origin)
+        return ShareSession.shareOrdered(sessions) { key in
+            known?.sharedAt(key) ?? (remembered?.slotKey == key ? remembered?.at : nil)
+        }
+    }
+
     /// After every successful listing: the titles and folders the Shortcut's
     /// drop-down offers, and the last destination beside them.
     private func writeMirror(origin: String, sessions: [ShareSession]) {
-        let label = URL(string: origin)?.host ?? origin
+        let label = ShareMirror.hostLabel(origin: origin)
         let last = defaults.lastDestination(origin: origin)
         mirror.update { m in
             m.record(origin: origin, label: label, sessions: sessions, at: Date())
@@ -507,8 +519,12 @@ final class ShareDelivery: ObservableObject {
         case .failure(let f):
             return f.outcome
         case .success(let fresh):
-            sessions = fresh
-            if let origin = gatewayOrigin { writeMirror(origin: origin, sessions: fresh) }
+            if let origin = gatewayOrigin {
+                sessions = shareOrdered(fresh, origin: origin)
+                writeMirror(origin: origin, sessions: fresh)
+            } else {
+                sessions = fresh
+            }
             guard fresh.contains(where: { $0.key == key }) else { return .sessionGone }
         }
         // 4. upload.
@@ -934,7 +950,7 @@ final class ShareDelivery: ObservableObject {
         preconditionsChanged()
     }
 
-    var gatewayHost: String? { gatewayOrigin.flatMap { URL(string: $0)?.host } }
+    var gatewayHost: String? { gatewayOrigin.map(ShareMirror.hostLabel(origin:)) }
     var workspaceForPicker: Workspace? { workspace }
 }
 
