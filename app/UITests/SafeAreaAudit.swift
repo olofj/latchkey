@@ -198,12 +198,6 @@ extension XCTestCase {
         for key in ["dash.tail-scale.ts.net", "", "(no element)"] {
             b["settings|Text|\(key)"] = clipped
         }
-        // F22 §8 item 9: the row now shows with one gateway, so L1 audits the
-        // chip in use: white 12 pt on the solid accent, 4.0:1. A fill 30 %
-        // darker was still flagged, so it is held here, open, not fixed.
-        for screen in ["dashboard", "error page"] {
-            b["\(screen)|Contrast|dash"] = "baseline: the chip in use, white on the accent (F22 §9, open)"
-        }
         return b
     }()
 }

@@ -865,8 +865,10 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertLessThan(gw.frame.minX, plain.frame.minX, "every one of them")
         let add = element(app, "gateway-add")
         XCTAssertTrue(add.exists, "the + is in the bar")
-        XCTAssertEqual(add.frame.maxX, element(app, "gateway-row").frame.maxX, accuracy: 1,
-                       "at the row's end, outside the scrolling chips")
+        XCTAssertLessThanOrEqual(element(app, "gateway-row").frame.maxX, add.frame.minX,
+                                 "after the row, outside the scrolling chips")
+        XCTAssertLessThanOrEqual(add.frame.maxX, app.buttons["settings-button"].firstMatch.frame.minX,
+                                 "beside the gear")
         let frames = { [dash, away, gw, plain, add].map { $0.frame } }
         let early = frames()
 
@@ -902,9 +904,9 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertTrue(element(app, "session-signin-button").exists, "signed out: the sign-in button")
         XCTAssertTrue(app.settles(within: 10), "nothing is sliding")
         XCTAssertEqual(frames(), before, "neither the switch nor the sign-out moved a chip or the +")
-        XCTAssertLessThanOrEqual(element(app, "gateway-add").frame.maxX,
-                                 element(app, "session-signin-button").frame.minX,
-                                 "sign-in comes after the +")
+        XCTAssertLessThanOrEqual(element(app, "session-signin-button").frame.maxX,
+                                 element(app, "gateway-add").frame.minX,
+                                 "and before the +")
         XCTAssertLessThanOrEqual(element(app, "gateway-row").frame.maxX,
                                  element(app, "session-signin-button").frame.minX,
                                  "sign-in comes after the row, not before it")
