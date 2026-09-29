@@ -51,13 +51,13 @@ Working:
   from being the only signal.
 - One tap on another chip switches to it: the page reopens at that gateway,
   and it becomes the chip in use. No sheet.
-- After the chips, in a slot of its own, a **+**: a dashed circle a chip's
+- At the bar's end, beside the cogwheel, a **+**: a dashed circle a chip's
   height. It opens Find gateways, the same sheet as Settings → Gateway →
-  Find gateways… (discovery and manual entry). The bar reads [chips] [+]
-  [Sign in, when signed out] [cogwheel] (§8 item 9).
-- More gateways than fit: the chips scroll sideways and fade out under the
-  +; chips keep their width, names truncate at 140 pt. The + does not
-  scroll. Nothing overlaps the cogwheel.
+  Find gateways… (discovery and manual entry). The bar reads [chips]
+  [Sign in, when signed out] [+] [cogwheel] (§8 item 9).
+- More gateways than fit: the chips scroll sideways and fade out at the
+  row's end; chips keep their width, names truncate at 140 pt. The + does
+  not scroll. Nothing overlaps the cogwheel.
 - Scrolling down takes the bar away, row and all. Nothing new is on the page.
 
 Failing:
@@ -129,16 +129,21 @@ chip's width is its name's alone: the name always reserves its bold width
 (a hidden bold copy under it), and the state takes no width. Identifier `gateway-row`;
 each chip `gateway-chip-<host[:port]>`, label the full name ("…, in use" for
 the current one), value the word. The chips' scroll view fades out over its
-last 16 pt; after it, outside it, the + (`gateway-add`, label "Find
-gateways"): 26 pt dashed circle, 34 × 44 pt target. The row is shown
-whenever there is a gateway in use, one chip or more.
+last 16 pt. The row is shown whenever there is a gateway in use, one chip
+or more. The chip in use is a button style of its own, not `.plain`, which
+dims a disabled button (§9, the contrast finding), and its fill is the
+system blue a fifth of the way to black.
+
+**`FindGatewaysButton` (same file).** The + (`gateway-add`, label "Find
+gateways"): 26 pt dashed circle, 34 × 44 pt target.
 
 **`AppBar`.** Takes an optional row view in the middle slot, always starting
 at the same leading edge. When signed out, a compact text-only "Sign in"
 button (orange outline, fixed 12 pt, label "Signed out — Sign in") sits after
-the row, beside the gear. Its slot is kept, empty, while signed in, so the
-row's width, and with it the +, never changes on a sign-out. Without a row
-(no gateway in use) the F15 capsule is unchanged.
+the row; then the +, then the gear. Sign-in takes its width from the row's
+right, where the chips run out: they are left-anchored, so none moves, and
+the + and gear are at the bar's end, so neither does. Without a row (no
+gateway in use) the F15 capsule is unchanged, and there is no +.
 
 **`DashboardContent`.** Builds the row from `homePage.url`,
 `workspace.definition.knownGatewayOrigins`, `tab.viewModel.pageState` and
@@ -223,13 +228,16 @@ an icon pops in on sign-out):
 
 From Olof's mock:
 
-9. **A + in a fixed slot after the chips**, before sign-in and the gear:
-   a dashed circle a chip's height that opens Find gateways. It does not
-   scroll with the chips, which fade out under it. The row now shows with
-   one gateway, so the + is always reachable; this reverses "one gateway:
-   no row" (§2). The sign-in slot is reserved while signed in, so the +
-   stays put on a sign-out as the chips do; the cost is a gap of about
-   60 pt between the + and the gear while signed in.
+9. **A + in a fixed slot beside the gear**: a dashed circle a chip's
+   height that opens Find gateways. It does not scroll with the chips,
+   which fade out at the row's end. The row now shows with one gateway, so
+   the + is always reachable; this reverses "one gateway: no row" (§2).
+   The bar reads [chips] [Sign in, when signed out] [+] [gear]: sign-in
+   takes its width from the scrolling row, so neither the chips (left-
+   anchored) nor the + and gear move on a sign-out, and nothing is
+   reserved while signed in. (A first build kept sign-in's slot empty
+   while signed in, [chips] [+] [slot] [gear]; a permanent 60 pt gap was
+   not wanted.)
 
 For Olof: whether the bar should come in by itself when the page in use
 fails.
@@ -301,18 +309,25 @@ moved a chip`, every chip 208 pt to the right and dash 71 pt wider. Host
 `testTheAppBarRowIsAbsentWithOneGateway` is replaced by
 `testTheAppBarRowOffersFindGatewaysWithOneGateway`, and
 `testTheAppBarRowLightsEachGatewayAndSwitchesInOneTap` now checks the + is
-at the row's end and that its frame, with every chip's, is unchanged across
-the switch and the sign-out, with sign-in after it. On the old app code both
+after the row and beside the gear, and that its frame, with every chip's, is
+unchanged across the switch and the sign-out, with sign-in between the row
+and the +. On the old app code both
 fail: `the + is in the bar` and `one gateway still has a row`. With the
 sign-in slot not reserved, the switch test fails on `neither the switch nor
 the sign-out moved a chip or the +`. Host `test-gateway-row.sh` 44/44.
 
 **L1's audit, new with the row for one gateway.** L1 runs with one gateway,
 so its accessibility audit met the chip in use for the first time: "Contrast
-failed" on `dash`, on the dashboard and the error page. White 12 pt on the
-system accent is 4.0:1. A fill 30 % darker than the accent was still flagged,
-so the look is unchanged and the finding is held in `auditBaseline` as open.
+failed" on its text, `dash`, on the dashboard and the error page. A probe of
+the chip's pixels found the cause: the chip in use is disabled (it is not a
+switch), and `.plain` dims a disabled button, so the fill rendered #78C0F8
+over the page's #F8F8F8 with white text on it. A `ChipButtonStyle` without
+the dimming brought the fill back to the accent, #0088F8; the audit then
+said "Contrast nearly passed" (3.6:1). The fill is now the system blue a
+fifth of the way to black, rendered #0060B8, and the audit reports nothing.
+(`Color.accentColor.mix(…)` renders grey, which is why the first try at a
+darker fill did not help; the accent is the system blue, so it is named.)
+The baseline entry added for it is gone.
 
-**Tests:** Discovery 21/21 (415 s); L1 45/45 (194 s), after one run at 43/45
-on the audit finding above.
-
+**Tests:** host `test-gateway-row.sh` 44/44; Discovery 21/21 (406 s); L1
+45/45 (196 s), with no audit baseline for the row.
