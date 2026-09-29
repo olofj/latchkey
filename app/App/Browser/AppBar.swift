@@ -38,6 +38,8 @@ struct AppBarColumn<Content: View>: View {
     /// F22: the gateway row, for the bar's middle, or nil when there is no
     /// gateway in use.
     var gatewayRow: AnyView? = nil
+    /// F22: the row's +, which opens Find gateways.
+    var onFindGateways: () -> Void = {}
     let onSignIn: () -> Void
     let onSettings: () -> Void
     @ViewBuilder let content: Content
@@ -47,7 +49,8 @@ struct AppBarColumn<Content: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             AppBar(model: model, retracted: controller.retracted, showsSignIn: showsSignIn,
-                   gatewayRow: gatewayRow, onSignIn: onSignIn, onSettings: onSettings)
+                   gatewayRow: gatewayRow, onFindGateways: onFindGateways,
+                   onSignIn: onSignIn, onSettings: onSettings)
             content
         }
         // The page's own canvas colour behind the bar and the status-bar strip
@@ -69,6 +72,7 @@ struct AppBar: View {
     let retracted: Bool
     let showsSignIn: Bool
     var gatewayRow: AnyView? = nil
+    var onFindGateways: () -> Void = {}
     let onSignIn: () -> Void
     let onSettings: () -> Void
 
@@ -89,21 +93,22 @@ struct AppBar: View {
                 HStack(spacing: 8) {
                     ReturnToDashboardAffordance(model: model)
                     if let gatewayRow {
-                        // F22: the row starts where it always starts, and
-                        // sign-in is a compact button AFTER it, beside the
-                        // gear (issue #7). Its slot is kept while signed in:
-                        // signing out must move no chip and not the row's +.
-                        // Signed out is when a way to another gateway
-                        // matters most, so neither hides the other.
+                        // F22: [chips] [Sign in] [+] [gear]. The row starts
+                        // where it always starts and its chips are
+                        // left-anchored; sign-in, when signed out, takes its
+                        // width from the row's right, and the + and the gear
+                        // sit at the bar's end (issue #7): signing out moves
+                        // no chip and not the +. Signed out is when a way to
+                        // another gateway matters most, so neither hides the
+                        // other.
                         gatewayRow
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        ZStack {
-                            compactSignInLabel.hidden()
-                            if showsSignIn {
-                                compactSignIn.transition(.opacity)
-                            }
+                        if showsSignIn {
+                            compactSignIn
+                                .layoutPriority(1)
+                                .transition(.opacity)
                         }
-                        .layoutPriority(1)
+                        FindGatewaysButton(action: onFindGateways)
                     } else {
                         Spacer(minLength: 0)
                         if showsSignIn { signIn }
@@ -166,26 +171,24 @@ struct AppBar: View {
     /// so it neither reads as a stray icon in the chip strip nor grows past
     /// the gear at the largest text.
     private var compactSignIn: some View {
-        Button(action: onSignIn) { compactSignInLabel }
+        Button(action: onSignIn) {
+            Text("Sign in")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6).strokeBorder(Color.orange, lineWidth: 1.5)
+                }
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
         .buttonStyle(.plain)
         .accessibilityLabel("Signed out — Sign in")
         .accessibilityIdentifier("session-signin-button")
-    }
-
-    private var compactSignInLabel: some View {
-        Text("Sign in")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Color.primary)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 10)
-            .frame(height: 26)
-            .overlay {
-                RoundedRectangle(cornerRadius: 6).strokeBorder(Color.orange, lineWidth: 1.5)
-            }
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
     }
 }
 

@@ -385,7 +385,7 @@ private struct DashboardContent: View {
             guard origin != homePage.url, let host = URL(string: origin)?.host(),
                   model.proxyPolicy?.matchingRule(for: host) != nil else { return }
             workspace.selectGateway(origin)
-        }, onFindGateways: { showingGatewayPicker = true }))
+        }))
     }
 
     private var gatewayContent: some View {
@@ -396,6 +396,7 @@ private struct DashboardContent: View {
                      showsSignIn: showsSignIn,
                      pinnedForTrouble: session.originCheck == .refused,
                      gatewayRow: gatewayRow,
+                     onFindGateways: { showingGatewayPicker = true },
                      onSignIn: { session.isTokenSheetPresented = true },
                      onSettings: onSettings) {
             // The node's own trouble first, in the layout rather than over it

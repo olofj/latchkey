@@ -12,9 +12,9 @@
 //  gateway's loopback (F5 §5). These are gateways the app itself opens.
 //
 //  It lives in the bar, so it is there only when the bar is (F15): nothing
-//  of it is on the page, and it adds no height. It ends in a +, outside the
-//  scrolling chips, that opens Find gateways: so it shows with one gateway
-//  too, as the way to a second (F22 §8 item 9).
+//  of it is on the page, and it adds no height. The bar puts a + after it
+//  (`FindGatewaysButton`), so it shows with one gateway too, as the way to
+//  a second (F22 §8 item 9).
 //
 
 import SwiftUI
@@ -29,32 +29,26 @@ struct GatewayRow: View {
     @ObservedObject var tsnet: TSNetModel
     @ObservedObject var health: GatewayHealth
     let onSwitch: (String) -> Void
-    let onFindGateways: () -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(origins, id: \.self) { origin in
-                        GatewayChip(origin: origin, inUse: origin == current, state: state(origin)) {
-                            onSwitch(origin)
-                        }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(origins, id: \.self) { origin in
+                    GatewayChip(origin: origin, inUse: origin == current, state: state(origin)) {
+                        onSwitch(origin)
                     }
                 }
-                .padding(.horizontal, 2)
             }
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            // Chips running on under the + fade out rather than end in a cut.
-            .mask {
-                HStack(spacing: 0) {
-                    Rectangle()
-                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: 16)
-                }
+            .padding(.horizontal, 2)
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        // Chips running on past the row's end fade out rather than end in a cut.
+        .mask {
+            HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 16)
             }
-            // In a slot of its own, not the last thing in the scroll: always
-            // in reach, and where it was whatever the chips do (issue #7).
-            FindGatewaysButton(action: onFindGateways)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("gateway-row")
@@ -102,7 +96,9 @@ struct GatewayRow: View {
 }
 
 /// The row's +: a dashed circle a chip's height, for "there could be more".
-private struct FindGatewaysButton: View {
+/// The bar puts it in a slot of its own beside the gear, not in the scroll:
+/// always in reach, and where it was whatever the chips do (issue #7).
+struct FindGatewaysButton: View {
     let action: () -> Void
 
     var body: some View {
@@ -162,26 +158,44 @@ private struct GatewayChip: View {
             // over any page colour, light or dark. Every chip keeps an outline.
             .background {
                 if inUse {
-                    RoundedRectangle(cornerRadius: 6).fill(Color.accentColor)
+                    RoundedRectangle(cornerRadius: 6).fill(Self.inUseFill)
                 }
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(inUse ? Color.accentColor : Color.secondary.opacity(0.35),
+                    .strokeBorder(inUse ? Self.inUseFill : Color.secondary.opacity(0.35),
                                   lineWidth: inUse ? 1.5 : 1)
             }
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // Not `.plain`: it dims a disabled button, and the chip in use is
+        // one. Its white text then sat on the accent washed out to #78C0F8
+        // over a light page, and L1's contrast audit failed it.
+        .buttonStyle(ChipButtonStyle())
         // The chip in use is not a switch, and a gateway off the tailnet may
-        // not be chosen at all; the dimmed look is the not-enabled trait.
+        // not be chosen at all; the dimmed look (below, for the latter only)
+        // is the not-enabled trait.
         .disabled(!state.tappable)
         .opacity(!state.tappable && !inUse ? 0.6 : 1)
         .accessibilityLabel(GatewayChipState.shown(origin) + (inUse ? ", in use" : ""))
         .accessibilityValue(state.word)
         .accessibilityIdentifier("gateway-chip-\(GatewayChipState.shown(origin))")
+    }
+
+    /// The accent a fifth of the way to black: white 12 pt text on the
+    /// system blue itself (#0088FF) is 3.6:1, under the 4.5:1 that small text
+    /// needs, and the audit says so. This is about 5:1, light and dark. The
+    /// accent is the system blue (the asset sets no colour), named as such:
+    /// `Color.accentColor` does not survive `mix` and renders grey.
+    static let inUseFill = Color.blue.mix(with: .black, by: 0.2)
+
+    /// `.plain` without its disabled dimming: the chip decides its own look.
+    private struct ChipButtonStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label.opacity(configuration.isPressed ? 0.7 : 1)
+        }
     }
 
     /// KiroCrew's `--ok`, `--warn`, `--danger` and `--muted`, as the system's
