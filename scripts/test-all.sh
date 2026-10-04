@@ -8,7 +8,8 @@
 #   session, discovery and lifecycle suites when code THEY exercise changed
 #   since the last full pass. Those take 6, 1.5 and 4 min and guard code most
 #   changes do not touch (lifecycle: the recovery paths in TSNet and the
-#   browser, and the vendored chaos hooks).
+#   browser, and the vendored chaos hooks). The vendored ipnlocal package
+#   runs only when tailscale-patched has unpushed or uncommitted changes.
 # --full (before a milestone or review commit; about 17 min):
 #   everything, including the inherited connection-independent tests. A full
 #   pass that succeeds records the commits it tested, so quick runs know what
@@ -106,6 +107,29 @@ vendored_go_tests() {
         && go_tests "$APP/ThirdParty/libtailscale/tailscale-patched" Latchkey ./tsnet/
 }
 run "vendored Go tests" vendored_go_tests
+# The whole vendored ipnlocal package (about 13 s), when the patched Tailscale
+# tree has changed: uncommitted or untracked files there, or commits touching
+# it that are not on the remote yet (@{u}, else origin/HEAD). --full always
+# runs it; LATCHKEY_TEST_IPNLOCAL=1 forces it, =0 skips it. TMPDIR=/tmp
+# because a long TMPDIR overruns macOS's 104-byte Unix socket path
+# (TestTCPForwardUnixSocket, TestServeFileOrDirectory).
+PATCHED="$APP/ThirdParty/libtailscale/tailscale-patched"
+patched_changed() {
+    local base
+    [[ -n "$(git -C "$ROOT" status --porcelain -- "$PATCHED")" ]] && return 0
+    base=$(git -C "$ROOT" rev-parse -q --verify '@{u}' 2>/dev/null \
+        || git -C "$ROOT" rev-parse -q --verify origin/HEAD 2>/dev/null) || return 0
+    [[ -n "$(git -C "$ROOT" rev-list "$base..HEAD" -- "$PATCHED")" ]]
+}
+ipnlocal_tests() { (cd "$PATCHED" && TMPDIR=/tmp go test -count=1 ./ipn/ipnlocal); }
+case "${LATCHKEY_TEST_IPNLOCAL:-}" in
+    1) RUN_IPNLOCAL=1 ;;
+    0) RUN_IPNLOCAL=0 ;;
+    *) RUN_IPNLOCAL=$FULL; [[ $FULL -eq 0 ]] && patched_changed && RUN_IPNLOCAL=1 ;;
+esac
+if [[ $RUN_IPNLOCAL -eq 1 ]]; then run "vendored ipnlocal" ipnlocal_tests
+elif [[ "${LATCHKEY_TEST_IPNLOCAL:-}" == 0 ]]; then RESULTS+=("skip        vendored ipnlocal: skipped (LATCHKEY_TEST_IPNLOCAL=0)")
+else RESULTS+=("skip        vendored ipnlocal: skipped (no tailscale-patched changes)"); fi
 run "L1 offline" "$ROOT/scripts/test-offline.sh" $(build_flag)
 run "L2 tailnet" "$ROOT/scripts/test-tailnet.sh" $(build_flag)
 if [[ $RUN_SESSION -eq 1 ]]; then run "session (M4)" "$ROOT/scripts/test-session.sh" $(build_flag)

@@ -292,7 +292,10 @@ device build.
 - **`scripts/test-all.sh` runs them by tier.** The default quick tier (about
   4–5 min) is host tests, the vendored Go tests, L1 and L2, plus session,
   discovery or lifecycle only when code they exercise changed since the last
-  full pass (they take about 6, 1.5 and 4 min). `--full` (about 17 min,
+  full pass (they take about 6, 1.5 and 4 min), and the vendored
+  `ipn/ipnlocal` package (about 13 s) only when `tailscale-patched` has
+  uncommitted or unpushed changes (`LATCHKEY_TEST_IPNLOCAL=1`/`0` forces
+  it on or off). `--full` (about 17 min,
   `scripts/test-all.sh:12`) runs everything, including the inherited tests
   (`scripts/test-inherited.sh`), and records what it passed. Use quick while
   iterating and `--full` before every milestone or review commit.
