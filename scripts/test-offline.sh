@@ -7,9 +7,11 @@
 # scripts/test-offline-shards.py builds once, creates and boots "Latchkey
 # Shard 1..N" if they are not booted, runs this script on each as a worker
 # with its share of the tests, and gives one verdict. The shard simulators
-# stay booted between runs; `scripts/test-offline-shards.py sims down` shuts
-# them down (`sims delete` removes them). --shards N or LATCHKEY_SHARDS=N
-# picks N (2-9).
+# stay booted between runs until they have sat idle for 25 minutes
+# (LATCHKEY_SIM_IDLE_SECS overrides it, 0 keeps them up; scripts/simpool.py
+# reaps them); `scripts/test-offline-shards.py sims down` shuts them down
+# now (`sims delete` removes them). --shards N or LATCHKEY_SHARDS=N picks N
+# (2-9).
 #
 # --serial runs everything on one simulator, SIM_NAME (default "iPhone 17"),
 # as before F14; use it on a host with room for one simulator. Naming a

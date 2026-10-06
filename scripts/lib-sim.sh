@@ -23,6 +23,9 @@ sim_setup() {
             python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX)'
         fi
         printf '::: simpool: holding slot %s\n' "$k"
+        # Once this run lets go, the reaper shuts the simulator down after
+        # LATCHKEY_SIM_IDLE_SECS idle (scripts/simpool.py, IDLE).
+        python3 "$LIB_SIM_ROOT/scripts/simpool.py" reap --start 9>&- || true
     fi
     xcrun simctl bootstatus "$udid" -b >/dev/null
 }

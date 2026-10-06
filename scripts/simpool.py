@@ -4,6 +4,7 @@
     scripts/simpool.py run [--want N] [--floor M] -- command [args...]
     scripts/simpool.py status              each slot: free or held, and by what
     scripts/simpool.py prune               shut down idle simulators outside the pool
+    scripts/simpool.py reap [--idle-secs N] shut down pool simulators free for N s
     scripts/simpool.py mem [--every S]     memory of each pool simulator and of xcodebuild
     scripts/simpool.py sims [up [N] | down | delete]
 
@@ -48,6 +49,17 @@ it took and waits on queue.lock, one waiter at a time: the head waiter holds
 what it can and polls for the rest, and no one behind it holds anything, so
 two suites can never each hold part of the pool waiting for the other's.
 
+IDLE. A run leaves its simulators booted, so the next one skips the ~20 s
+boot, but a pool left booted holds about 2.5 GB per simulator. Every run
+starts the reaper (`reap --watch`, detached, one per host by reaper.lock,
+logging to <pool dir>/reaper.log) unless one is up. It polls the slots,
+touching slot-k.used while k is held, and shuts down a booted pool simulator
+whose slot has been free for LATCHKEY_SIM_IDLE_SECS (default 25 min; 0
+starts no reaper), taking the slot for the shutdown as `sims down` does. It
+exits when nothing is held and nothing in the pool is booted. A slot's
+release is the kernel's, so idle time counts from the last poll that saw it
+held (within a minute). `reap` alone does one pass, now.
+
 The pool dir is ~/Library/Caches/latchkey-simpool: the simulators are the
 host's, not one clone's. LATCHKEY_SIMPOOL_DIR overrides it, for tests.
 """
@@ -71,6 +83,9 @@ DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
 # A process inside a simulator that means a test is using it: our app, its
 # test runner, or XCTest's own agents. System apps (com.apple.*) do not count.
 IN_USE = re.compile(r"UIKitApplication:net\.lixom\.|xctrunner|xctest", re.I)
+# A pool simulator whose slot has been free this long is shut down (IDLE
+# above); LATCHKEY_SIM_IDLE_SECS overrides it, 0 keeps them booted.
+IDLE_SECS = 25 * 60
 
 
 def say(msg):
@@ -149,7 +164,7 @@ def acquire(want, floor):
     t0 = time.monotonic()
     grab()
     if len(held) >= floor:
-        return held, 0.0
+        return started(held), 0.0
     # Under the floor: hold nothing while waiting for the queue, so two runs
     # can never each hold part of the pool waiting for the other's part.
     for fd in held.values():
@@ -175,7 +190,16 @@ def acquire(want, floor):
         time.sleep(1)
     fcntl.flock(qfd, fcntl.LOCK_UN)
     os.close(qfd)
-    return held, time.monotonic() - t0
+    return started(held), time.monotonic() - t0
+
+
+def started(held):
+    """Mark the slots just taken used, and see that a reaper is up to shut
+    their simulators down once the run has let go of them."""
+    for k in held:
+        mark_used(k)
+    start_reaper()
+    return held
 
 
 # -------------------------------------------------------------- simulators ----
@@ -224,6 +248,7 @@ def sims_up(slots, prog="scripts/simpool.py"):
     """Create and boot the given slots' simulators, one at a time (a first
     boot is 20-23 s; twelve at once took minutes, F14 §9). Returns
     [(name, udid)] in slot order."""
+    start_reaper()
     have = devices()
     out = []
     for k in slots:
@@ -234,7 +259,8 @@ def sims_up(slots, prog="scripts/simpool.py"):
             udid = run("xcrun", "simctl", "create", name, DEVICE_TYPE, ios_runtime()).strip()
             state = "Shutdown"
         if state != "Booted":
-            say(f"booting {name} (a first boot is ~20 s; it stays booted: {prog} sims down)")
+            idle = f"{idle_secs() // 60} min idle" if idle_secs() else "LATCHKEY_SIM_IDLE_SECS=0"
+            say(f"booting {name} (a first boot is ~20 s; it stays booted: {idle}, or {prog} sims down)")
             t0 = time.monotonic()
             run("xcrun", "simctl", "bootstatus", udid, "-b")
             print(f"    booted in {time.monotonic() - t0:.0f} s", flush=True)
@@ -275,6 +301,115 @@ def prune(quiet=False):
         say(f"shut down {name}: booted outside the pool, idle")
         gone.append(name)
     return gone
+
+
+# ------------------------------------------------------------------ reaper ----
+def idle_secs():
+    """How long a free pool simulator may stay booted; 0 is forever."""
+    try:
+        return max(0, int(os.environ.get("LATCHKEY_SIM_IDLE_SECS", IDLE_SECS)))
+    except ValueError:
+        return IDLE_SECS
+
+
+def used_path(k):
+    return os.path.join(pool_dir(), f"slot-{k}.used")
+
+
+def mark_used(k):
+    """Slot k is in use as of now: touch slot-k.used."""
+    with open(used_path(k), "a"):
+        pass
+    os.utime(used_path(k))
+
+
+def last_used(k):
+    """When slot k was last seen held, or None if it never was."""
+    try:
+        return os.path.getmtime(used_path(k))
+    except FileNotFoundError:
+        return None
+
+
+def ago(t):
+    s = time.time() - t
+    return f"{s:.0f} s" if s < 120 else f"{s / 60:.0f} min"
+
+
+def reap(idle, quiet=False):
+    """Shut down every booted pool simulator whose slot is free and has not
+    been held for `idle` seconds. The slot is held for the shutdown, as
+    `sims down` does, so a run cannot take it mid-shutdown, and a held slot
+    is never touched. Marks held slots used. Returns (names shut down,
+    whether any slot is held or any pool simulator still booted)."""
+    devs = devices()
+    gone, busy = [], False
+    for k in range(1, SIZE + 1):
+        udid, state = devs.get(slot_name(k), (None, None))
+        fd = try_lock(slot_path(k))
+        if fd is None:
+            mark_used(k)
+            busy = True
+            continue
+        try:
+            if state != "Booted":
+                continue
+            t = last_used(k)
+            if t is None:
+                # Booted before the pool kept time (or by hand): idle from now.
+                mark_used(k)
+                t = time.time()
+            if time.time() - t < idle:
+                busy = True
+                continue
+            subprocess.run(["xcrun", "simctl", "shutdown", udid], capture_output=True)
+            say(f"shut down {slot_name(k)}: slot free for {ago(t)}")
+            gone.append(slot_name(k))
+        finally:
+            os.close(fd)
+    if not gone and not quiet:
+        say(f"no pool simulator free and booted for {idle} s")
+    return gone, busy
+
+
+def watch():
+    """The reaper: one per host (reaper.lock), started by every run. It polls
+    the slots, and once none is held and no pool simulator is booted it
+    exits; the next run starts it again."""
+    fd = try_lock(os.path.join(pool_dir(), "reaper.lock"))
+    if fd is None:
+        return 0
+    idle = idle_secs()
+    say(f"reaper {os.getpid()} up: free pool simulators shut down after {idle} s")
+    while True:
+        _, busy = reap(idle, quiet=True)
+        if not busy:
+            # A run that took a slot while reaper.lock was ours started no
+            # reaper: look again with it let go, and stay if there is one.
+            os.close(fd)
+            if not reap(idle, quiet=True)[1] or (fd := try_lock(os.path.join(pool_dir(), "reaper.lock"))) is None:
+                say(f"reaper {os.getpid()} done: nothing held, nothing booted")
+                return 0
+        time.sleep(max(1, min(60, idle // 10)))
+
+
+def start_reaper():
+    """Start the reaper detached, unless one is up or LATCHKEY_SIM_IDLE_SECS
+    is 0. It must not inherit a slot's descriptor (Popen closes them) or the
+    caller's stdout, so it logs to <pool dir>/reaper.log."""
+    if not idle_secs():
+        return
+    fd = try_lock(os.path.join(pool_dir(), "reaper.lock"))
+    if fd is None:
+        return
+    os.close(fd)
+    log = os.path.join(pool_dir(), "reaper.log")
+    if os.path.exists(log) and os.path.getsize(log) > 1 << 20:
+        os.replace(log, log + ".old")
+    with open(log, "a") as out:
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "reap", "--watch"],
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                         close_fds=True, start_new_session=True)
 
 
 # ------------------------------------------------------------------ memory ----
@@ -381,7 +516,9 @@ def cmd_status(args):
         fd = try_lock(slot_path(k))
         if fd is not None:
             os.close(fd)
-            who = "free"
+            t = last_used(k)
+            who = "free" + (f", idle {ago(t)}"
+                            if state == "Booted" and t is not None else "")
         else:
             hs = holders(slot_path(k))
             who = "held by " + (", ".join(f"{c}[{p}]" for p, c in hs[:4]) + (" ..." if len(hs) > 4 else "")
@@ -444,6 +581,11 @@ def main():
     r.add_argument("command", nargs=argparse.REMAINDER)
     sub.add_parser("status", help="each slot: free or held, and by what")
     sub.add_parser("prune", help="shut down idle simulators outside the pool")
+    rp = sub.add_parser("reap", help="shut down pool simulators whose slot has been free a while")
+    rp.add_argument("--idle-secs", type=int, default=None,
+                    help="free this long (default LATCHKEY_SIM_IDLE_SECS, else 25 min)")
+    rp.add_argument("--watch", action="store_true", help="keep reaping until the pool is idle (the reaper)")
+    rp.add_argument("--start", action="store_true", help="start the reaper detached unless one is up")
     m = sub.add_parser("mem", help="memory of each booted simulator and of xcodebuild")
     m.add_argument("--every", type=float, default=0, help="sample every S seconds until interrupted")
     s = sub.add_parser("sims", help="list, boot, shut down or delete the pool simulators")
@@ -454,6 +596,20 @@ def main():
         if args.floor is None:
             args.floor = min(args.want, 2)
         return cmd_run(args)
+    if args.cmd == "reap":
+        if args.start:
+            start_reaper()
+            return 0
+        if args.idle_secs is not None:
+            os.environ["LATCHKEY_SIM_IDLE_SECS"] = str(args.idle_secs)
+        if args.watch:
+            return watch()
+        idle = args.idle_secs if args.idle_secs is not None else idle_secs()
+        if args.idle_secs is None and not idle:
+            print("LATCHKEY_SIM_IDLE_SECS=0: pool simulators stay booted (--idle-secs N reaps)")
+            return 0
+        reap(idle)
+        return 0
     if args.cmd == "sims":
         return sims_command(args.action, args.n)
     return {"status": cmd_status, "prune": cmd_prune, "mem": cmd_mem}[args.cmd](args)
