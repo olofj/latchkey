@@ -22,7 +22,7 @@ done
 if ! xcrun swiftc -O -swift-version 6 -strict-concurrency=complete -default-isolation MainActor \
         "$OUT/BrowserViewModel.swift" "$OUT/HomePageAvailability.swift" "$OUT/TailnetProxyPolicy.swift" \
         App/Browser/PageScripts.swift App/Browser/PageScriptSources.swift App/Browser/PopupCatcher.swift \
-        App/Browser/GatewayAddress.swift App/Browser/NavigationPolicy.swift \
+        App/Browser/GatewayAddress.swift App/Browser/NavigationPolicy.swift App/Browser/MediaCapturePolicy.swift \
         App/Browser/TailnetHostnameQualifier.swift App/Browser/ContentProcessRecovery.swift \
         App/Browser/PageState.swift App/Browser/PageFailureText.swift \
         App/Browser/ContentRules.swift App/Browser/ContentRulesInstaller.swift \

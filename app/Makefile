@@ -196,6 +196,7 @@ test-policy:  ## Run the host-only unit tests (fast; no simulator, no framework)
 	@./scripts/test-gateway-address.sh
 	@./scripts/test-page-scripts.sh
 	@./scripts/test-navigation-policy.sh
+	@./scripts/test-media-capture-policy.sh
 	@./scripts/test-content-rules.sh
 	@./scripts/test-cdn-allowlist.sh
 	@./scripts/test-page-failure-text.sh

@@ -1191,6 +1191,30 @@ extension BrowserViewModel: WKUIDelegate {
     }
 #endif
 
+    /// getUserMedia (F23 W2): the dashboard's voice input gets the
+    /// microphone on the gateway's own origin; nothing else is granted.
+    /// `.grant` rather than `.prompt`: iOS's TCC prompt already asks once
+    /// per app, and WebKit's own sheet would ask again on every page load.
+    func webView(_ webView: WKWebView,
+                 requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo,
+                 type: WKMediaCaptureType,
+                 decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void) {
+        let kind: MediaCaptureKind
+        switch type {
+        case .microphone: kind = .microphone
+        case .camera: kind = .camera
+        case .cameraAndMicrophone: kind = .cameraAndMicrophone
+        @unknown default: kind = .other
+        }
+        let decision = MediaCapturePolicy.decide(
+            kind: kind, isMainFrame: frame.isMainFrame,
+            origin: MediaCapturePolicy.origin(scheme: origin.protocol, host: origin.host, port: origin.port),
+            allowedOrigin: allowedOrigin)
+        logger.log("media-capture: \(kind) mainFrame=\(frame.isMainFrame) \(decision == .grant ? "granted" : "denied")")
+        decisionHandler(decision == .grant ? .grant : .deny)
+    }
+
     /// WebKit asks its UI delegate to create a view for target=_blank,
     /// window.open(), and links whose target requests another browsing
     /// context. Latchkey has exactly one browsing context (PLAN §1.4), so no
