@@ -392,6 +392,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Latchkey;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Latchkey uses the camera only to scan the sign-in QR code shown on your Kiro Crew dashboard.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Latchkey uses the microphone only when you tap voice input in your Kiro Crew dashboard. The audio goes to your gateway and nowhere else.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Latchkey talks directly to your other Tailscale devices on the same network when it can, which is faster than relaying through Tailscale's servers. It still works if you decline, just more slowly.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -454,6 +455,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Latchkey;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Latchkey uses the camera only to scan the sign-in QR code shown on your Kiro Crew dashboard.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Latchkey uses the microphone only when you tap voice input in your Kiro Crew dashboard. The audio goes to your gateway and nowhere else.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Latchkey talks directly to your other Tailscale devices on the same network when it can, which is faster than relaying through Tailscale's servers. It still works if you decline, just more slowly.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -497,6 +499,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Latchkey;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Latchkey uses the camera only to scan the sign-in QR code shown on your Kiro Crew dashboard.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Latchkey uses the microphone only when you tap voice input in your Kiro Crew dashboard. The audio goes to your gateway and nowhere else.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Latchkey talks directly to your other Tailscale devices on the same network when it can, which is faster than relaying through Tailscale's servers. It still works if you decline, just more slowly.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

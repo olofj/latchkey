@@ -151,6 +151,9 @@ if [[ $BUILD -eq 1 ]]; then
         -derivedDataPath build/DerivedData LATCHKEY_GIT_SHA="$GIT_SHA" \
         "${SANDBOX_FLAGS[@]}" > "$LOG_DIR/build.log" 2>&1) \
         || { echo "error: build failed; see $LOG_DIR/build.log" >&2; exit 1; }
+    # F23 T1: a missing purpose string is a TCC kill on first use (issue #9).
+    say "usage strings in the built Info.plist"
+    "$APP/scripts/check-usage-strings.sh" | sed 's/^/    /'
     if [[ $BUILD_ONLY -eq 1 ]]; then
         say "built in $(( $(date +%s) - START ))s"
         exit 0
