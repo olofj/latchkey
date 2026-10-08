@@ -57,6 +57,75 @@ enum PageScriptSources {
     })();
     """#
 
+    /// Makes the dashboard's read-aloud audible with the silent switch on
+    /// (issue #10).
+    ///
+    /// KiroCrew plays synthesized speech through Web Audio (`decodeAudioData`
+    /// and an `AudioBufferSourceNode`). Left to itself, WebKit gives a page
+    /// that plays only Web Audio the ambient audio-session category, which
+    /// the ring/silent switch mutes. WebKit recomputes the category on every
+    /// media state change, so a category the app sets on `AVAudioSession`
+    /// does not survive it. The page's own `navigator.audioSession.type`
+    /// (the Audio Session API) is the override WebKit honours, so this sets
+    /// it to `playback`.
+    ///
+    /// Voice input (F23) must keep the category WebKit picks for capture,
+    /// play-and-record. So an audio `getUserMedia` call puts the type back
+    /// to `auto` first, and `playback` returns once every audio track it
+    /// handed out has stopped or ended. Video-only calls pass straight
+    /// through. Any failure leaves the page as WebKit would have it.
+    ///
+    /// Cost, accepted: `playback` is not mixable, so speech pauses music
+    /// from another app, as a podcast would, instead of ducking it.
+    static let audioSessionPlayback = #"""
+    (function () {
+      try {
+        var session = navigator.audioSession;
+        if (!session) { return; }
+        session.type = 'playback';
+        var md = navigator.mediaDevices;
+        if (!md || typeof md.getUserMedia !== 'function') { return; }
+        var gum = md.getUserMedia.bind(md);
+        var live = new Set();
+        var asking = 0;
+        function settle() {
+          if (asking === 0 && live.size === 0) { session.type = 'playback'; }
+        }
+        function watch(track) {
+          live.add(track);
+          var stop = track.stop;
+          function done() {
+            if (live.delete(track)) { settle(); }
+          }
+          track.stop = function () {
+            var r = stop.apply(track, arguments);
+            done();
+            return r;
+          };
+          track.addEventListener('ended', done);
+        }
+        md.getUserMedia = function (constraints) {
+          if (!constraints || !constraints.audio) { return gum(constraints); }
+          asking++;
+          session.type = 'auto';
+          return gum(constraints).then(function (stream) {
+            asking--;
+            stream.getAudioTracks().forEach(watch);
+            settle();
+            return stream;
+          }, function (e) {
+            asking--;
+            settle();
+            throw e;
+          });
+        };
+      } catch (e) {
+        // Never break the page over this: read-aloud is then muted by the
+        // silent switch, which is the pre-#10 behaviour.
+      }
+    })();
+    """#
+
     /// The id of the `<style>` element `sessionBridge` adds.
     static let bannerStyleID = "latchkey-session-banner-hidden"
 

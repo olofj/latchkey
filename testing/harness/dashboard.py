@@ -590,10 +590,20 @@ function gum(c) {
     return "granted";
   }, function (e) { return e.name || String(e); });
 }
+// The main frame's mic stays live until the frame has asked: with it
+// stopped, the app's audio session is "playback" again (issue #10), and
+// WebKit refuses the frame's capture with InvalidStateError before the
+// media-capture policy is asked. Live, the policy is what answers.
+var live = null;
 window.addEventListener("message", function (e) {
-  if (e.data && e.data.frame_mic) { r.frame_mic = e.data.frame_mic; report(); }
+  if (e.data && e.data.frame_mic) {
+    r.frame_mic = e.data.frame_mic; report();
+    if (live) live.getTracks().forEach(function (t) { t.stop(); });
+  }
 });
-gum({audio: true}).then(function (v) {
+(navigator.mediaDevices ? navigator.mediaDevices.getUserMedia({audio: true}).then(function (s) {
+  live = s; return "granted";
+}, function (e) { return e.name || String(e); }) : Promise.resolve("no-mediaDevices")).then(function (v) {
   r.mic = v; report();
   return gum({video: true});
 }).then(function (v) {

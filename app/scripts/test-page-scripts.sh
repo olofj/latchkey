@@ -62,6 +62,16 @@ EOF6
 xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-share"
 "$OUT/print-share" | node scripts/test-share-scripts.js
 
+# Issue #10: the audio-session override and its getUserMedia hand-back,
+# run against a fake navigator.
+cat > "$OUT/main.swift" <<'EOF10'
+import Foundation
+let payload = ["script": PageScriptSources.audioSessionPlayback]
+print(String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!)
+EOF10
+xcrun swiftc -O App/Browser/PageScriptSources.swift "$OUT/main.swift" -o "$OUT/print-audio"
+"$OUT/print-audio" | node scripts/test-audio-session.js
+
 # F15 §4a: the app bar's finger observer, run against a fake window.
 cat > "$OUT/main.swift" <<'EOF5'
 import Foundation

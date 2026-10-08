@@ -35,10 +35,19 @@ enum PageScripts {
                      forMainFrameOnly: true)
     }
 
+    /// See `PageScriptSources.audioSessionPlayback`. In the page's world,
+    /// because `navigator.audioSession` and `getUserMedia` are the page's.
+    static var audioSessionPlayback: WKUserScript {
+        WKUserScript(source: PageScriptSources.audioSessionPlayback,
+                     injectionTime: .atDocumentStart,
+                     forMainFrameOnly: true)
+    }
+
     /// Installs every script the dashboard gets. Called once per web view,
     /// before its first navigation.
     static func install(into controller: WKUserContentController) {
         controller.addUserScript(stripSignInToken)
+        controller.addUserScript(audioSessionPlayback)
     }
 
     /// The app's own world for `PageScriptSources.pageBackground`, so the

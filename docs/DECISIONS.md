@@ -3750,3 +3750,29 @@ tests the srcdoc frame (gateway origin, denied) and the host tests cover
 the other origins. No speech-recognition string: the dashboard does not use
 Web Speech. The simulator exposes a mic device, so L1 asserts a real grant;
 without the delegate the page sits on WebKit's prompt and the test fails.
+
+## 2026-10-07 — Issue #10: read-aloud asks WebKit for a playback session
+
+KiroCrew's read-aloud plays server TTS through Web Audio. A page that
+plays only Web Audio gets WebKit's ambient audio-session category, and
+the silent switch mutes it: no error, the buffer "plays". Measured on L1
+before the fix: tapped and untapped playback both reach `running` and
+`ended`, so WebKit's gesture gate is not the cause, and
+`mediaTypesRequiringUserActionForPlayback` stays at its default.
+
+Decided: a main-frame user script sets `navigator.audioSession.type =
+"playback"` (the Audio Session API, iOS 16.4+, target 26). Not
+`AVAudioSession` in the app: WebKit recomputes the category on every
+media state change, so an app-set category does not survive it. No
+`UIBackgroundModes` audio: read-aloud is a foreground action.
+
+F23 constraint, measured: while the type is `playback`, WebKit refuses
+`getUserMedia` with `InvalidStateError`. So the script wraps
+`getUserMedia`: an audio request sets `auto` first (WebKit then picks
+play-and-record, as before) and `playback` returns when every audio track
+it handed out has stopped or ended. Subframes are not wrapped (R3); their
+capture is denied either way.
+
+Default, a product call left open: `playback` is not mixable, so speech
+pauses another app's music rather than ducking it. The web API has no
+ducking type that the silent switch does not mute.
