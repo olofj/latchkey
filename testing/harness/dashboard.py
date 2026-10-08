@@ -76,6 +76,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import re
 import socket
 import ssl
@@ -617,10 +618,74 @@ report();
 setInterval(report, 1000);
 </script>"""
 
-# What /__mode?root= accepts: the page, the probes, F6's page, F17's and
-# F23's. "single", "handoff*" and "voice" are not PROBEs: they report to
-# /__report, not /__inset-report.
-ROOTS = ("page",) + PROBES + ("single",) + tuple(HANDOFF_ROOTS) + ("voice",)
+# Issue #10's page: the dashboard's read-aloud, in the order KiroCrew 0.7.2
+# plays it (client-*.js, the Web Audio player's unlock()/enqueue()). The
+# Speak tap creates and resumes an AudioContext synchronously; the audio
+# arrives later (here: a POST answered with a WAV, in the product a
+# voice_chunk on /api/ws); enqueue() resumes again if still suspended (1.5 s,
+# then "voice_playback_blocked"), decodes, and starts a buffer source. "auto"
+# is the same without a tap -- auto-speak's shape -- on its own context.
+# Each outcome is "ended" (the source played out), the error, or "pending";
+# "*_state" is the context's state when it ended or failed.
+SPEAK = """<!doctype html><meta charset=utf-8>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>speak</title>
+<button id=speak style="font-size:40px;padding:30px">Speak</button>
+<script>
+var r = {page: "speak", doc: Math.random().toString(36).slice(2),
+         audio_session: navigator.audioSession ? navigator.audioSession.type : "absent",
+         auto: "pending", auto_state: "", tap: "pending", tap_state: ""};
+function report() {
+  fetch("/__report", {method: "POST", body: JSON.stringify(r)}).catch(function () {});
+}
+function synthesize() {
+  return fetch("/api/voice/synthesize", {method: "POST", body: "{}"})
+    .then(function (res) { return res.arrayBuffer(); });
+}
+function play(ctx, key) {
+  return synthesize().then(function (wav) {
+    return (ctx.state === "suspended" ? new Promise(function (ok, no) {
+      var t = setTimeout(function () { no(Error("voice_playback_blocked")); }, 1500);
+      ctx.resume().then(ok, function () { no(Error("voice_playback_blocked")); })
+        .finally(function () { clearTimeout(t); });
+    }) : Promise.resolve()).then(function () { return ctx.decodeAudioData(wav); });
+  }).then(function (buf) {
+    return new Promise(function (ok) {
+      var s = ctx.createBufferSource();
+      s.buffer = buf; s.connect(ctx.destination);
+      s.onended = function () { ok("ended"); };
+      s.start(ctx.currentTime + 0.03);
+    });
+  }).then(function (v) { r[key] = v; }, function (e) { r[key] = e.message || String(e); })
+    .then(function () { r[key + "_state"] = ctx.state; report(); });
+}
+var tapped = null;
+document.getElementById("speak").addEventListener("click", function () {
+  if (tapped) return;
+  tapped = new AudioContext();
+  if (tapped.state === "suspended") tapped.resume().catch(function () {});
+  play(tapped, "tap");
+});
+setTimeout(function () { play(new AudioContext(), "auto"); }, 300);
+report();
+setInterval(report, 1000);
+</script>"""
+
+
+def speak_wav():
+    """0.3 s of 440 Hz, 16-bit mono PCM: what SPEAK's synthesize() fetches."""
+    rate, n = 22050, 6615
+    pcm = b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * i / rate)))
+                   for i in range(n))
+    return (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+            + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+            + b"data" + struct.pack("<I", len(pcm)) + pcm)
+
+
+# What /__mode?root= accepts: the page, the probes, F6's page, F17's,
+# F23's and issue #10's. "single", "handoff*", "voice" and "speak" are not
+# PROBEs: they report to /__report, not /__inset-report.
+ROOTS = ("page",) + PROBES + ("single",) + tuple(HANDOFF_ROOTS) + ("voice", "speak")
 
 
 def away_origin():
@@ -706,6 +771,8 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             return self.body(f6(SINGLE).encode(), "text/html; charset=utf-8")
         if ROOT_PROBE == "voice" and path in ("/", "/index.html"):
             return self.body(VOICE.encode(), "text/html; charset=utf-8")
+        if ROOT_PROBE == "speak" and path in ("/", "/index.html"):
+            return self.body(SPEAK.encode(), "text/html; charset=utf-8")
         if ROOT_PROBE in HANDOFF_ROOTS and path in ("/", "/index.html"):
             page = f6(HANDOFF).replace("__AUTO__", HANDOFF_ROOTS[ROOT_PROBE])
             return self.body(page.encode(), "text/html; charset=utf-8")
@@ -754,6 +821,9 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         if self.path.startswith("/f6/"):
             # sendBeacon and <a ping>: counted above, which is the point.
             return self.body(b"ok", "text/plain")
+        if self.path == "/api/voice/synthesize":
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            return self.body(speak_wav(), "audio/wav")
         if self.path not in ("/__report", "/__inset-report"):
             return self.body(b"not found", "text/plain", 404)
         n = int(self.headers.get("Content-Length") or 0)

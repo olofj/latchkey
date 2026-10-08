@@ -1027,6 +1027,37 @@ final class OfflineHarnessTests: XCTestCase {
                       "the socket went through the proxy to the gateway; got \(connects)")
     }
 
+    // MARK: - Issue #10: read-aloud
+
+    /// The dashboard's read-aloud plays (`dashboard.py`'s SPEAK): a tap
+    /// unlocks an AudioContext, the WAV arrives asynchronously, and the
+    /// buffer source plays out to `ended`. Untapped (auto-speak's shape), it
+    /// plays too: measured before the fix, WebKit's gesture gate does not
+    /// hold Web Audio back here, so `mediaTypesRequiringUserActionForPlayback`
+    /// stays at its default. What failed before the fix is the session type:
+    /// `auto`, which WebKit turns into the ambient category the silent switch
+    /// mutes. The simulator has no switch, so this checks the request, not
+    /// the switch.
+    func testReadAloudPlaysWithAndWithoutATap() async throws {
+        try await Self.post("\(Self.dashboardControl)/__mode?root=speak")
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        defer { app.terminate() }
+        let auto = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 40) {
+            $0["page"] as? String == "speak" && $0["auto"] as? String != "pending"
+        }
+        XCTAssertEqual(auto["auto"] as? String, "ended", "untapped playback: \(auto)")
+        XCTAssertEqual(auto["audio_session"] as? String, "playback", "the page's audio session: \(auto)")
+
+        let speak = app.webViews.buttons["Speak"]
+        XCTAssertTrue(speak.waitForExistence(timeout: 10), "the Speak button")
+        speak.tap()
+        let tapped = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 20) {
+            $0["page"] as? String == "speak" && $0["tap"] as? String != "pending"
+        }
+        XCTAssertEqual(tapped["tap"] as? String, "ended", "tapped playback: \(tapped)")
+        XCTAssertEqual(tapped["tap_state"] as? String, "running", "the tapped context: \(tapped)")
+    }
+
     // MARK: - R2: the sign-in token leaves the address
 
     /// The page navigates to /?token=… the way the dashboard's own paste
