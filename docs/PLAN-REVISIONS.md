@@ -273,6 +273,10 @@ KiroCrew's end-to-end suite (`website/playwright/auth.setup.ts` in kirodotdev/Ki
 - **A second injected stylesheet.** Beside R22's banner hiding, the app adds one `<style id="latchkey-chip-row">` at document start, in its own content world, main frame only, and only on the gateway's origin (baked in from the value R3 trusts). It makes the dashboard header's instance bar a strip that scrolls, inside the bundle's `(width <= 767px)` band. In this app that band covers portrait and landscape, because the web view stops at the side safe areas (F9). It depends on three facts about the bundle's markup, and if any changes it matches nothing, which is today's page. Carried until KiroCrew fixes the row (F5 §3 A, not yet filed).
 - **A remembered gateway list.** `workspaces.json` gains `knownGateways`: https origins only, no path or query, most recent first, at most 8, never leaving the device. Settings → Gateway lists them with the current one and any a sweep finds. One tap switches through the picker's gate. A host the tailnet does not carry is shown and cannot be chosen. Not the page's own instance switcher, whose remotes are plain-HTTP loopback frames no phone can reach (F5 §5).
 
+**R44 — The web view may capture audio, from one origin** [issue #9, 2026-10-07; built 2026-10-07, `features/F23-voice-input.md`]
+- **What changed.** The app declares `NSMicrophoneUsageDescription`; before, the dashboard's voice input made TCC kill the app. A `getUserMedia` request is decided by `MediaCapturePolicy`: the **microphone** is granted, with no WebKit prompt, when the **main frame** asks from the **gateway's origin** (R3's `allowedOrigin`: scheme, host, port). Everything else is denied: the camera, camera and mic together, any subframe (srcdoc widgets inherit the gateway's origin), any other origin, and no gateway at all. iOS's own prompt still asks once per app.
+- **Nothing is remembered.** The decision is recomputed on every request, so a gateway switch moves the grant with it. The audio goes to the gateway's `/api/ws/stt` over the same relay as `/ws`; R41's rules are unchanged (D1).
+
 ---
 
 ## C. Owner actions (Olof)

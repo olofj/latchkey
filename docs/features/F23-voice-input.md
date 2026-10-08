@@ -253,3 +253,11 @@ grant is scoped to the origin the owner chose, as F6 already trusts it.
 ## 9. Log
 
 2026-10-07: designed before the crash log; §1.3–1.4 pending it.
+2026-10-07: crash log: EXC_CRASH (SIGABRT), termination namespace TCC,
+frame `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__`, "NSMicrophoneUsageDescription"
+missing. H1, our process (§1.4 row 1).
+2026-10-07: built W1-W3. T0 (21 host checks) and T1-T4 pass; T1 failed on
+the pre-W1 build, T2 on a build without the delegate (the page never
+reports), T3 on a type-only policy (the subframe got the mic). The
+other-origin frame of T3 cannot load under F6, so it is T0's. T5 (session
+suite, real bundle) not built. Device check (§6.2) owed.

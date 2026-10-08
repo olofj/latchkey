@@ -3732,3 +3732,21 @@ The row for one gateway put the chip in use in front of L1's contrast audit,
 which failed it. The cause was `.plain` dimming the disabled in-use chip to a
 washed-out blue; with its own button style and a fill a fifth darker than
 the system blue it passes, with no baseline entry (F22 §9).
+
+## 2026-10-07 — F23: the dashboard gets the mic, from its main frame only
+
+Issue #9's crash was a TCC kill: no `NSMicrophoneUsageDescription`, so the
+dashboard's first `getUserMedia({audio:true})` aborted the app
+(`__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__`). The string is now declared,
+and a check on the built Info.plist runs after every L1 build; it failed on
+the build from before.
+
+Decided (F23 W2, R44): the UI delegate grants the microphone to the main
+frame on the selected gateway's origin, and denies the camera, subframes,
+other origins and the no-gateway state. `.grant` rather than `.prompt`, so
+WebKit's own sheet does not ask on every page load; iOS asks once. Nothing
+is stored. A frame from another origin cannot load under F6's rules, so L1
+tests the srcdoc frame (gateway origin, denied) and the host tests cover
+the other origins. No speech-recognition string: the dashboard does not use
+Web Speech. The simulator exposes a mic device, so L1 asserts a real grant;
+without the delegate the page sits on WebKit's prompt and the test fails.
