@@ -37,7 +37,7 @@ Page routes (HTTPS):
 Control routes (plain HTTP, 127.0.0.1:<control-port>):
   GET  /__state     {"reports": {host: latest report}, "requests": {host: n},
                      "paths": [recent "HOST METHOD PATH | USER-AGENT" lines],
-                     "ws_open": n, "insets": {probe: latest inset report},
+                     "ws_open": n, "stt_frames": n, "insets": {probe: latest inset report},
                      "root": "page"|"cover"|"plain"|"product"|"shell"|"single",
                      "handshakes": {TLS SNI name or "-": n}} -- the only
                      count that sees a <link rel=preconnect> (F6)
@@ -97,6 +97,7 @@ REQUESTS = {}         # host -> count of page-side requests
 PATHS = deque(maxlen=200)
 REPORT_SEQ = 0        # every stored report gets the next number
 WS_OPEN = set()       # the handlers of WebSocket connections currently open
+STT_FRAMES = 0        # binary frames received on /api/ws/stt (F23 T4)
 INSETS = {}           # probe name ("cover"/"plain") -> latest inset report
 ROOT_PROBE = ""       # "" = / serves the page; "cover"/"plain"/"shell"/"single"/... = that page
 HANDSHAKES = {}       # SNI server name ("-" if none) -> count of ClientHellos
@@ -565,10 +566,61 @@ setInterval(report, 1000);
 </script>"""
 HANDOFF_ROOTS = {"handoff": "", "handoff-app": "app", "handoff-web": "web"}
 
-# What /__mode?root= accepts: the page, the probes, F6's page and F17's.
-# "single" and "handoff*" are not PROBEs: they report to /__report, not
-# /__inset-report.
-ROOTS = ("page",) + PROBES + ("single",) + tuple(HANDOFF_ROOTS)
+# F23 §6's page: what the dashboard's voice input does, and what it must not
+# be able to do. The main frame asks for the mic (granted on the gateway's
+# origin) and the camera (never); a srcdoc frame -- the dashboard's widget
+# shape, which inherits the gateway's origin -- asks for the mic (denied:
+# subframe). Then the STT socket: one binary frame to /api/ws/stt, one JSON
+# reply back, through the app's relay like /ws. Each outcome is "granted" or
+# the DOMException's name; "pending" until it is known.
+VOICE = """<!doctype html><meta charset=utf-8>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>voice</title><p>voice input probe</p>
+<script>
+var r = {page: "voice", doc: Math.random().toString(36).slice(2),
+         mic: "pending", camera: "pending", frame_mic: "pending", stt: "pending"};
+function report() {
+  fetch("/__report", {method: "POST", body: JSON.stringify(r)}).catch(function () {});
+}
+function gum(c) {
+  if (!navigator.mediaDevices) return Promise.resolve("no-mediaDevices");
+  return navigator.mediaDevices.getUserMedia(c).then(function (s) {
+    s.getTracks().forEach(function (t) { t.stop(); });
+    return "granted";
+  }, function (e) { return e.name || String(e); });
+}
+window.addEventListener("message", function (e) {
+  if (e.data && e.data.frame_mic) { r.frame_mic = e.data.frame_mic; report(); }
+});
+gum({audio: true}).then(function (v) {
+  r.mic = v; report();
+  return gum({video: true});
+}).then(function (v) {
+  r.camera = v; report();
+  var f = document.createElement("iframe");
+  f.srcdoc = "<script>navigator.mediaDevices.getUserMedia({audio:true}).then(" +
+    "function(s){s.getTracks().forEach(function(t){t.stop()});parent.postMessage({frame_mic:'granted'},'*')}," +
+    "function(e){parent.postMessage({frame_mic:e.name||String(e)},'*')})<\\/script>";
+  document.body.appendChild(f);
+});
+try {
+  var ws = new WebSocket("wss://" + location.host + "/api/ws/stt");
+  ws.binaryType = "arraybuffer";
+  ws.onopen = function () { ws.send(new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7])); };
+  ws.onmessage = function (e) {
+    try { r.stt = "reply:" + JSON.parse(e.data).type; } catch (x) { r.stt = "bad-reply"; }
+    report(); ws.close();
+  };
+  ws.onerror = function () { if (r.stt === "pending") { r.stt = "error"; report(); } };
+} catch (x) { r.stt = "throw:" + x; }
+report();
+setInterval(report, 1000);
+</script>"""
+
+# What /__mode?root= accepts: the page, the probes, F6's page, F17's and
+# F23's. "single", "handoff*" and "voice" are not PROBEs: they report to
+# /__report, not /__inset-report.
+ROOTS = ("page",) + PROBES + ("single",) + tuple(HANDOFF_ROOTS) + ("voice",)
 
 
 def away_origin():
@@ -619,6 +671,8 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             return
         if path == "/ws":
             return self.ws()
+        if path == "/api/ws/stt":
+            return self.ws(stt=True)
         if path == "/events":
             return self.sse()
         if path == "/healthz":
@@ -650,6 +704,8 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         # from the control port: POST /__mode?root=cover.
         if ROOT_PROBE == "single" and path in ("/", "/index.html"):
             return self.body(f6(SINGLE).encode(), "text/html; charset=utf-8")
+        if ROOT_PROBE == "voice" and path in ("/", "/index.html"):
+            return self.body(VOICE.encode(), "text/html; charset=utf-8")
         if ROOT_PROBE in HANDOFF_ROOTS and path in ("/", "/index.html"):
             page = f6(HANDOFF).replace("__AUTO__", HANDOFF_ROOTS[ROOT_PROBE])
             return self.body(page.encode(), "text/html; charset=utf-8")
@@ -745,7 +801,10 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             pass
         self.close_connection = True
 
-    def ws(self):
+    def ws(self, stt=False):
+        """RFC 6455. stt=True is KiroCrew's /api/ws/stt shape (F23 T4): binary
+        audio frames in, a JSON transcript out; counted in /__state's
+        stt_frames, kept out of ws_open."""
         k = self.headers.get("Sec-WebSocket-Key")
         if not k:
             return self.body(b"missing key", "text/plain", 400)
@@ -758,8 +817,9 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
         self.ws_write_lock = threading.Lock()
         # Registered before the 101 goes out, so a client that sees the
         # upgrade can count on /__state's ws_open including it.
-        with STATE_LOCK:
-            WS_OPEN.add(self)
+        if not stt:
+            with STATE_LOCK:
+                WS_OPEN.add(self)
         self.end_headers()
         self.close_connection = True
         try:
@@ -770,6 +830,12 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
                     return
                 if op == 0x9:
                     self.ws_write(0xA, payload)
+                    continue
+                if stt and op == 0x2:
+                    global STT_FRAMES
+                    with STATE_LOCK:
+                        STT_FRAMES += 1
+                    self.ws_write(0x1, b'{"type":"final","text":"%d bytes"}' % len(payload))
                     continue
                 if op in (0x1, 0x2):
                     self.ws_write(op, b"echo:" + payload)
@@ -842,7 +908,7 @@ class Control(BaseHTTPRequestHandler):
             return self.reply({"error": "not found"}, 404)
         with STATE_LOCK:
             return self.reply({"reports": REPORTS, "requests": REQUESTS, "paths": list(PATHS),
-                               "ws_open": len(WS_OPEN), "front": FRONT_STATUS,
+                               "ws_open": len(WS_OPEN), "stt_frames": STT_FRAMES, "front": FRONT_STATUS,
                                "insets": INSETS, "root": ROOT_PROBE or "page",
                                "handshakes": HANDSHAKES, "instance": self.instance})
 
@@ -855,6 +921,8 @@ class Control(BaseHTTPRequestHandler):
                 PATHS.clear()
                 INSETS.clear()
                 HANDSHAKES.clear()
+                global STT_FRAMES
+                STT_FRAMES = 0
             return self.reply({"ok": True})
         # POST /__mode?front=502 makes the document answer 5xx on a live
         # connection; front=0 restores it. Deliberately only the document, so

@@ -129,6 +129,9 @@ xcrun simctl keychain "$UDID" add-root-cert "$HARNESS/ca.der"
 # whose cached JS contains `?token=` in code) share the container otherwise.
 # test-without-building installs the app again.
 xcrun simctl uninstall "$UDID" "$BUNDLE" >/dev/null 2>&1 || true
+# F23: the voice tests' getUserMedia must not stop at iOS's mic prompt. Only
+# the microphone: the camera is denied by the app before TCC is asked.
+xcrun simctl privacy "$UDID" grant microphone "$BUNDLE"
 
 # -------------------------------------------------------------------- build --
 SANDBOX_FLAGS=()

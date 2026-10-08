@@ -982,6 +982,51 @@ final class OfflineHarnessTests: XCTestCase {
         assertNothingReachedTheAwayOrigin("strict mode", in: after)
     }
 
+    // MARK: - F23: voice input
+
+    /// Launches the app on F23's page (`dashboard.py`'s VOICE, at /) and waits
+    /// until every outcome it reports is known. The runner granted the app
+    /// the microphone in TCC (test-offline.sh), so no system prompt blocks it.
+    private func voiceRun(until done: @escaping ([String: Any]) -> Bool) async throws -> [String: Any] {
+        try await Self.post("\(Self.dashboardControl)/__mode?root=voice")
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        defer { app.terminate() }
+        let report = try await waitForReport(host: "dash.tail-scale.ts.net", timeout: 40) {
+            $0["page"] as? String == "voice" && done($0)
+        }
+        XCTAssertFalse(app.alerts.firstMatch.exists, "no WebKit or Latchkey prompt: \(app.alerts.firstMatch)")
+        XCTAssertEqual(app.state, .runningForeground, "the app is still running (issue #9 was a TCC kill)")
+        return report
+    }
+
+    /// F23 T2 + T3. The dashboard's main frame gets the mic on the gateway's
+    /// origin without a WebKit prompt; the camera, and the mic from a srcdoc
+    /// frame (the widget shape, which inherits the gateway's origin), do not.
+    /// A frame from another origin cannot load at all under F6's rules, so
+    /// the other-origin case is T0's (scripts/test-media-capture-policy.swift).
+    func testTheDashboardGetsTheMicAndNothingElseDoes() async throws {
+        let report = try await voiceRun { r in
+            ["mic", "camera", "frame_mic"].allSatisfy { r[$0] as? String != "pending" }
+        }
+        XCTAssertEqual(report["mic"] as? String, "granted", "the main frame's mic request: \(report)")
+        XCTAssertEqual(report["camera"] as? String, "NotAllowedError", "the camera is never granted: \(report)")
+        XCTAssertEqual(report["frame_mic"] as? String, "NotAllowedError",
+                       "a subframe never gets the mic, even on the gateway's origin: \(report)")
+    }
+
+    /// F23 T4. KiroCrew's streaming STT socket, /api/ws/stt, carries a binary
+    /// frame to the gateway and a transcript back, over the same relay as
+    /// /ws: F6 rule 4 allows it and the proxy journal shows the gateway.
+    func testTheSpeechSocketReachesTheGatewayThroughTheProxy() async throws {
+        let report = try await voiceRun { $0["stt"] as? String != "pending" }
+        XCTAssertEqual(report["stt"] as? String, "reply:final", "the page's STT round trip: \(report)")
+        let frames = try await dashboardState()["stt_frames"] as? Int ?? 0
+        XCTAssertGreaterThanOrEqual(frames, 1, "the gateway received the audio frame")
+        let connects = try await journalConnects()
+        XCTAssertTrue(connects.contains { $0.host == "dash.tail-scale.ts.net" },
+                      "the socket went through the proxy to the gateway; got \(connects)")
+    }
+
     // MARK: - R2: the sign-in token leaves the address
 
     /// The page navigates to /?token=… the way the dashboard's own paste
