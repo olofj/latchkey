@@ -3776,3 +3776,40 @@ capture is denied either way.
 Default, a product call left open: `playback` is not mixable, so speech
 pauses another app's music rather than ducking it. The web API has no
 ducking type that the silent switch does not mute.
+
+## 2026-10-09 — F26: TestFlight builds carry What to Test
+
+Builds reached the second tester with an empty What to Test, because altool
+cannot set it. `scripts/tf_notes.py` now sets the build's en-US
+`betaBuildLocalizations.whatToTest` through the App Store Connect API, after
+`make tf` has uploaded and App Store Connect has processed the build. It
+uses the same key, with an ES256 JWT signed by `openssl` (standard library
+otherwise; PyJWT and `cryptography` are not installed).
+
+Decided:
+
+- **No PURPOSE, no upload.** The notes exist so that testers know why a
+  build came. The refusal comes in the pre-flight, before the framework
+  step. `UPLOAD=0` needs none.
+- **What changed comes from shipped code, not from specs landing.** Only a
+  commit that touches what goes into the archive counts, and it names its
+  feature by `Spec:` or by a `Fixes #k` the README row claims. A spec that
+  lands alone is not a change a tester can see: F25's spec is on main, its
+  code is not.
+- **Non-feature fixes are listed by issue title.** A `Fixes #k` no feature
+  claims becomes `Fixed: <title>`, from `gh`, with the area prefix dropped,
+  because issue titles are written for a reader and commit subjects are not.
+  Without `gh` the subject is used. Other shipping commits are only counted.
+- **The baseline is a `tf/<build>` annotated tag**, made after a successful
+  upload on the stamped commit, with the notes as its message. Before the
+  first tag, the Build history table in TESTFLIGHT.md seeds it: build
+  202610090504, commit `f72423742cba`, read from that build's archive
+  (`LatchkeyGitSHA`). Tags stay local until Olof pushes (`--follow-tags`).
+  A clone without them repeats older changes rather than dropping any, and
+  the script warns when App Store Connect has a newer build than the
+  baseline.
+- **A wait that runs out is not a failed upload.** Exit status 3, the tag
+  and the saved notes stay, and `make tf-notes BUILD=<n>` finishes the job.
+- **Things to try quote the specs' device checks**, condensed mechanically.
+  Some items are written for Olof, not a tester. `(owner only)` drops one;
+  which ones to drop is left to the first few builds.

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | spec |
+| **Status** | built 2026-10-09; host tests 27/27. The first write to App Store Connect happens on the next real `make tf` (§8) |
 | **Requested** | 2026-10-09, by Olof: per-build changelog notes on TestFlight uploads, because another tester (Deepak) gets every build "with no idea what changed or why it was sent". Approved shape: a purpose line per build, what changed from the feature specs that landed since the previous build, things to try from each feature's device check, a `tf/<build>` tag per upload, notes set after processing, and a dry run. |
 | **Testers** | TestFlight builds now say why they were sent and what to try |
 | **Touches** | `app/scripts/testflight.sh`, a new `app/scripts/tf_notes.py`, the Makefile, `docs/TESTFLIGHT.md`. Nothing in the app. |
@@ -54,8 +54,9 @@ Working:
 - `make tf-notes DRY=1 PURPOSE="..."` prints the notes `make tf` would set
   for HEAD now, and changes nothing anywhere.
 - `make tf-notes BUILD=<n>` sets the notes for an uploaded build later, from
-  its `tf/<n>` tag. With `DRY=1` it looks the build up read-only, says what
-  it would write, and writes nothing.
+  its `tf/<n>` tag, or else from `app/build/testflight-notes/<n>.txt`. With
+  `DRY=1` it looks the build up read-only, says what it would write, and
+  writes nothing.
 
 Failing:
 
@@ -155,8 +156,8 @@ A feature's line is `F<n>: <title>`, the title being the spec's `# F<n> —`
 heading. A spec whose heading reads badly as a change may add a
 `| **Testers** | <one line> |` row to its header table, which is used instead
 (TEMPLATE.md gains the row). Features are listed in number order, fixes in
-issue order. No shipping commit at all gives `No changes to the app since
-build <baseline>.`
+issue order. With no shipping commit at all, What changed has the single
+line `- No changes to the app.`
 
 ### 4.3 Things to try
 
@@ -291,4 +292,30 @@ list and an existing build's localisations, to check the key and the queries
 
 ## 9. Log
 
-(filled in while building)
+2026-10-09, built:
+
+- **Read-only checks against the live service.** With the existing key, the
+  app lookup, `filter[version]=202610090504` and its
+  `betaBuildLocalizations` all answered: the build is `VALID`, and already
+  has an en-US localisation with `whatToTest` null. So the first real run
+  takes the PATCH branch, and the POST branch has only been exercised against
+  the fake. The newest build App Store Connect has is 202610090504, the
+  same as the table's seed, so the baseline warning stays quiet today.
+- **Dry run on main** (`make tf-notes DRY=1`, HEAD `f4608e94d`): baseline
+  202610090504 from the table, What changed `- No changes to the app.`, no
+  Things to try. Correct: since `f72423742` main has only docs commits, one
+  of them F25's spec, whose code is on the unmerged `f25` branch.
+- **Over a wider range** (`BASELINE=263147922`): F23 and F24 with their
+  checks, `Fixed: dashboard read-aloud plays nothing on iPhone` (#10's title,
+  from `gh`) and two internal changes, 1698 units. Some device-check items
+  are written for Olof (F23's "byskebox", F24's log line); `(owner only)` is
+  the way to drop them, and no spec has it yet.
+- **Shown able to fail** (§6): each of the eleven mutations in the table,
+  applied to a copy of `tf_notes.py` and run through `TF_NOTES_PY=`, failed
+  at least one test, and the unchanged file passes all of them.
+- **An agent's TMPDIR breaks `git init`.** In the agent's sandboxed scratch
+  directory, `git init` fails with "Invalid path '…/scratch': Operation not
+  permitted", the same sandbox that broke altool (TESTFLIGHT.md). The tests
+  use TMPDIR, and fall back to `/tmp` when a probe `git init` fails there.
+- `make tf-notes BUILD=<n>` also takes the saved notes file when there is no
+  tag, and a dry run with neither still does the lookup.
