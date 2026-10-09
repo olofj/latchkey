@@ -210,6 +210,11 @@ final class BrowserViewModel: NSObject, ObservableObject {
     /// change; only a publication that moved this replaced the transport.
     private var appliedProxyEndpointGeneration: UInt64
     private var webView: WKWebView?
+#if canImport(UIKit)
+    /// The web view's edge-swipe recognisers' target (F24); they do not
+    /// retain it.
+    private var edgeSwipe: EdgeSwipe?
+#endif
     /// The workspace's dashboard session (M4). Owned by the workspace.
     private weak var session: SessionManager?
 
@@ -369,6 +374,14 @@ final class BrowserViewModel: NSObject, ObservableObject {
         // status indicators. This is iOS 26's public scroll-edge effect, not a
         // hand-built blur/gradient overlay.
         view.scrollView.topEdgeEffect.style = .soft
+        if TestHooks.flag("-UITestNoEdgeSwipe") {
+            // F24's control: no edge recognisers.
+            logger.log("edge-swipe: not installed (-UITestNoEdgeSwipe)")
+        } else {
+            let swipe = EdgeSwipe { [weak self] side in self?.openPane(fromEdge: side) }
+            swipe.install(on: view)
+            edgeSwipe = swipe
+        }
 #endif
         // Keep UIKit's default automatic adjustment: it is what insets
         // ordinary pages, and L1's plain inset probe pins it (F9 §0.1 step 4).
@@ -430,6 +443,9 @@ final class BrowserViewModel: NSObject, ObservableObject {
         webView.uiDelegate = nil
         webViewObservations.removeAll()
         self.webView = nil
+#if canImport(UIKit)
+        edgeSwipe = nil
+#endif
         // The next makeWebView brings a new configuration and controller; the
         // compiled list stays cached in the installer. A compile in flight
         // must not load into the next view.
@@ -1582,6 +1598,31 @@ extension BrowserViewModel: SessionHost {
             return nil
         }
     }
+
+#if canImport(UIKit)
+    /// Opens the dashboard drawer on `side` (F24), only while the main
+    /// frame shows the gateway's origin (F6). Logs what the page did.
+    private func openPane(fromEdge side: EdgeSwipe.Side) {
+        guard let webView, let page = webView.url, let allowed = sessionOrigin,
+              page.scheme?.lowercased() == allowed.scheme?.lowercased(),
+              page.host?.lowercased() == allowed.host?.lowercased(),
+              page.port == allowed.port else {
+            logger.log("edge-swipe: \(side.rawValue) -> off-gateway")
+            return
+        }
+        Task {
+            let status: String
+            do {
+                status = try await webView.callAsyncJavaScript(
+                    PageScriptSources.edgeSwipeOpenPane, arguments: ["side": side.rawValue],
+                    in: nil, contentWorld: EdgeSwipe.world) as? String ?? "no-result"
+            } catch {
+                status = "failed: \(LogRedaction.describe(error))"
+            }
+            logger.log("edge-swipe: \(side.rawValue) -> \(status)")
+        }
+    }
+#endif
 
     func revealSessionBanner() {
         webView?.evaluateJavaScript(PageScriptSources.revealSessionBanner, in: nil,

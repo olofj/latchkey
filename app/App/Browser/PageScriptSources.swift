@@ -541,6 +541,52 @@ enum PageScriptSources {
     })();
     """#
 
+    /// The body of the async function an edge swipe runs (F24): opens the
+    /// dashboard's left (sessions) or right (activity) drawer. Argument
+    /// `side`, `'left'` or `'right'`. Returns `opened`, `already-open`,
+    /// `blocked` or `no-control`; never throws.
+    ///
+    /// The dashboard's own drawer swipe ignores a touch that starts within
+    /// 24 px of either edge while the drawer is closed (Safari's back
+    /// gesture lives there), so this does not fight it: it covers exactly
+    /// the strip the page leaves alone. Its root carries
+    /// `data-owns-swipe="left right"`, on the chat page only, and it refuses
+    /// while a dialog is up; so does this.
+    ///
+    /// Right: the `toggle-activity-panel` window event, the dashboard's own
+    /// API, which on a phone opens the activity drawer. It toggles, so an
+    /// open drawer (its "Close panel" button showing) is left alone. Left:
+    /// there is no event, so the "Toggle sessions" button is clicked;
+    /// `sessions-backdrop` is shown while that drawer is open. Both labels
+    /// are English (KiroCrew localises them): another locale gets
+    /// `no-control` on the left, and a right swipe on an open drawer closes
+    /// it. The click is untrusted, so F17 does not count it as a tap.
+    static let edgeSwipeOpenPane = #"""
+    var root = document.querySelector('[data-owns-swipe~="' + side + '"]');
+    if (!root) { return 'no-control'; }
+    function shown(el) { return !!el && el.getClientRects().length > 0; }
+    var dialogs = document.querySelectorAll('[role="dialog"],[role="alertdialog"]');
+    for (var i = 0; i < dialogs.length; i++) {
+      if (shown(dialogs[i])) { return 'blocked'; }
+    }
+    var sessions = document.querySelector('[data-testid="sessions-backdrop"]');
+    if (side === 'left') {
+      if (sessions) { return 'already-open'; }
+      var toggles = document.querySelectorAll('button[aria-label="Toggle sessions"]');
+      for (var j = 0; j < toggles.length; j++) {
+        if (shown(toggles[j])) { toggles[j].click(); return 'opened'; }
+      }
+      return 'no-control';
+    }
+    if (sessions) { return 'blocked'; }
+    var close = document.querySelectorAll('button[aria-label="Close panel"]');
+    for (var k = 0; k < close.length; k++) {
+      if (shown(close[k])) { return 'already-open'; }
+    }
+    window.dispatchEvent(new Event('toggle-activity-panel'));
+    return 'opened';
+    """#
+
     /// The name `appBarObserver` posts to, in the app's own content world.
     static let appBarHandler = "latchkeyAppBar"
 
