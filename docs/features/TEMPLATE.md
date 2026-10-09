@@ -6,6 +6,7 @@
 | **Requested** | <date>, by Olof: "<the ask, quoted>" |
 | **Revision** | R<n> in `../PLAN-REVISIONS.md`, if it changes documented behaviour |
 | **Touches** | <areas, e.g. App/Discovery, TSNet, the L2 harness> |
+| **Testers** | <optional: one line for TestFlight's What to Test, if the title reads badly as a change (F26)> |
 
 ## 1. Why
 
@@ -42,6 +43,10 @@ What is persisted, where, and what happens to a value the previous version
 wrote. If nothing is persisted, say so.
 
 ## 6. End-to-end tests
+
+Give the device check its own heading or `**Device check**` bullet, as a
+numbered list: TestFlight's What to Test quotes it to testers (F26). End an
+item with `(owner only)` to keep it out.
 
 Per test: the suite it belongs in, what it drives, what it asserts, and **how
 it was shown able to fail**. Prefer server-side evidence (what the fake

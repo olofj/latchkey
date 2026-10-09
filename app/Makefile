@@ -171,12 +171,26 @@ ipa: framework  ## Archive + export a dev-signed .ipa for a real iOS device
 # app/.asc-key (docs/TESTFLIGHT.md). UPLOAD=0 stops at an App Store .ipa.
 # The dirty-tree guard (F12) runs before the framework, not as a recipe after
 # it: a stale framework rebuilds for minutes, and a dirty tree is refused in
-# under a second.
+# under a second. So is an upload with no PURPOSE (F26).
 .PHONY: tf
-tf:  ## Archive for the App Store and upload to TestFlight (UPLOAD=0: export only)
+tf:  ## Archive, upload to TestFlight and set What to Test: PURPOSE="..." (UPLOAD=0: export only)
 	@UPLOAD=$(or $(UPLOAD),1) TF_CHECK_ONLY=1 ./scripts/testflight.sh
 	@$(MAKE) --no-print-directory framework
 	@UPLOAD=$(or $(UPLOAD),1) ./scripts/testflight.sh $(SWIFT_SANDBOX_FLAGS)
+
+# PURPOSE and BASELINE reach scripts/tf_notes.py through the environment: make
+# exports command-line variables to recipes, so a purpose needs no quoting here.
+.PHONY: tf-notes
+tf-notes:  ## TestFlight notes: DRY=1 prints HEAD's; BUILD=n sets build n's from tf/n (DRY=1: read-only)
+	@if [ -n "$(BUILD)" ]; then \
+	    python3 scripts/tf_notes.py set --build "$(BUILD)" --from-tag $(if $(filter 1,$(DRY)),--dry-run); \
+	elif [ "$(DRY)" = 1 ]; then \
+	    python3 scripts/tf_notes.py notes --check-asc; \
+	else \
+	    echo 'usage: make tf-notes DRY=1 [PURPOSE="..."]   print the notes make tf would set now' >&2; \
+	    echo '       make tf-notes BUILD=<n> [DRY=1]       set build <n>'"'"'s notes from tag tf/<n>' >&2; \
+	    exit 2; \
+	fi
 
 # ----- test -----
 # An auth key automates login on a fresh sim so the connected tests run.
@@ -218,6 +232,7 @@ test-policy:  ## Run the host-only unit tests (fast; no simulator, no framework)
 	@./scripts/test-session-manager.sh
 	@./scripts/test-browser-view-model.sh
 	@./scripts/test-node-start-failure.sh
+	@./scripts/test-tf-notes.sh
 
 .PHONY: test-ios-ui
 test-ios-ui: framework app  ## Run every required iOS UI test on the simulator

@@ -2,8 +2,10 @@
 
 `make tf` (in `app/`) archives Latchkey for the App Store, exports an App Store
 `.ipa` and uploads it to App Store Connect, where it becomes a TestFlight build.
-`make tf UPLOAD=0` stops after the export. Uploading needs a committed tree, and
-every build names its commit in Settings → Status (F12).
+`make tf UPLOAD=0` stops after the export. Uploading needs a committed tree and
+a reason, `make tf PURPOSE="..."`. Every build names its commit in Settings →
+Status (F12) and tells testers what changed and what to try (F26, "What to
+Test" below).
 
 TestFlight is the only way to install without a Mac tethered to the phone, and
 its builds last 90 days instead of a development profile's 7 (free team) or 1
@@ -78,6 +80,64 @@ loop; the two installs coexist only if they use different bundle ids.
   `xcrun altool --upload-package`, with altool's `TMPDIR` set to
   `app/build/altool-tmp`. See "Why a local certificate is not enough" and
   "The upload's temporary directory".
+- Refuses an upload without `PURPOSE`, before anything is built, and writes
+  the build's What to Test after the export; once altool succeeds, tags the
+  commit `tf/<build>`, waits for processing and sets the notes. See below.
+
+## What to Test (F26)
+
+```
+make tf PURPOSE="Try the mute button"     # upload, tag, wait, set the notes
+make tf-notes DRY=1 PURPOSE="..."         # print the notes for HEAD; changes nothing
+make tf-notes BUILD=202610100000          # set a build's notes later, from tf/<build>
+make tf-notes BUILD=202610100000 DRY=1    # look the build up read-only, write nothing
+```
+
+TestFlight shows a build's **What to Test** in the TestFlight app and in the
+new-build email. altool cannot set it, so `scripts/tf_notes.py` does, through
+the App Store Connect API with the same key (an ES256 JWT signed by
+`openssl`). The notes are four parts, at most 4000 characters:
+
+1. **Why this build:** `PURPOSE`, one line, at most 500 characters. Required
+   to upload; `UPLOAD=0` and dry runs say "(no purpose given)" without one.
+2. **What changed since build N:** one line per feature whose code shipped
+   since the previous build (`F25: <the spec's title>`), then `Fixed: <issue
+   title>` for each `Fixes #k` no feature claims, then a count of internal
+   changes. Only commits touching what goes into the archive count (`app/App`,
+   `TSNet`, `ShareExtension`, `ThirdParty`, `Latchkey/`, the project and
+   `Latchkey.xcconfig`): a spec that lands on its own, tests, scripts and docs
+   are not listed. A commit belongs to a feature through its `Spec:` line, or
+   through a `Fixes #k` that the feature's README row names as `issue #k`.
+3. **Things to try:** each listed feature's device check (the spec's "Device
+   check" heading or `**Device check**` bullet), condensed. An item ending in
+   `(owner only)` is left out.
+4. The commit, as Settings → Status shows it.
+
+A spec can give testers a better line than its title with a `| **Testers** |
+... |` header row. Over 4000 characters, things to try are cut first, then
+features; the purpose never is.
+
+**Where the changelog starts.** At the newest `tf/<build>` tag that is an
+ancestor of HEAD. `make tf` creates it after a successful upload, as an
+annotated tag whose message is the notes. Before the first such tag, the
+Build history table at the end of this page gives the starting build.
+`BASELINE=<commit>` overrides both.
+
+**The tags are local until pushed.** Push with `git push --follow-tags`, or
+once `git config push.followTags true`. Worktrees on this Mac share the tags
+at once. A clone without them falls back to the table and repeats older
+changes; it never drops one. When App Store Connect has a newer build than
+the baseline, the script warns.
+
+**Records.** `app/build/testflight-notes/<build>.txt` (one per build, kept),
+`app/build/appstore/WhatToTest.txt` (beside the `.ipa`, replaced by the next
+export), and the tag's message.
+
+**Waiting.** Processing usually takes 5-30 minutes. The script polls every
+30 s for up to `TF_NOTES_WAIT` seconds (default 1800). If time runs out it
+exits with status 3 and says so: the upload and the tag stand, and `make
+tf-notes BUILD=<n>` sets the notes once the build is processed. `TF_NOTES=0`
+skips the wait altogether. A build that fails processing gets no notes.
 
 ## Privacy manifests
 
@@ -280,3 +340,14 @@ France.
 Internal testing (up to 100 members of the App Store Connect team) needs no
 Beta App Review. Add yourself under TestFlight → Internal Testing, then
 install from the TestFlight app on the phone.
+
+## Build history
+
+Where the changelog of the first build with notes starts (F26 §4.1). Every
+upload since is tagged `tf/<build>`, so this table is a fallback for a clone
+without the tags, not a log: `make tf` reads the newest row whose commit is an
+ancestor of HEAD, and a newer tag wins.
+
+| Build | Commit | Note |
+|---|---|---|
+| 202610090504 | f72423742cba | F24's travel threshold; the last build before notes. Commit read from that archive's `LatchkeyGitSHA` |
