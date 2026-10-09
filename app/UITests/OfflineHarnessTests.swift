@@ -1058,6 +1058,45 @@ final class OfflineHarnessTests: XCTestCase {
         XCTAssertEqual(tapped["tap_state"] as? String, "running", "the tapped context: \(tapped)")
     }
 
+    // MARK: - F24: edge swipes open the dashboard's drawers
+
+    /// A swipe in from the right edge opens the activity drawer, from the
+    /// left the sessions drawer (`dashboard.py`'s PANES, which offers the
+    /// real page's hooks). A drag that starts mid-screen opens nothing.
+    /// Fails with `-UITestNoEdgeSwipe`: the page never sees the edges.
+    func testEdgeSwipesOpenTheDashboardsDrawers() async throws {
+        try await Self.post("\(Self.dashboardControl)/__mode?root=panes")
+        let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
+        defer { app.terminate() }
+        let host = "dash.tail-scale.ts.net"
+        _ = try await waitForReport(host: host, timeout: 40) { $0["page"] as? String == "panes" }
+        XCTAssertTrue(app.webViews.buttons["Toggle sessions"].waitForExistence(timeout: 10), "the page")
+
+        func drag(from x: CGFloat, to x2: CGFloat) {
+            let y = app.frame.height / 2
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: x, dy: y))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: x2, dy: y)))
+        }
+        let w = app.frame.width
+        drag(from: w * 0.3, to: w * 0.8)
+        drag(from: w * 0.7, to: w * 0.2)
+        try await Task.sleep(for: .seconds(2))
+        let still = try await waitForReport(host: host, timeout: 10) { $0["page"] as? String == "panes" }
+        XCTAssertEqual(still["left"] as? String, "closed", "a mid-screen drag: \(still)")
+        XCTAssertEqual(still["right"] as? String, "closed", "a mid-screen drag: \(still)")
+
+        drag(from: w - 1, to: w * 0.4)
+        let right = try await waitForReport(host: host, timeout: 10) { $0["right"] as? String == "open" }
+        XCTAssertEqual(right["events"] as? Int, 1, "one toggle event: \(right)")
+        app.webViews.buttons["Close panel"].tap()
+        _ = try await waitForReport(host: host, timeout: 10) { $0["right"] as? String == "closed" }
+
+        drag(from: 1, to: w * 0.6)
+        let left = try await waitForReport(host: host, timeout: 10) { $0["left"] as? String == "open" }
+        XCTAssertEqual(left["right"] as? String, "closed", "only the left drawer: \(left)")
+    }
+
     // MARK: - R2: the sign-in token leaves the address
 
     /// The page navigates to /?token=… the way the dashboard's own paste

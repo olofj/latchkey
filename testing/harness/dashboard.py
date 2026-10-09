@@ -682,6 +682,53 @@ setInterval(report, 1000);
 </script>"""
 
 
+# F24's page: the hooks KiroCrew 0.7.1/0.7.2's chat page offers its drawers
+# at phone width (App-e17PGpKz.js), and nothing else. The chat root carries
+# data-owns-swipe="left right"; the header's "Toggle sessions" button opens
+# the sessions drawer, which shows a [data-testid=sessions-backdrop]; a
+# window "toggle-activity-panel" event toggles the activity drawer, whose
+# header has a "Close panel" button. "left"/"right" are each drawer's state,
+# "events" counts the toggle events.
+PANES = """<!doctype html><meta charset=utf-8>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>panes</title>
+<style>body{margin:0;font:20px -apple-system}#l,#r,#b{display:none;position:fixed;top:0;bottom:0}
+#l{left:0;width:70%;background:#cde;z-index:2}#r{left:0;right:0;background:#edc;z-index:1}
+#b{left:0;right:0;background:rgba(0,0,0,.3);z-index:1}</style>
+<div data-owns-swipe="left right" style="height:100vh">
+<button aria-label="Toggle sessions" id=t style="font-size:20px;margin:60px 20px">=</button>
+<p style="margin:20px">Chat</p></div>
+<div id=l>Sessions</div>
+<div id=r><button aria-label="Close panel" id=c style="font-size:20px;margin:60px 20px">x</button>Activity</div>
+<script>
+var r = {page: "panes", doc: Math.random().toString(36).slice(2),
+         left: "closed", right: "closed", events: 0};
+function report() {
+  fetch("/__report", {method: "POST", body: JSON.stringify(r)}).catch(function () {});
+}
+function show(id, on) { document.getElementById(id).style.display = on ? "block" : "none"; }
+function left(open) {
+  r.left = open ? "open" : "closed"; show("l", open);
+  // Like the real page: the backdrop exists only while the drawer does.
+  var b = document.getElementById("b");
+  if (open && !b) {
+    b = document.createElement("div"); b.id = "b"; b.dataset.testid = "sessions-backdrop";
+    document.body.appendChild(b);
+  } else if (!open && b) { b.remove(); }
+  if (b) { b.style.display = "block"; b.onclick = function () { left(false); }; }
+  report();
+}
+function right(open) { r.right = open ? "open" : "closed"; show("r", open); report(); }
+document.getElementById("t").addEventListener("click", function () { left(r.left !== "open"); });
+document.getElementById("c").addEventListener("click", function () { right(false); });
+window.addEventListener("toggle-activity-panel", function () {
+  r.events++; right(r.right !== "open");
+});
+report();
+setInterval(report, 1000);
+</script>"""
+
+
 def speak_wav():
     """0.3 s of 440 Hz, 16-bit mono PCM: what SPEAK's synthesize() fetches."""
     rate, n = 22050, 6615
@@ -693,9 +740,9 @@ def speak_wav():
 
 
 # What /__mode?root= accepts: the page, the probes, F6's page, F17's,
-# F23's and issue #10's. "single", "handoff*", "voice" and "speak" are not
-# PROBEs: they report to /__report, not /__inset-report.
-ROOTS = ("page",) + PROBES + ("single",) + tuple(HANDOFF_ROOTS) + ("voice", "speak")
+# F23's, issue #10's and F24's. "single", "handoff*", "voice", "speak" and
+# "panes" are not PROBEs: they report to /__report, not /__inset-report.
+ROOTS = ("page",) + PROBES + ("single",) + tuple(HANDOFF_ROOTS) + ("voice", "speak", "panes")
 
 
 def away_origin():
@@ -783,6 +830,8 @@ class Page(HandshakeInThread, BaseHTTPRequestHandler):
             return self.body(VOICE.encode(), "text/html; charset=utf-8")
         if ROOT_PROBE == "speak" and path in ("/", "/index.html"):
             return self.body(SPEAK.encode(), "text/html; charset=utf-8")
+        if ROOT_PROBE == "panes" and path in ("/", "/index.html"):
+            return self.body(PANES.encode(), "text/html; charset=utf-8")
         if ROOT_PROBE in HANDOFF_ROOTS and path in ("/", "/index.html"):
             page = f6(HANDOFF).replace("__AUTO__", HANDOFF_ROOTS[ROOT_PROBE])
             return self.body(page.encode(), "text/html; charset=utf-8")
