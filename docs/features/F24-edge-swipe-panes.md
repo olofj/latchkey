@@ -161,3 +161,11 @@ test failed. Two assertions do not discriminate in the simulator: the
 prototype's left-edge swipe did not move `top`, and XCUITest's slow
 36 pt nudge never began a screen-edge recogniser at all. Both are kept
 as guards, and device items 9-10 cover them.
+
+## 8. Device feedback, build 202610090504
+
+Olof, 2026-10-08: "Pretty good now. I wish the pane would move like
+when you close it, and not just pop fully open, but that's ok."
+Accepted as is. A pane that tracks the finger on open needs the
+dashboard to expose its drawer drag offset (kept private today, §7);
+it belongs in the upstream request in §5, not in Latchkey.
