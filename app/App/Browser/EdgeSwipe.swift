@@ -16,6 +16,15 @@
 //  edge, so a horizontal scroll inside the page never reaches it. It is
 //  allowed to recognise alongside WebKit's own recognisers, which would
 //  otherwise hold it back; once it begins, the page's touch is cancelled.
+//  Scroll views are the exception: an edge swipe owns its touch, so the
+//  chat behind the drawer does not scroll with the finger's drift (F24
+//  §7). Their pans wait for ours to fail, which a touch away from the
+//  edge does at once.
+//
+//  It opens the drawer only once the finger has travelled `travel` points
+//  inward, more across than up or down, or on a quick flick: firing at
+//  `.began`, a few points in, threw the drawer out before the swipe
+//  looked deliberate.
 //
 
 #if canImport(UIKit)
@@ -29,9 +38,17 @@ final class EdgeSwipe: NSObject, UIGestureRecognizerDelegate {
     /// call it.
     static let world = WKContentWorld.world(name: "latchkey-edge-swipe")
 
-    private let onSwipe: (Side) -> Void
+    /// Inward travel, in points, before a swipe opens its drawer.
+    static let travel: CGFloat = 40
+    /// A swipe released short of `travel` still opens on a flick: at
+    /// least half the travel at this inward speed, in points a second.
+    static let flick: CGFloat = 500
 
-    /// `onSwipe` runs once per gesture, when it begins.
+    private let onSwipe: (Side) -> Void
+    /// The recognisers whose current gesture has already opened a drawer.
+    private var fired: Set<ObjectIdentifier> = []
+
+    /// `onSwipe` runs at most once per gesture.
     init(onSwipe: @escaping (Side) -> Void) {
         self.onSwipe = onSwipe
     }
@@ -49,13 +66,35 @@ final class EdgeSwipe: NSObject, UIGestureRecognizerDelegate {
     }
 
     @objc private func pan(_ recogniser: UIScreenEdgePanGestureRecognizer) {
-        guard recogniser.state == .began else { return }
-        onSwipe(recogniser.edges.contains(.left) ? .left : .right)
+        let id = ObjectIdentifier(recogniser)
+        switch recogniser.state {
+        case .began:
+            fired.remove(id)
+        case .changed, .ended:
+            guard !fired.contains(id), let view = recogniser.view else { return }
+            let side: Side = recogniser.edges.contains(.left) ? .left : .right
+            let sign: CGFloat = side == .left ? 1 : -1
+            let t = recogniser.translation(in: view)
+            let inward = t.x * sign, across = inward > abs(t.y)
+            let flick = recogniser.velocity(in: view).x * sign
+            if across && (inward >= Self.travel
+                          || (recogniser.state == .ended && inward >= Self.travel / 2 && flick >= Self.flick)) {
+                fired.insert(id)
+                onSwipe(side)
+            }
+        default:
+            break
+        }
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        true
+        !(other.view is UIScrollView)
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        other.view is UIScrollView
     }
 }
 #endif
