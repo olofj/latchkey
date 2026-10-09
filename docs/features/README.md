@@ -43,6 +43,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F22](F22-gateway-row.md) | The app bar lists the remembered gateways as chips with the dashboard's health lights; one tap switches directly | **built** 2026-09-28 overnight (issue #6): chips in F15's summoned bar, lit by a direct probe of each remembered gateway; one tap switches. Product calls in §8 made without Olof; device look outstanding |
 | [F23](F23-voice-input.md) | The dashboard's voice input works, and does not crash the app (issue #9) | **built** 2026-10-07: W1-W3; device-checked 2026-10-07 on build 202610080238 (local gateway + Instances switcher); byskebox untested |
 | [F24](F24-edge-swipe-panes.md) | A swipe in from the screen edge opens the dashboard's sessions (left) or activity (right) drawer | **prototype built 2026-10-08**: screen-edge recognisers run a page script that uses the dashboard's `toggle-activity-panel` event and its "Toggle sessions" button (English labels only, §5); L1 test. Refined the same day from device feedback (§7): opens after 40 pt of inward travel, and an edge swipe no longer scrolls the chat. Device check owed (§6) |
+| [F25](F25-mute-chirps.md) | A mute icon next to the gear silences the dashboard's notification chirps, muted by default; read-aloud still plays | spec 2026-10-09 |
 
 ## Still open, not yet answered
 
