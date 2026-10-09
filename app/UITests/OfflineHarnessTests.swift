@@ -1064,6 +1064,12 @@ final class OfflineHarnessTests: XCTestCase {
     /// left the sessions drawer (`dashboard.py`'s PANES, which offers the
     /// real page's hooks). A drag that starts mid-screen opens nothing.
     /// Fails with `-UITestNoEdgeSwipe`: the page never sees the edges.
+    ///
+    /// Device feedback, 2026-10-08 (F24 §7): an edge swipe that drifts
+    /// vertically must not also scroll the chat behind the drawer, and a
+    /// short touch at the edge must not open anything. Before the fix the
+    /// edge recogniser shared the touch with the chat's scroll view, and
+    /// the right-edge swipe below moved `top` (405 to 569).
     func testEdgeSwipesOpenTheDashboardsDrawers() async throws {
         try await Self.post("\(Self.dashboardControl)/__mode?root=panes")
         let app = launch(gateway: Self.gateway, suffix: Self.tailnetSuffix, peers: ["dash"])
@@ -1072,29 +1078,64 @@ final class OfflineHarnessTests: XCTestCase {
         _ = try await waitForReport(host: host, timeout: 40) { $0["page"] as? String == "panes" }
         XCTAssertTrue(app.webViews.buttons["Toggle sessions"].waitForExistence(timeout: 10), "the page")
 
-        func drag(from x: CGFloat, to x2: CGFloat) {
-            let y = app.frame.height / 2
+        let w = app.frame.width, h = app.frame.height
+        func drag(from x: CGFloat, to x2: CGFloat, y: CGFloat? = nil, to y2: CGFloat? = nil) {
+            let y = y ?? h / 2
             let origin = app.coordinate(withNormalizedOffset: .zero)
             origin.withOffset(CGVector(dx: x, dy: y))
-                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: x2, dy: y)))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: x2, dy: y2 ?? y)))
         }
-        let w = app.frame.width
+        /// The page's state once the chat has stopped moving (a fling
+        /// coasts, and the page reports every second).
+        func settled() async throws -> [String: Any] {
+            try await Task.sleep(for: .seconds(2.5))
+            return try await waitForReport(host: host, timeout: 10) { $0["page"] as? String == "panes" }
+        }
+
         drag(from: w * 0.3, to: w * 0.8)
         drag(from: w * 0.7, to: w * 0.2)
-        try await Task.sleep(for: .seconds(2))
-        let still = try await waitForReport(host: host, timeout: 10) { $0["page"] as? String == "panes" }
+        let still = try await settled()
         XCTAssertEqual(still["left"] as? String, "closed", "a mid-screen drag: \(still)")
         XCTAssertEqual(still["right"] as? String, "closed", "a mid-screen drag: \(still)")
 
-        drag(from: w - 1, to: w * 0.4)
+        // An ordinary vertical drag still scrolls the chat.
+        drag(from: w / 2, to: w / 2, y: h * 0.75, to: h * 0.45)
+        let scrolled = try await settled()
+        let top = scrolled["top"] as? Int ?? 0
+        XCTAssertGreaterThan(top, 0, "a vertical drag scrolls the chat: \(scrolled)")
+
+        // In from the right edge, drifting upward: the drawer opens, the
+        // chat behind it stays where it was.
+        drag(from: w - 1, to: w * 0.4, y: h * 0.7, to: h * 0.5)
         let right = try await waitForReport(host: host, timeout: 10) { $0["right"] as? String == "open" }
         XCTAssertEqual(right["events"] as? Int, 1, "one toggle event: \(right)")
+        let afterRight = try await settled()
+        XCTAssertEqual(afterRight["top"] as? Int, top, "the right-edge swipe scrolled the chat: \(afterRight)")
         app.webViews.buttons["Close panel"].tap()
         _ = try await waitForReport(host: host, timeout: 10) { $0["right"] as? String == "closed" }
 
-        drag(from: 1, to: w * 0.6)
+        // A short, slow touch at the edge, under the 40 pt threshold, opens
+        // nothing. The prototype opened on it: the recogniser begins a few
+        // points in.
+        func nudge(from x: CGFloat, to x2: CGFloat) {
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: x, dy: h / 2))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: x2, dy: h / 2)),
+                       withVelocity: 60, thenHoldForDuration: 0.3)
+        }
+        nudge(from: w - 1, to: w - 36)
+        nudge(from: 1, to: 36)
+        let short = try await settled()
+        XCTAssertEqual(short["right"] as? String, "closed", "a short edge touch: \(short)")
+        XCTAssertEqual(short["left"] as? String, "closed", "a short edge touch: \(short)")
+        XCTAssertEqual(short["events"] as? Int, 1, "no toggle event from a short touch: \(short)")
+
+        // In from the left edge, drifting downward.
+        drag(from: 1, to: w * 0.6, y: h * 0.5, to: h * 0.7)
         let left = try await waitForReport(host: host, timeout: 10) { $0["left"] as? String == "open" }
         XCTAssertEqual(left["right"] as? String, "closed", "only the left drawer: \(left)")
+        let afterLeft = try await settled()
+        XCTAssertEqual(afterLeft["top"] as? Int, short["top"] as? Int, "the left-edge swipe scrolled the chat: \(afterLeft)")
     }
 
     // MARK: - R2: the sign-in token leaves the address

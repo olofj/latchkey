@@ -688,22 +688,34 @@ setInterval(report, 1000);
 # the sessions drawer, which shows a [data-testid=sessions-backdrop]; a
 # window "toggle-activity-panel" event toggles the activity drawer, whose
 # header has a "Close panel" button. "left"/"right" are each drawer's state,
-# "events" counts the toggle events.
+# "events" counts the toggle events. Like the real shell (h-dvh,
+# overflow-hidden), the document never scrolls: the chat is an inner
+# scroller, which WebKit backs with a scroll view of its own. "top" is its
+# scrollTop, so a test can tell whether a swipe also scrolled the chat.
 PANES = """<!doctype html><meta charset=utf-8>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>panes</title>
-<style>body{margin:0;font:20px -apple-system}#l,#r,#b{display:none;position:fixed;top:0;bottom:0}
+<style>body{margin:0;font:20px -apple-system;height:100vh;overflow:hidden}
+#l,#r,#b{display:none;position:fixed;top:0;bottom:0}
 #l{left:0;width:70%;background:#cde;z-index:2}#r{left:0;right:0;background:#edc;z-index:1}
-#b{left:0;right:0;background:rgba(0,0,0,.3);z-index:1}</style>
-<div data-owns-swipe="left right" style="height:100vh">
+#b{left:0;right:0;background:rgba(0,0,0,.3);z-index:1}
+#s{position:absolute;top:120px;bottom:0;left:0;right:0;overflow-y:auto}
+#s p{margin:0;padding:20px;border-bottom:1px solid #ccc}</style>
+<div data-owns-swipe="left right" style="height:100vh;position:relative">
 <button aria-label="Toggle sessions" id=t style="font-size:20px;margin:60px 20px">=</button>
-<p style="margin:20px">Chat</p></div>
+<div id=s></div></div>
 <div id=l>Sessions</div>
 <div id=r><button aria-label="Close panel" id=c style="font-size:20px;margin:60px 20px">x</button>Activity</div>
 <script>
 var r = {page: "panes", doc: Math.random().toString(36).slice(2),
-         left: "closed", right: "closed", events: 0};
+         left: "closed", right: "closed", events: 0, top: 0};
+var s = document.getElementById("s");
+for (var i = 0; i < 60; i++) {
+  var p = document.createElement("p"); p.textContent = "Chat line " + i; s.appendChild(p);
+}
+s.addEventListener("scroll", function () { r.top = Math.round(s.scrollTop); });
 function report() {
+  r.top = Math.round(s.scrollTop);
   fetch("/__report", {method: "POST", body: JSON.stringify(r)}).catch(function () {});
 }
 function show(id, on) { document.getElementById(id).style.display = on ? "block" : "none"; }
