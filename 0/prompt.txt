@@ -1,0 +1,51 @@
+<task-notification>
+<task-id>a7e3f955a9f8540c9</task-id>
+<tool-use-id>toolu_01C34TzpsCfsGahabYxkb3bw</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/7b72881e-a3a1-410e-a145-52fa8cc5684b/tasks/a7e3f955a9f8540c9.output</output-file>
+<status>completed</status>
+<summary>Agent "TestFlight changelog notes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Per-build changelog notes for TestFlight are built and committed on `main` (not pushed). Nothing was uploaded and nothing was written to App Store Connect: only read-only API calls were made, and the write path was tested against a fake server.
+
+**Commits**
+- `f4608e94d docs: f26 changelog notes for testflight builds` (the spec, written first)
+- `8da1bae06 tf: set testflight what to test from specs, fixes and device checks`
+- `eedec409c docs: f26 built, testflight notes decisions`
+
+**Spec:** `/Users/olof/src/latchkey/docs/features/F26-testflight-notes.md`, with its row in `docs/features/README.md`.
+
+**What I decided**
+- **Missing PURPOSE refuses the upload.** The check runs before anything is built and takes about 0.25 s. `UPLOAD=0` and dry runs don't need one; a PURPOSE over 500 characters is always refused.
+- **"What changed" counts only commits that change the app itself** (`app/App`, `TSNet`, `ShareExtension`, `ThirdParty`, `Latchkey/`, the Xcode project, `Latchkey.xcconfig`). A commit is linked to a feature by its `Spec:` line, or by a `Fixes #k` that the feature's README row names. A spec landing on its own doesn't count, which is why F25 stays out today: its spec is on main, its code is only on `f25`.
+- **Non-feature fixes:** a `Fixes #k` that no feature claims becomes `Fixed: &lt;GitHub issue title&gt;` (fetched with `gh`). Without `gh`, the commit subject is used. Other app changes are only counted ("Plus N internal changes").
+- **Things to try** come from each spec's "Device check" heading or bullet, condensed. An item ending in `(owner only)` is left out.
+- **Over 4000 characters**, things to try are cut first, then feature lines; the purpose line is never cut.
+- **Records:** `make tf` saves the notes to `app/build/testflight-notes/&lt;build&gt;.txt` and next to the `.ipa`. After a successful upload it creates an annotated tag `tf/&lt;build&gt;` whose message is the notes. It then waits up to 30 minutes for processing and sets the notes. If the wait runs out it exits with status 3, and `make tf-notes BUILD=n` sets them later. `make tf-notes DRY=1` prints the notes without changing anything.
+
+**How the first baseline is found:** from a new Build history table at the end of `docs/TESTFLIGHT.md`, seeded with build 202610090504 at commit `f72423742cba`. I read that commit from the build's own archive. App Store Connect confirms 202610090504 is its newest build. After the first upload, the newest `tf/*` tag that is an ancestor of HEAD takes over.
+
+Tags stay local until you push. A clone without them falls back to the table, so the notes repeat older changes but never miss one, and the script warns if App Store Connect has a newer build than its starting point.
+
+**Tests:** 27/27 new host tests pass (`app/scripts/test-tf-notes.py`, added to `make test-policy`). They cover finding the starting build, feature detection, section extraction, the 4000-character cap, a missing PURPOSE, the login token, and patch vs. create, waiting, timeout and failed-processing against a fake API. To show they can fail, I ran them against 11 deliberately broken copies of the script; every one failed at least one test.
+
+`make test-policy` as a whole doesn't pass right now: `test-loopback-stalls.sh` failed 1–2 of its 21 timing checks across three runs. That is existing Swift code this work doesn't touch, and it looks like timing flakiness under host load, but I didn't investigate further.
+
+**Read-only checks against the live service:** the key authenticates, and build 202610090504 is processed and already has an empty en-US "What to Test", so the first real run will update that entry. Creating a new entry has only been exercised against the fake.
+
+**Dry run on main now:**
+```
+Why this build: Check the new build notes
+
+What changed since build 202610090504:
+- No changes to the app.
+
+Commit eedec409c9dc (Settings → Status shows it).
+```
+That's correct, since main has only docs commits since that build. Run over a wider range for comparison, the notes list F23, F24, "Fixed: dashboard read-aloud plays nothing on iPhone" and their device checks, at 1698 of 4000 characters.
+
+**Open questions**
+- **Pushing tags:** use `git push --follow-tags`, or set `git config push.followTags true` once.
+- **Device checks written for you:** some items aren't meant for Deepak (F23's "byskebox", F24's log-line check). Do you want them marked `(owner only)`? I haven't edited those specs.
+- **First real write:** the first `make tf` with notes will be the first write to App Store Connect. If it fails, the build is still uploaded and tagged, and `make tf-notes BUILD=n` retries.</result>
+<usage><subagent_tokens>167816</subagent_tokens><tool_uses>81</tool_uses><duration_ms>1151024</duration_ms></usage>
+</task-notification>
