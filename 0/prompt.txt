@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b9wscbai0</task-id>
+<tool-use-id>toolu_01HmjVyNve9dMk25tiKKjRfe</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/4a3b4c37-af87-40ee-824d-79f8213a2dca/tasks/b9wscbai0.output</output-file>
+<status>completed</status>
+<summary>Background command "Wake if the review stays quiet for 5 min" completed (exit code 0)</summary>
+</task-notification>
