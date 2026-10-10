@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b5u8job5n</task-id>
+<summary>Monitor event: "new commits on f16 (#3) branch"</summary>
+<event>806ab3dfa docs: f16 stages 2 and 3 built, fault 3 measured and its fix declined</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
