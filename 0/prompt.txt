@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>a25c1d09cfbc1f671</task-id>
+<tool-use-id>toolu_01LPscRtfHp5n2Rg5kWvQeTz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/e0239ecc-d081-4825-b0bd-f4a3f7f1eb9f/tasks/a25c1d09cfbc1f671.output</output-file>
+<status>completed</status>
+<summary>Agent "Review: build, release, scripts" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Adversarial review complete. Read-only; nothing was built, edited, or run beyond `git`/`grep` queries.
+
+## Findings (most severe first)
+
+**1. HIGH — The F12 dirty-tree guard is bypassed by gitignored build inputs; `Local.xcconfig` can put test hooks into a TestFlight build stamped with a clean SHA.**
+`app/scripts/testflight.sh:43-45,91-99`; `app/Latchkey.xcconfig:34` (`#include? "Local.xcconfig"`); `app/.gitignore:22` (`/Local.xcconfig`); `app/Latchkey.xcodeproj/project.pbxproj:372` (Latchkey.xcconfig is the app target's base configuration for **Release**). Neither the target Release block (pbxproj:371-410) nor the project Release block (479-535) sets `SWIFT_ACTIVE_COMPILATION_CONDITIONS`, so one line in the gitignored `Local.xcconfig` — `SWIFT_ACTIVE_COMPILATION_CONDITIONS = LATCHKEY_TEST_HOOKS` (or `OTHER_SWIFT_FLAGS`, `OTHER_LDFLAGS`) — compiles `-TestControlURL`, `APERTURE_AUTHKEY`, chaos hooks etc. into the archive while `git status --porcelain` is empty and `LatchkeyGitSHA` names a clean commit. Docs (`docs/SETUP.md:109`) tell developers to create this file. Same class: root `.gitignore` patterns `DerivedData/`, `__pycache__/`, `*.ndjson`, `*.xcresult` match at any depth, and `App/` is a synchronized folder group, so a gitignored file under `app/App/` compiles/ships unseen. Fix: refuse any `Local.xcconfig` key other than `DEVELOPMENT_TEAM`/`LATCHKEY_BUNDLE_ID`, and assert via `xcodebuild -showBuildSettings` that the Release conditions exclude `LATCHKEY_TEST_HOOKS`.
+
+**2. HIGH — `history-scrub.sh`'s "backup" tag is rewritten by the very filter-branch it is meant to survive.**
+`scripts/history-scrub.sh:84-85` tags `backup/pre-scrub-*`, then `:113-117` runs `git filter-branch --force ... --tag-name-filter cat -- --all`. `--all` includes that tag and `--tag-name-filter cat` repoints it at the rewritten commit. Verified in this repo: all seven `backup/pre-scrub-*` tags are ancestors of current `main`. `:136,139` and the header (`:18-23`) then tell the user the old history is "at $BACKUP", and the header's cleanup recipe (delete `refs/original`, `reflog expire --expire=now`, `gc --prune=now`) destroys the only real copy. `--force` also overwrote `refs/original` on each of the seven reruns, so the pristine pre-scrub history already survives only in reflogs. Fix: back up outside the rewrite set (`git bundle`/mirror clone), or rewrite explicit refs instead of `--all`.
+
+**3. MEDIUM — `history-verify.py` exempts project-authored files from the class checks.**
+`scripts/history-verify.py:214-224,284-299`: unknown `.ts.net` names, public IPs and personal-detail patterns are skipped for any blob under `app/ThirdParty/`, but that prefix holds our own `latchkey_locallog.go`, `latchkey_nologs.go`, `latchkey_locallog_test.go`, `VENDORED.md`, `tstestcontrol/`. Also `blobs()` (`:191-211`) claims "every path a blob was stored at" but `git rev-list --objects` reports one path per blob, so a blob first reached via a vendored path is exempt everywhere. Scenario: a comment in `latchkey_nologs.go` naming a second tailnet or a Gmail address passes and is published. Fix: exempt only the pristine-import file list, not the prefix.
+
+**4. MEDIUM — The real tailnet auth key is staged at a fixed, world-readable `/tmp` path and survives a killed run.**
+`app/scripts/run-uitests.sh:87-93` writes `$APERTURE_TEST_AUTHKEY` with `printf &gt;` (0644 under default umask) to `/tmp/aperture-test-authkey`, read by `app/UITests/LatchkeyUITests.swift:1041-1043`. Removal is only in the EXIT trap (`:70-80`); a `kill -9` (agent timeout, hung xcodebuild) leaves a node-enrolling key readable by every local process. Fix: `umask 077` + `mktemp` under `$LOG_DIR`, and pass the path with `TEST_RUNNER_APERTURE_TEST_AUTHKEY_FILE=` (xcodebuild forwards `TEST_RUNNER_`-prefixed vars).
+
+**5. LOW — `make ipa` is dead: it exports with a placeholder team ID.**
+`app/Makefile:159-163` uses `ExportOptions.plist`, whose `teamID` is `REPLACE_WITH_YOUR_TEAM_ID` (`app/ExportOptions.plist:17`); unlike `tf`, nothing substitutes it, so the export fails after a full Release archive. Fails closed, wastes minutes.
+
+**6. LOW — Export-compliance answer is pre-empted, and the script expects a question that will never be asked.**
+`project.pbxproj:387` sets `ITSAppUsesNonExemptEncryption = NO`, while `testflight.sh:276-277` says "the first build asks the export-compliance question there". The key suppresses it. The binary ships its own WireGuard/Noise crypto (Go `x/crypto`, not Apple OS crypto), the case Apple's exemption wording does not cover without self-classification. Compliance risk, not a technical rejection.
+
+**7. LOW — `make look` ships simulator screenshots to a third-party model.**
+`app/scripts/look.sh:53` `exec pi --provider aperture --model gpt-4.1-nano -p @"$OUT"`. A screenshot taken with the token sheet, a login link, or the peer list on screen sends that to an external API with no redaction or confirmation; AGENTS.md steers agents to it.
+
+## Verified clean
+Release carries no `DEBUG`/`LATCHKEY_TEST_HOOKS` (pbxproj:371-410, 479-535); every `ProcessInfo.arguments/environment` read sits under `#if LATCHKEY_TEST_HOOKS` (`app/App/TestHooks.swift:43-78`); no ATS keys anywhere in the app; camera and local-network usage strings present (pbxproj:388-389); privacy manifests match observed API use (`attributesOfItem` in `NodeLog.swift:55`, `ShareInboxStore.swift:105,143` → C617.1; TailscaleKit declares FileTimestamp+SystemBootTime); `.asc-key`, `.dev-team`, `Local.xcconfig` are untracked and absent from history (only the non-secret team ID appears in docs); testflight.sh runs under `set -euo pipefail`, re-checks tree/HEAD after the archive, and verifies the stamp; `.github/` has no workflows.</result>
+<usage><subagent_tokens>152953</subagent_tokens><tool_uses>31</tool_uses><duration_ms>609747</duration_ms></usage>
+</task-notification>
