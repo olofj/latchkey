@@ -1,0 +1,10 @@
+<task-notification>
+<task-id>ad96ce641e61f67d6</task-id>
+<tool-use-id>toolu_01X3f2zTCxYVx3smnAGKw5RZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/ad96ce641e61f67d6.output</output-file>
+<status>completed</status>
+<summary>Agent "F18 share: pick and send" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>What I need next is only the two background results (the three-test session run and the host tier); everything remaining — the durations file, the full session suite, and the commits — depends on them, so there is nothing independent left to request. I'll wait for their completion notifications.</result>
+<usage><subagent_tokens>310507</subagent_tokens><tool_uses>133</tool_uses><duration_ms>1165413</duration_ms></usage>
+</task-notification>
