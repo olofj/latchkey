@@ -1,0 +1,102 @@
+<task-notification>
+<task-id>a50b96346e8732b88</task-id>
+<tool-use-id>toolu_01BbAAnkFGLg1b4RFYQzQ5NJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/7964d1cc-e5aa-4fe5-b522-0f1aaf8e4250/tasks/a50b96346e8732b88.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyse discovery+lifecycle tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found five places in Discovery where tests can share a launch, worth about 80 s of its 323 s. None applies to Lifecycle, and no test there should be deleted. Everything below comes from reading the code: nothing was edited or run.
+
+## Per-test table
+
+"Reset" means `resetHarness()` with default peers gw, dash, plain and slow. "L" means `launch()` with `-UITestResetWorkspaces -TestControlURL`.
+
+**M5 Discovery (`app/UITests/DiscoveryTests.swift`)**
+
+| test | s | launches | setup | what only it asserts | overlap | spec |
+|---|---|---|---|---|---|---|
+| SearchAgainContinues… :411 | 36.9 | 1 | reset + 90 `a*` peers, L | the count climbs on each "Keep searching" tap and reaches the total | its first sweep is Truncated's state | F7 §4.3 |
+| TheSwitcher… :606 | 35.2 | 2 | reset, L + home dash + known gateways dash and gw | the "current" row; gw answers within 5 s; the switch loads gw; a relaunch keeps the list | same Settings screen as the next two | F5 §7, R39 |
+| DeviceCheckRehearsal… :218 | 30.3 | 1 | reset with purgatory | the "4 didn't answer" wording and hint; the address move; the Status address | none | DEVICE-CHECK §3-4, O3b |
+| TheChosenGatewayPersists… :158 | 24.4 | 2 | reset, L, then relaunch with no workspace reset | no sweep on relaunch; the first request is `GET /` | its first launch repeats FirstRun exactly | M5 |
+| AStalledLoopbackIsReplaced… :566 | 23.0 | 1 | reset, L + `-UITestStallLoopback -UITestTCPChaosDelay 0` | "recovered" within 25 s with nothing tapped, then the gateway is found | starts with StalledEnds' whole run | **F16, owner bug ("scan didn't work")** |
+| APeerSkippedForItsOS… :478 | 21.2 | 1 | reset, gw set to OS synology | "1 computer was not checked"; reason "OS synology"; probe then load | same flow as Owner | F7 §4.4 |
+| ManualEntryWhenNone… :100 | 21.0 | 1 | reset gw=0, L | the "none" state; Search again re-probes; a public host is refused; `dash` is expanded to the full name and loads | first sweep ≈ Finished | M5, M5 review |
+| AKnownGatewayThatDoesNotAnswer… :647 | 19.5 | 1 | reset, L + known gateways dash and plain | "not answering" label; tap shows the F4 error overlay with choose-gateway | Settings screen as Switcher | F5 §7, F4 |
+| ATruncatedSweep… :328 | 19.3 | 1 | reset gw=0 + 90 peers, L | "ran out of time"; probed &lt; total; `sweep-done` counts equal what it probed; "Keep searching" | = SearchAgain before its first tap | F7 §4.1-4.2 |
+| AKnownGatewayOffTheTailnet… :665 | 17.0 | 1 | reset, L + known gateways dash and gateway.example.com | row reads "not on this tailnet", disabled; a tap does nothing | read-only | F5 §7, M5 review |
+| AGatewayOwnedByAnotherUser… :509 | 16.2 | 1 | reset, gw owner 777 | reason "another owner"; probe anyway | OS test | F7 §4.4 |
+| FindFromTheUnreachableBanner… :190 | 15.1 | 1 | reset, home `gone.tail-scale.ts.net` | the banner's Find runs a fresh sweep; token sheet appears after the picker closes | none | M5.5 |
+| FirstRunFindsExactly… :64 | 15.0 | 1 | reset, L | auto-chooses gw; probe order manifest then auth/me; dash and slow were probed | = Persists' first launch | M5, R26 |
+| AFinishedSweepSays… :369 | 14.8 | 1 | reset gw=0 + 3 peers, L | no "ran out of time"; probed = total; button reads "Search again" | ≈ ManualEntry's first sweep | F7 §4.2 |
+| AStalledLoopbackEndsTheSearch… :540 | 14.3 | 1 | same as IsReplaced | P6 (the "node's own proxy didn't answer" screen) within 16 s; `sweep-done` 0 answered / 4 unanswered | is exactly the first phase of IsReplaced | **F16, owner bug** |
+
+**M6 Lifecycle (`app/UITests/LifecycleHarnessTests.swift`)**
+
+All six use `resetHarness(auth=0,machine=0)` and home dash. Every one damages sockets or freezes the process, so none can share a launch.
+
+| test | s | hook | what only it asserts | spec |
+|---|---|---|---|---|
+| ResumeAfterAThirtySecondFreeze :309 | 41.3 | SIGSTOP 30 s | no report arrives while frozen; same document, a refetch after activation, WebSocket open | M6.5 |
+| DefunctRelayListener… :238 | 36.3 | `-UITestDefunctRelayListener` | the status poll stays blind for 6 s; a link tap restarts the relay; Status shows 1 restart | R30 |
+| AStalledLoopbackUnderALivePage… :112 | 31.4 | `-UITestStallLoopback`, 8 s delay | two strikes lead to "recovered" under a live page; the surviving socket carries two pushes | **F16, owner bug** |
+| DefunctLoopbackListener… :99 | 18.8 | `-UITestDefunctLoopback` | "recovered"; the surviving socket carries frames; a new connection works | M6.7, R14 |
+| ResumeAfterASevenSecondFreeze :299 | 18.3 | SIGSTOP 7 s | same as 30 s, lock/unlock shape | M6.5 |
+| ShutDownTCPSockets… :88 | 16.6 | `-UITestShutdownTCPConnections` | the app survives (this test caught the nil-`Logf` panic); the page reconnects with no recovery | M6.7 |
+
+None of the other owner-reported bugs you listed (Dynamic Island, keyboard blanking, share posting twice) has a test in these three files.
+
+## A. Launch-sharing groups
+
+1. **StalledEnds and IsReplaced (:540, :566).** Same arguments, same fixture. StalledEnds only observes, and its run is exactly the first half of IsReplaced. One cached run records the P6 snapshot (time taken, button label, `sweep-done`), then goes on to recovery and the second search. Each test keeps its name. **About 14 s saved.**
+   - `scripts/test-discovery.sh:183` sets `STALLED_SWEEPS = 2`. After this change a full run logs one stalled sweep, so it must count the F16 tests that actually ran.
+   - Both owner-bug claims keep their own names, so F16 is still covered.
+2. **FirstRun and Persists (:64, :158).** Identical first launch. Persists takes nothing from FirstRun until after the token sheet. One cached helper runs launch one, snapshots FirstRun's evidence (target label, gw requests, dash paths, journal) before `resetFakes`, then relaunches for Persists. FirstRun runs first alphabetically and pays about 24 s; Persists becomes almost free. **About 15 s saved.**
+3. **Truncated folded into SearchAgain (:328, :411).** The fixtures differ only in gw=0 versus gw present. The 90 `a*` peers sort before gw, and a first sweep reaches about 36 of them, so gw is never reached. That is already assumed at :747 and :400-410. Truncated's assertions become a snapshot of SearchAgain's state before its first tap. **About 19 s saved.** This is safe as long as the peer count stays well above one sweep's reach.
+4. **Finished folded into ManualEntry (:369, :100).** Add `addPeers(3)` to ManualEntry and read Finished's claims from its first sweep before the `resetFakes`/refresh at :122.
+   - ManualEntry's `== 3` at :113 becomes 6.
+   - The `(3,3,0,1,2)` sweep signature leaves the log check. That is harmless: `expected` lists allowed signatures and requires none of them.
+   - This keeps Finished as the control showing the synthetic peers don't cause truncation by themselves.
+   - **About 15 s saved.**
+5. **OffTheTailnet folded into NotAnswering (:665, :647).** Launch NotAnswering with known gateways dash, plain and gateway.example.com. OffTheTailnet only reads the disabled row and taps it to no effect, so do that before the tap on plain. The off-tailnet row is never probed. **About 15 s saved.** This one changes a launch argument rather than reusing an identical launch.
+
+Not safe under the strict rule:
+- The two freeze tests (:299, :309) could run in one launch, 7 s then 30 s, saving about 10 s. But the 30 s resume would start after a completed resume, not from cold, which could hide a fault on the first resume path. Rejected.
+- OS and Owner (:478, :509) need different mutations of gw. One fixture with gw on synology and dash with owner 777 would save about 16 s, but it drops Owner's "probe anyway, gw answers" and changes OS's "1 computer" label. Only worth it if you accept losing that.
+
+L2 (for reference): NodeJoins (:63, 8.7 s) only observes after `resetHarness()` + `launch()` + WebSocket open. That is the same prefix as KeyAboutToExpire (:246) and Revoked (:300) before they mutate, so about 8 s could be saved there too.
+
+## B. Logic already covered by host tests
+
+`app/scripts/test-gateway-candidates.swift` covers:
+- OS and owner exclusion reasons (:17-39, including "another owner" at :26 and unknown owner 0 at :33).
+- `selectWithSkipped` reasons "OS synology" and "another owner" (:143-149); the saved gateway bypasses filters (:157).
+- Manifest and auth-probe fingerprints (:56-62).
+- Manual-entry gating: bare `dash` is expanded to the full name (:83), a public host is refused as off-tailnet (:95), fails closed (:105).
+
+`app/scripts/test-loopback-stalls.swift` covers the 3 s bound (:77, :137), two strikes and reset (:128-136), and the idle -1001 not counting (:149).
+
+- **No host test covers sweep counting, truncation or the continue cursor** (`GatewayDiscovery.swift:342-430`). Only the log check (`scripts/test-discovery.sh:214-229`) and the UI tests do. That code is worth host-testing, but it doesn't let any UI test go now.
+- ManualEntry's example.com refusal (:134-140) repeats the host test at :95. Only the UI wiring (error shown, picker stays) is new, and it costs about 1 s, so it isn't worth removing.
+
+## C. Deletions
+
+- **Owner (:509), 16 s. The only defensible deletion.** Its filter logic is host-tested (:26, :149), and OS covers the skipped-row and probe-anyway UI.
+  - What would go unnoticed: the app reading the wrong `UserID` field from the real status JSON, so the owner filter never fires on a real netmap.
+  - FirstRun catches the opposite fault (everything excluded), not this one.
+  - Folding it into a shared fixture (above) keeps the reason check. Deleting drops it.
+- Nothing in Lifecycle should go. Each hook is a different kind of damage, and the F16 test is an owner bug.
+
+## D. Waits
+
+- **`chaosDelay = "8"` (`LifecycleHarnessTests.swift:448`)** is paid by four tests. The page is up about 2 s after the poll, and the order assertions at :146/:249 catch a race. Dropping to 5 saves about 12 s but narrows the margin; a trigger when the page is up would be better, and needs an app change (`TSNetManager.swift:987`).
+- **`waitForValue` (`DiscoveryTests.swift:707`)** uses `XCTNSPredicateExpectation`, which checks about once a second (F14 §4.1). That inflates the R39 "within 5 s" measurement at :618 by up to 1 s. Poll it the way `appears` does.
+- **43 `waitForExistence` calls in Discovery** still use XCTest's roughly 1 s polling. F14 replaced those with `appears(within:)` elsewhere. Many target elements already on screen: :106, :140 (`exists`), :489, :494, :519/:522, :615, :655, :673. **About 10-15 s across the suite.**
+- **Keep:**
+  - `Task.sleep(2)` at :272, after the address move: it models the runbook, and the retry loop covers a miss.
+  - :677 (2 s after tapping the disabled row) and Lifecycle :256 (6 s): the absence during those windows is the evidence.
+  - The 7 s and 30 s freezes.
+
+**Total:** about 78 s from A1-A5 plus about 10-15 s from D, roughly 90 s of Discovery's 323 s, with no loss of coverage. Adding the chaos-delay change gives about 12 s of Lifecycle's 162 s.</result>
+<usage><subagent_tokens>104520</subagent_tokens><tool_uses>17</tool_uses><duration_ms>164433</duration_ms></usage>
+</task-notification>
