@@ -1,0 +1,111 @@
+<task-notification>
+<task-id>a68c81f717e94aa20</task-id>
+<tool-use-id>toolu_014T7JguJLcxc1ewy8pdrdKt</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/7964d1cc-e5aa-4fe5-b522-0f1aaf8e4250/tasks/a68c81f717e94aa20.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyse L1 offline tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The suite has 42 tests, not 38; `scripts/l1-durations.txt` also lists 42. Nothing was edited or run.
+
+The strict launch-sharing fixes (A1–A3) save about 23 s. The riskier live-app chains (A4–A8) could add about 80 s more. Removing the node-retry wait (B1) would save about 26 s but loses some coverage. There are no genuine deletions (C).
+
+All paths are in `/Users/olof/src/latchkey/app/UITests/OfflineHarnessTests.swift` unless stated. "Default launch" means gateway `dash.tail-scale.ts.net`, the tailnet suffix, peers `[dash]`, workspaces reset, harness `root=page`, proxy open, not blackholed, no stall.
+
+## Per-test table
+
+| # | Test (line) | s | Launches | Setup | Unique assertion | Overlap | Guards |
+|---|---|---|---|---|---|---|---|
+|1|DashboardLoadsThroughTheProxy (81)|9.0|1|default|WebSocket echo, SSE advances, chip style present, CONNECT journalled|FastLoad (same launch)|M2.5/2.7, F5 §6|
+|2|NonTailnetOriginLoadsDirect… (115)|7.9|1|leakOrigin, tailnet suffix|non-tailnet origin loads direct, no CONNECT|—|R10/R11 positive control|
+|3|BlackholedProxyFails… (131)|8.0|1|leakOrigin, suffix `localtest.me`, blackhole=1|error page, CONNECT attempted, 0 requests|—|R10 step 2, F16|
+|4|ProxyGoneFails… (145)|9.0|1|same, proxy closed|failure code -1009 with relay, 0 requests|#5, other path|R10, `allowFailover`|
+|5|ProxyGoneWithoutRelay… (159)|8.4|1|#4 + `-NoSocksLog`|-1004 with WebKit dialling directly, 0 requests|#4|R10|
+|6|AGatewayAnswering502… (182)|9.7|1|default + `front=502`|a 502 on a live port gives the error page with "stopped" wording|wording also in host `test-page-failure-text.swift:155`|F4 D10|
+|7|StalledLoadShowsTheConnectingState… (226)|38.1|1|default + `stall=22`|connecting-state timeline, hint timing, cause, ≤3 dials|cause text also host `:134`|F4 headline|
+|8|AFastLoadDoesNotLeave… (311)|9.8|1|default|no connecting block or overlay after commit, shown count ≤1|#1 launch|F4|
+|9|TheErrorPageOffersRetryAndAnotherGateway (328)|17.6|2|default + blackhole=1 (twice)|Try again reloads; Choose gateway opens the picker|—|F4, M8|
+|10|CertificateNameMismatch… (361)|8.2|1|gateway `wrong.`, peers dash,wrong|error page names the certificate, CONNECT made|—|M2 review|
+|11|UnreachableGateway… (380)|7.9|1|gateway `down.`|error page, proxy `upstream_fail`|—|M2|
+|12|RedirectToAnotherOrigin… (398)|12.7|1 (+Safari)|default|a redirect away opens Safari, no error page, not loaded in-app|#16, #24 (other mechanisms)|R3 review|
+|13|ATappedLinkToAnotherAppAsksFirst (458)|17.5|1|default + `root=handoff`|a tapped `maps:` link asks; Cancel opens nothing; Open opens Maps|policy in host `test-navigation-policy.swift:64`|F17/R42|
+|14|AScriptCannotOpenAnotherApp… (490)|14.2|1|`root=handoff-app`|untapped `location` and `click()` open nothing and raise no prompt|host policy|F17|
+|15|AnUntappedLinkAwayAsksOnlyOnce (507)|16.6|1|`root=handoff-web`|asks once, then refuses silently|host policy|F17|
+|16|ATapThatNavigatesByScript… (532)|9.7|1|`root=handoff`|a tap whose handler navigates opens Safari with no prompt|—|F17 §4.2|
+|17|OffOriginLoadsNeverReach… (674)|0.1|shared|F6 default (`root=single`, `-ProxyEverything`)|0 requests, CONNECTs and TLS handshakes to the away origin|#26 reuses the helper|F6 §6|
+|18|WithoutTheRuleList… (683)|12.9|1|F6 + `-UITestNoContentRules`|positive control: every instrument sees the away origin|—|F6 §6|
+|19|AnAllowlistedCDNIsFetched… (717)|13.0|shared (pays)|F6 default|esm.sh fetched; lookalikes and port 8444 not|host `test-cdn-allowlist.swift`|F6 §4.1a|
+|20|TheFontHostsStayBlocked… (738)|0.1|shared|F6 default|font hosts: 0 requests, 0 handshakes|—|F6 §2|
+|21|ThePageCannotWidenTheAllowlist (752)|0.1|shared|F6 default|runtime additions never load|—|F6 §6|
+|22|TheGatewaysOwnMachineryStillWorks (769)|8.0|1|**F6 default**|same-origin WebSocket, SSE, data:, blob:, srcdoc work; no service worker|—|F6 §4.1/§4.2|
+|23|FailedRuleCompileLoadsNothing (788)|11.8|1|default + `-UITestBreakContentRules`|error page names the filter; 0 traffic; Try again stays blocked|compile failure in host `test-content-rules.swift:143`|F6 §2|
+|24|WindowOpenToAnotherOrigin… (816)|14.5|1|**F6 default**|`window.open` opens Safari, not loaded in-app|—|F6 §4.1 rule 2, F17|
+|25|BlockedImageShowsAMarker… (837)|16.9|1|**F6 default**|markers ×3 and inner; synthetic click does nothing; 44 pt target; a tap opens Safari|—|F6 §4a|
+|26|StrictModeBlocks… (885)|25.3|1|**F6 default**, then flips the Settings toggle|strict mode: esm.sh and away origin both 0|—|F6 §4.1a|
+|27|SignInTokenIsStripped… (919)|12.2|1|default + `-UITestLogResponses`|token reaches the server; `search` is empty in the new document|JS stripping in host `test-page-scripts.js:35`|R2, and R1's log grep needs it|
+|28|StatusNamesTheCommit… (971)|26.2|1|**default**|Status shows a 12-hex commit|—|F12|
+|29|InsetProbesReport… (997)|27.3|3|`root=cover/plain/product` + `-UITestReportSafeArea`|top inset 0, web view below the bar, 24 pt bottom gap, strip colour|#30 (frame check)|F9, F13, F15|
+|30|NothingOfOursSitsOnThePage… (1077)|24.8|1|default + `-UITestReportSafeArea`|nothing of ours overlaps the page; gear reachable in both orientations|—|F15 §6|
+|31|TheAppBarRetracts… (1150)|29.9|2|`root=shell` + ReportSafeArea (± VoiceOver flag)|bar retracts and returns; drags reach the page; VoiceOver keeps the bar|state machine in host `test-app-bar-retraction.swift`|F15 §4a/b|
+|32|TypingInThePageKeepsItOnScreen (1234)|28.7|2|`root=page`, then `shell`, + ReportSafeArea|with the keyboard up the page ends at the keyboard and is not black|—|owner bug of 2026-09-24, F13/F15|
+|33|AFirstLaunchExplainsItself (1421)|6.5|1|**gate (NeedsLogin)**|intro and steps exist; button reads "Sign in to Tailscale"|#34 same launch|F11 §6|
+|34|TheIntroductionNamesThePostLoginSteps (1437)|6.3|1|**gate**|steps text mentions "approve" and "access to the machine"|#33|F11, owner bug of 2026-09-24|
+|35|TheSignInButtonSurvivesItsOwnCopy (1455)|6.5|1|gate + XXXL text + ReportSafeArea|button hittable and inside the safe area|—|F11 §4.3|
+|36|AReturningUserIsNotReintroduced (1484)|13.3|2|default, then NeedsLogin without reset|no intro for a returning user|—|F11|
+|37|ANodeThatCannotStartShowsAScreen… (1520)|36.0|1|`-UITestNodeStartFails EACCES`|G7 shown, app alive, retries stop after five|schedule in host `test-node-start-failure.swift:72-78`|F8|
+|38|TheNodeStartRetryIsVisibleAndSucceeds (1549)|10.5|1|`FailsTimes 2`|a scheduled retry reaches the dashboard; G7 goes|#39 partly|F8|
+|39|TryNowRestartsTheNodeImmediately (1566)|14.5|1|`FailsTimes 4`|Try now reaches the dashboard in under 5 s|host `:72`|F8|
+|40|StartingANewNodeMovesTheOldStateAside… (1591)|18.1|2|default, then EACCES without reset + planted file|dismiss moves nothing; confirm sets the old state aside intact|—|F8|
+|41|AnUnwritableStateDirectoryIsSurvived (1643)|16.5|2|default, then chmod 000 + real node|a real permission failure gives G7|—|F8 (the one real-failure test)|
+|42|LoggingSetupFailureStopsTheNode… (1677)|17.4|1|`-UITestLoggingSetupFails`|zero traffic before and after Try now; log records the refusal|text in host `:84`|F8 §4.6|
+
+## A. Launch-sharing groups
+
+**Strict (same arguments and harness state, observe only). About 23 s in total.**
+
+- **A1. Add #22 (769) to `settledDefaultRun()` (620). Saves about 8 s.** The F6 page posts its full state on every report (`testing/harness/dashboard.py:411-420`), so `run.report` already carries `data_img`, `blob_img`, `blob_worker`, `srcdoc`, `sse` and `sw`. Its launch is identical and it only reads. Add those fields to `isSettled` (585), or the cached run could predate them; they land well before the 4 s synthetic click. The shard packer keys on the literal `settledDefaultRun()` (`scripts/test-offline-shards.py:53`), so grouping follows automatically.
+- **A2. #1 (81) and #8 (311) share one cached default run. Saves about 9 s.** Both are observe-only on the default launch. Record #8's UI facts at the first report (block absent, overlay absent, shown-count label), then wait for the SSE tick to advance and snapshot the journal for #1. The order matters: #8's "gone the instant it commits" must be read at the first report, not after the SSE wait. The packer needs a new marker, because it only recognises `settledDefaultRun()`.
+- **A3. #33 (1421) and #34 (1437) share one gate launch. Saves about 6 s.** Both use the same `launchAtTheGate()` and only read. Snapshot the button's existence and label, whether `gate-intro` and `gate-intro-steps` exist, the steps label, and the "Tailscale Status" text. It needs the same packer marker as A2.
+
+**Riskier (sequenced on one live app, where one test's gestures could disturb the next).**
+
+- **A4. F6 live chain: #25 (837), #24 (816) and #26 (885) after the default snapshot. About 30–33 s.** All four launch identically. A safe order: take the snapshot (which also covers #25's observation half, 845-858), then window.open, then the marker tap, then strict mode last, since it recompiles and reloads. The risks: it keeps an `XCUIApplication` alive across test methods, which b4fb2bd deliberately avoids. #24 calls `__reset`, and two Safari round-trips share the process. One failure would cascade into the rest.
+- **A5. #28 Status (971) added to A2's run. About 8 s more.** It only navigates Settings and touches no harness state, but it needs the live app. If the Status navigation fails, the cached run must not be poisoned.
+- **A6. #13 (458) and #16 (532) on one `root=handoff` launch. About 7 s.** Run the script-link tap (Safari) before the Maps flow. The risk is trusted-click state carrying from one tap to the next navigation (F17 §4.2), which is exactly what these tests tell apart.
+- **A7. Layout pairs. About 14 s.**
+  - #30 (1077) and #32's `page` pass share the same arguments (`root=page` + ReportSafeArea).
+  - #31's no-VoiceOver pass and #32's `shell` pass share `root=shell` + ReportSafeArea.
+  - Rotation, scroll position and bar state all carry over. In particular, #32 expects "shell starts without the bar", which #31 leaves in an unknown state.
+- **A8. #9's second launch (347). About 7 s.** On the first error page, tap Choose gateway, dismiss the picker, then unblackhole and tap Try again. The risk is that dismissing the picker may reload the page or clear the error page.
+- **A9. #35's XXXL launch could also carry #33 and #34. About 6 s beyond A3.** The arguments differ, so this is not strict. At XXXL the steps are still in the tree (ScrollView, not lazy), but it changes the conditions #33 describes.
+
+Tests that relaunch as part of their own claim cannot share: #36, #40 and #41 first launch only to create persisted state they then mutate. #3–#5, #6, #7, #10, #11, #18 and #23 each have a unique argument or harness state.
+
+## B. Assertions that are really logic
+
+- **B1. #37's retries-stop wait (1538-1543). About 26 s of its 36 s.** The schedule and the countdown clearing are covered by host `app/scripts/test-node-start-failure.swift:72-78`. What would go unnoticed: the manager's loop not actually stopping, or the view not dropping the countdown. That is F8's "no unbounded loop" end to end. A cheaper route is a test hook that compresses the schedule (a code change).
+- **B2. #34's text check (1443-1447). About 6 s if #34 is moved.** `GateIntroduction.steps` is a static array (`app/App/Browser/ConnectionGateView.swift:135`) with no host test today. A host test plus #33's existing check that the steps render would cover it. A3 gets the same saving with no coverage question, so prefer A3.
+- **No launch saved, but already host-covered:**
+  - Error wording in #6 (199-206), #7 (277-290), #10 (373) and #23 (794): `app/scripts/test-page-failure-text.swift:93-96,134,155-159`.
+  - Node-failure causes in #37 (1529) and #42 (1693), and #39's "attempt=4 next=8": `test-node-start-failure.swift:41-43,84,72`.
+  - Token stripping in #27: `test-page-scripts.js:35-57` and `test-gateway-address.swift`.
+  - Hand-off decisions in #13–#16: `test-navigation-policy.swift:64+`.
+  - Allowlist rules in #19–#21: `test-cdn-allowlist.swift` and `test-content-rules.swift`.
+  - Bar state machine in #31: `test-app-bar-retraction.swift`.
+
+  In each case the UI test is the only proof of the real-WebKit or real-app wiring, so keep them. These cheap in-launch assertions cost nothing to leave.
+
+## C. Deletion candidates
+
+No test's whole claim is covered elsewhere.
+
+- **#38 (1549), weak.** #39 reaching `attempt=4` proves scheduled retries run and are visible. Deleting #38 would leave unnoticed that a scheduled (untapped) retry that succeeds reaches the dashboard and clears G7. Saves 10.5 s. Not recommended.
+- **#34 (1437)** could be folded into #33 instead of deleted, but A3 gets the same 6 s while keeping both names.
+- Tests that look similar but guard different paths:
+  - #4 and #5 test the relay path versus WebKit dialling the proxy itself.
+  - #12, #16 and #24 open Safari by three different mechanisms (redirect, script navigation, window.open).
+  - #10 and #11 are different error causes.
+  - #2 is the positive control that gives #3–#5 their meaning.
+
+  #41 is described in its own comment as the only proof that the failure hook models a real failure.</result>
+<usage><subagent_tokens>115083</subagent_tokens><tool_uses>15</tool_uses><duration_ms>213478</duration_ms></usage>
+</task-notification>
