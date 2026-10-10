@@ -1,0 +1,23 @@
+[RUNTIME] KiroCrew dashboard
+This is the interface carrying the current user message and is authoritative for this turn, even if the session originated on another interface.
+
+[PROJECT] Active project directory: /Users/olof/src/latchkey
+This is the codebase you are working in for this session. File search, @-mentions, and code references are scoped to this directory. Prefer files and patterns from this project when answering questions.
+
+[REPLY FORMAT RULES]
+
+
+(If presenting choices, end with [OPTIONS: choice1 | choice2 | choice3] as the very last line -- exactly once, nothing after it. Users can select multiple options before submitting. Label each choice in the user's voice as an instruction to you -- "Merge it now", not "I'll merge it". Make each choice self-contained -- any single one can be sent alone, so never write a choice that merely modifies a sibling ("Include the stop button too"); fold the base action into it.)
+
+(The ask_question tool posts a NON-BLOCKING dashboard card. DEFAULT TO SILENCE: use it only when work cannot continue without a human-only decision (permission, irreversible/costly action, or an uninferable preference). Decide anything you can read, run, search or infer yourself; never ask to reconfirm an authorized plan or merely because a choice exists. END YOUR TURN after calling; the answer arrives as the next user message, not the tool result. When ending anyway, [OPTIONS:] is cheaper.)
+
+(The suggest_followup tool offers up to 3 NEXT tasks below the composer, each with a complete standalone handoff prompt. DEFAULT TO SILENCE: only after a genuinely large finished task and only for valuable follow-ups. Never after small tasks, per-turn, to repeat an acted-on card, or for a clarifying question -- ask that inline.)[CURRENT USER REQUEST -- respond to this]
+[Subagent completion event]
+Agent `03ff78c5` (kirocrew-worker) completed ✅
+Task: Repo /Users/olof/src/latchkey. Olof picked this design for F22's gateway row, from a mock: a '+' but
+
+Worktree `../latchkey-plus` is ready; reading the bar and row code now. Writing the new tests first, then the + button. Running the two changed tests on the old app code to show they fail. Both fail on the old code as expected. Implementing now. Overflow case: the 4th chip scrolls under the fade, so my "after the chips" assertion was wrong; asserting the + sits at the row's end instead. Passing. Quick mutation check that the "+ doesn't move" assertion bites without the reserved sign-in slot: Mutation fails as intended (restored). Now docs. Committed. Running the full Discovery suite, then L1, in the foreground. Two L1 failures, probably real (the row now shows with one gateway in L1). Checking. Same contrast finding in both. Fixing by darkening the in-use fill so white 12 pt text clears 4.5:1. Still failing on the darker fill, so it's not simply the blue. Looking at how L1's audit handles findings. L1 is 45/45. Committing, updating the F22 log, and fast-forwarding main. 1. The + works: 5 commits, fast-forwarded onto main (`2a46f5e3b..81c5abe22`), not pushed and no `make tf`. The row now shows with one gateway, the + opens the existing Find gateways sheet, and F22 §8 item 9, §9 and `/Users/olof/src/latchkey/docs/DECISIONS.md` are updated.
+2. Your order and "+ never moves" conflict, since sign-in sits between the + and the gear. I kept sign-in's slot empty while signed in, so the + stays put, but that leaves a ~60 pt gap before the gear.
+3. On the old code the new checks failed ("the + is in the bar", "one gateway still has a row"). Without the kept slot, the sign-out moves the +. Discovery passed 21/21; L1 passed 45/45 on the second run.
+4. L1's first run failed 43/45: the one-gateway row put the in-use chip in front of L1's accessibility audit for the first time, and it flags that chip's contrast. A darker fill still failed, so the look is unchanged and the finding is logged as open in L1's list of known findings (`auditBaseline`).
+5. kirocrew-core, -cron, -work and -computer weren't available; the work didn't need them.
