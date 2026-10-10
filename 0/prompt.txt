@@ -1,0 +1,25 @@
+[RUNTIME] KiroCrew dashboard
+This is the interface carrying the current user message and is authoritative for this turn, even if the session originated on another interface.
+
+[PROJECT] Active project directory: /Users/olof/src/latchkey
+This is the codebase you are working in for this session. File search, @-mentions, and code references are scoped to this directory. Prefer files and patterns from this project when answering questions.
+
+[REPLY FORMAT RULES]
+
+
+(If presenting choices, end with [OPTIONS: choice1 | choice2 | choice3] as the very last line -- exactly once, nothing after it. Users can select multiple options before submitting. Label each choice in the user's voice as an instruction to you -- "Merge it now", not "I'll merge it". Make each choice self-contained -- any single one can be sent alone, so never write a choice that merely modifies a sibling ("Include the stop button too"); fold the base action into it.)
+
+(The ask_question tool posts a NON-BLOCKING dashboard card. DEFAULT TO SILENCE: use it only when work cannot continue without a human-only decision (permission, irreversible/costly action, or an uninferable preference). Decide anything you can read, run, search or infer yourself; never ask to reconfirm an authorized plan or merely because a choice exists. END YOUR TURN after calling; the answer arrives as the next user message, not the tool result. When ending anyway, [OPTIONS:] is cheaper.)
+
+(The suggest_followup tool offers up to 3 NEXT tasks below the composer, each with a complete standalone handoff prompt. DEFAULT TO SILENCE: only after a genuinely large finished task and only for valuable follow-ups. Never after small tasks, per-turn, to repeat an acted-on card, or for a clarifying question -- ask that inline.)[CURRENT USER REQUEST -- respond to this]
+[Subagent completion event]
+Agent `5ed2fe15` completed ✅
+Task: Your turn ended while the L1 run was still in the background, and nothing will wake you when it fini
+
+The L1 run died with the previous session. Relaunching it detached so it survives, then polling in the foreground.I'll commit this, move the clean worktree to it, and rerun L1 detached.Slots 5-8 are held by a live session run from main. Slots 1-4 are held by f22's L1 run, which has been stuck in exactly this self-deadlock. Confirming it's stuck before I touch it.f22's run has been waiting on its own parent's slot lock since 23:42, so it can never finish. I'm stopping it (runner PIDs 90237 and 90333) to free slots 1-4.It still deadlocks, so the fix doesn't cover this path. Checking whether L1's shard runner has its own build step.The worktree never picked up the fix (it's still at `7831d4fac`). Restarting there on the fixed tip.My fix commit went onto `f1-origin-wip`, not main: the F1 worker switched this checkout's branch. I'll put it on main through the f16 worktree.The fix is on main as `dbb1398bb`. The stray copy stays on top of `f1-origin-wip`; I'm not rewriting F1's branch while its tree is dirty. Relaunching L1.The build went through and the shards are running. Polling until it exits.#3 is closed. L1 on main came back 46/46 in 219 s, and #3's comment cites `26810575e`, `59e898642` and `d3195edfd`. #4 and #5 were closed earlier.
+
+To get that run through, I had to fix a slot-pool deadlock. A sharded `--build` run held its slots, then its own build step waited on one of them forever. The fix is on main as `dbb1398bb`, and I stopped f22's L1 run, which had been stuck that way since 23:42; the f22 worker will need to rebase and rerun it.
+
+A copy of that fix also sits on top of F1's `f1-origin-wip` branch as `ba075de5b`, because F1 had switched the main checkout's branch. I left it there rather than rewrite their branch, so F1 should drop it before landing.
+
+The one open issue is #6 (F22), filed at 06:03 today by the worker building it, so it isn't stale. The kirocrew MCP servers (core, cron, work, computer) were unavailable.
