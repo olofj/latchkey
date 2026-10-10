@@ -1,0 +1,10 @@
+<task-notification>
+<task-id>ad96ce641e61f67d6</task-id>
+<tool-use-id>toolu_014zgaAwuRnc1WUeWRV68MQs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/ad96ce641e61f67d6.output</output-file>
+<status>completed</status>
+<summary>Agent "F18 share: pick and send" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The tree is clean at `38d4c46fd`. What I need next is a single item: the tier's summary, which is already being waited on in the background (`blwk1yi0f`); the durations refresh, the commit and `make tf` all depend on it. Nothing else is independent, so I'll wait for that notification.</result>
+<usage><subagent_tokens>325009</subagent_tokens><tool_uses>160</tool_uses><duration_ms>3557924</duration_ms></usage>
+</task-notification>
