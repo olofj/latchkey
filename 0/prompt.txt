@@ -1,0 +1,21 @@
+[RUNTIME] KiroCrew dashboard
+This is the interface carrying the current user message and is authoritative for this turn, even if the session originated on another interface.
+
+[PROJECT] Active project directory: /Users/olof/src/latchkey
+This is the codebase you are working in for this session. File search, @-mentions, and code references are scoped to this directory. Prefer files and patterns from this project when answering questions.
+
+[REPLY FORMAT RULES]
+
+
+(If presenting choices, end with [OPTIONS: choice1 | choice2 | choice3] as the very last line -- exactly once, nothing after it. Users can select multiple options before submitting. Label each choice in the user's voice as an instruction to you -- "Merge it now", not "I'll merge it". Make each choice self-contained -- any single one can be sent alone, so never write a choice that merely modifies a sibling ("Include the stop button too"); fold the base action into it.)
+
+(The ask_question tool posts a NON-BLOCKING dashboard card. DEFAULT TO SILENCE: use it only when work cannot continue without a human-only decision (permission, irreversible/costly action, or an uninferable preference). Decide anything you can read, run, search or infer yourself; never ask to reconfirm an authorized plan or merely because a choice exists. END YOUR TURN after calling; the answer arrives as the next user message, not the tool result. When ending anyway, [OPTIONS:] is cheaper.)
+
+(The suggest_followup tool offers up to 3 NEXT tasks below the composer, each with a complete standalone handoff prompt. DEFAULT TO SILENCE: only after a genuinely large finished task and only for valuable follow-ups. Never after small tasks, per-turn, to repeat an acted-on card, or for a clarifying question -- ask that inline.)[CURRENT USER REQUEST -- respond to this]
+[Subagent completion event]
+Agent `5f352c5a` (kirocrew-worker) completed ✅
+Task: Repo /Users/olof/src/latchkey (GitHub olofj/latchkey). Fix issue #7 (`gh issue view 7 -R olofj/latch
+
+Reading F22's tests before editing; the fix design is settled (alphabetical order, fixed-width chips with a symbol for status, solid active fill, sign-in moved beside the gear).Now the code edits.Code done, host test green. Now copying harness artifacts and running the Discovery suite.Discovery green (484 s). Now proving the new assertions fail on the unfixed app code.The new assertion fails on the old chip/bar code (the chips shift 208 pt right and dash's width changes), and it passes with the fix. Next: L1.L1 passed 45/45. Now the docs.Editing F22 in place (§2, §4, §6, §8, log) and appending a DECISIONS entry.1. Issue #7 is fixed and closed. main fast-forwarded to `b0dec6e7d` in five commits (`49644b4e0`..`b0dec6e7d`), not pushed. The chips are now sorted by name and never move. Each chip is as wide as its name alone: the status word is gone from the chip (shown by a symbol, still read out by VoiceOver) and the bold width is always reserved. The chip in use is solid blue with white text and a border. While signed out, a small text-only "Sign in" button sits after the row, beside the gear. This is recorded in F22 §8 items 6-8 and in `/Users/olof/src/latchkey/docs/DECISIONS.md`.
+2. Tests: the F22 Discovery test now checks that no chip frame changes when the probe results land, or across a switch together with a sign-out. On the old chip and bar code it fails (every chip 208 pt to the right, dash 71 pt wider). With the fix: Discovery 21/21, L1 45/45, host test 44/44. make tf was not run.
+3. Caveats: I didn't test signing out and back in separately, only as part of the switch, because the chips can't be read while the sign-in sheet is up. The kirocrew-core, kirocrew-cron, kirocrew-work and kirocrew-computer servers weren't available in this session. I left out the per-file diffs to stay within 5 lines; they're in the five commits.
