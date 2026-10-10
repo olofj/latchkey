@@ -1,0 +1,25 @@
+[RUNTIME] KiroCrew dashboard
+This is the interface carrying the current user message and is authoritative for this turn, even if the session originated on another interface.
+
+[PROJECT] Active project directory: /Users/olof/src/latchkey
+This is the codebase you are working in for this session. File search, @-mentions, and code references are scoped to this directory. Prefer files and patterns from this project when answering questions.
+
+[REPLY FORMAT RULES]
+
+
+(If presenting choices, end with [OPTIONS: choice1 | choice2 | choice3] as the very last line -- exactly once, nothing after it. Users can select multiple options before submitting. Label each choice in the user's voice as an instruction to you -- "Merge it now", not "I'll merge it". Make each choice self-contained -- any single one can be sent alone, so never write a choice that merely modifies a sibling ("Include the stop button too"); fold the base action into it.)
+
+(The ask_question tool posts a NON-BLOCKING dashboard card. DEFAULT TO SILENCE: use it only when work cannot continue without a human-only decision (permission, irreversible/costly action, or an uninferable preference). Decide anything you can read, run, search or infer yourself; never ask to reconfirm an authorized plan or merely because a choice exists. END YOUR TURN after calling; the answer arrives as the next user message, not the tool result. When ending anyway, [OPTIONS:] is cheaper.)
+
+(The suggest_followup tool offers up to 3 NEXT tasks below the composer, each with a complete standalone handoff prompt. DEFAULT TO SILENCE: only after a genuinely large finished task and only for valuable follow-ups. Never after small tasks, per-turn, to repeat an acted-on card, or for a clarifying question -- ask that inline.)[CURRENT USER REQUEST -- respond to this]
+[Subagent completion event]
+Agent `3330da15` (kirocrew-worker) completed ✅
+Task: Repo /Users/olof/src/latchkey (Latchkey iOS app, GitHub olofj/latchkey). New feature request from Ol
+
+Full transcript: /Users/olof/.kiro/crew/subagents/3330da15/result.txt (8,752 bytes)
+Preview (first+last 100 words):
+Reading the F15 app bar, the gateway switcher and discovery code so I can write the spec. Next I'll find how the KiroCrew dashboard colours its instance dots.Still digging through the dashboard's JS bundle for the instance dot colours (found `connecting: bg-warn`); spec writing follows.Mapped the code. The row will live in F15's hidden-by-default app bar. Now reading the root view wiring, then writing the spec.Confirmed F22 is free. Checking page-state types for the current gateway's dot, then writing the spec.Writing the F22 spec now.Filed [issue #6](https://github.com/olofj/latchkey/issues/6). Now I'll build it, starting with the pure state logic and its host
+[...middle truncated -- read the full transcript below...]
+code without the change.That run is still going in the background (the tool caps at 10 minutes). Meanwhile I'll update the spec: decision 3 changed (the sign-in capsule and the row now share the bar).The test fails without the feature, as intended. Checking that the stash restored everything, and reading the failure message.Now the second mutation: show the row even with only one gateway, which the absent-row test should catch.While that runs, I'll write the DECISIONS entry and the spec log (docs only, nothing the build reads).The mutation fails as intended. Committing the code on `f22` in steps, then run
+
+The full result is on disk -- read it on demand with the read tool (offset/limit), grep the path above, or call spawn_status(agent_id, offset=, limit=, grep=). Do NOT re-run the subagent.
