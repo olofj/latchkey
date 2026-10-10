@@ -1,0 +1,29 @@
+<task-notification>
+<task-id>afcb8fb6342f0ec16</task-id>
+<tool-use-id>toolu_01GPRj2r7cb8QKkbxEDoVPon</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/90536899-92e6-42ee-a6ea-5cf3281611f2/tasks/afcb8fb6342f0ec16.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit share routes 0.7.0→0.7.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>None of the share-route shapes the fake emulates changed from 0.7.0 to 0.7.1. I read the wheels only with `unzip -l` and `unzip -p`, ran nothing and modified no files.
+
+**What changed between the wheels.** Apart from `CHANGELOG.md`, rebuilt static assets and `acp/skill_projection.py`, only two Python files under `dashboard/` differ. I compared SHA-1 hashes, not just file sizes:
+- `kiro_crew/dashboard/chat_handlers.py`: one added import (`SLOT_DETAIL_MAX_LIMIT`), and the literal `500` replaced by that constant in the `GET /api/chat/slots/{slot}` detail `?limit=` clamp. The rest is comments. The value stays 500, and the fake doesn't emulate this route anyway.
+- `kiro_crew/dashboard/chat_utils.py`: adds the constant `SLOT_DETAIL_MAX_LIMIT = 500` and an LRU cache in front of `_redact_for_display`, keyed on an HMAC of the input text and the exempt-host set. The redacted output is the same; only the speed changes.
+
+These files hash identical in both wheels: `dashboard/state.py`, `dashboard/handlers/files.py`, `dashboard/slot_projection.py`, `dashboard/chat_folders.py`, `dashboard/chat.py`, and `dashboard/routes/{chat,sessions,taskrunner}.py`.
+
+**0.7.1 locations:**
+- **serialize_slots**: `kiro_crew/dashboard/state.py:7515`. It is not in `slot_projection.py`. `GET /api/chat/slots` is `api_chat_slots` at `kiro_crew/dashboard/chat_handlers.py:1455`, routed at `dashboard/routes/chat.py:50`.
+- **GET /api/chat/folders**: `api_chat_folders` at `kiro_crew/dashboard/chat_folders.py:449`, routed at `dashboard/routes/sessions.py:63`.
+- **Upload handler**: `api_upload_file` at `kiro_crew/dashboard/handlers/files.py:1510`, routed at `dashboard/routes/taskrunner.py:57`. It returns `{"paths": paths}` at line 1781.
+- **Size limit**: `_MAX_UPLOAD_BYTES = 50 * 1024 * 1024` at `files.py:1183`, enforced at line 1663. Line 1190 also sets `_MAX_UPLOAD_FILES = 20`.
+- **Extension allowlist**: the sets `_ALLOWED_IMAGE_EXT` (line 1208), `_ALLOWED_TEXT_EXT` (1209), `_ALLOWED_DOC_EXT` (1248) and `_ALLOWED_VIDEO_EXT` (1270), combined into `allowed` at `files.py:1522`. The `%PDF-` check is `_MAGIC_PREFIXES` at lines 1357-1358.
+- **Chat POST handler**: `api_chat` at `kiro_crew/dashboard/chat_handlers.py:393`, routed at `dashboard/routes/chat.py:36`.
+  - **Unknown-slot creation**: `created_in_send = ... not in state._slots` at line 515, then `state.get_or_create_slot(...)` at line 517. `get_or_create_slot` is defined at `state.py:6140`.
+  - **Busy/queued replies**: `{"ok": True, "queued": True, "queue_id": qid}` at lines 954 and 1012. Line 885 is a separate branch that returns `{"ok": True, "queued": True}` with no `queue_id`. I didn't check whether the fake needs to model that branch.
+  - **Success replies**: `{"ok": True, "slot": slot.key}` at line 1266, and a receipt dict starting with the same fields at line 1404.
+
+**Replacement for the fake's comment "dashboard/handlers/files.py and chat_handlers.py".** The full paths are `kiro_crew/dashboard/handlers/files.py` and `kiro_crew/dashboard/chat_handlers.py`. Note that `chat_handlers.py` sits in `dashboard/`, not `dashboard/handlers/`. For `serialize_slots` the comment should point at `kiro_crew/dashboard/state.py`.</result>
+<usage><subagent_tokens>52810</subagent_tokens><tool_uses>8</tool_uses><duration_ms>59533</duration_ms></usage>
+</task-notification>
