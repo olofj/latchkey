@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b0esrwod1</task-id>
+<summary>Monitor event: "new commits on f16 (#3) and f21 (#4) branches"</summary>
+<event>f21 5fd312b4e harness: hold asset responses on request</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
