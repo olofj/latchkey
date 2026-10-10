@@ -1,0 +1,29 @@
+[RUNTIME] KiroCrew dashboard
+This is the interface carrying the current user message and is authoritative for this turn, even if the session originated on another interface.
+
+[PROJECT] Active project directory: /Users/olof/src/latchkey
+This is the codebase you are working in for this session. File search, @-mentions, and code references are scoped to this directory. Prefer files and patterns from this project when answering questions.
+
+[REPLY FORMAT RULES]
+
+
+(If presenting choices, end with [OPTIONS: choice1 | choice2 | choice3] as the very last line -- exactly once, nothing after it. Users can select multiple options before submitting. Label each choice in the user's voice as an instruction to you -- "Merge it now", not "I'll merge it". Make each choice self-contained -- any single one can be sent alone, so never write a choice that merely modifies a sibling ("Include the stop button too"); fold the base action into it.)
+
+(The ask_question tool posts a NON-BLOCKING dashboard card. DEFAULT TO SILENCE: use it only when work cannot continue without a human-only decision (permission, irreversible/costly action, or an uninferable preference). Decide anything you can read, run, search or infer yourself; never ask to reconfirm an authorized plan or merely because a choice exists. END YOUR TURN after calling; the answer arrives as the next user message, not the tool result. When ending anyway, [OPTIONS:] is cheaper.)
+
+(The suggest_followup tool offers up to 3 NEXT tasks below the composer, each with a complete standalone handoff prompt. DEFAULT TO SILENCE: only after a genuinely large finished task and only for valuable follow-ups. Never after small tasks, per-turn, to repeat an acted-on card, or for a clarifying question -- ask that inline.)[CURRENT USER REQUEST -- respond to this]
+[Subagent completion event]
+Agent `1e0ff788` completed ✅
+Task: Ship a TestFlight build. First, run L1 once on current main in the foreground through simpool; F1's 
+
+L1 is green on `9d365d578`: 46/46. Checking what `make tf` expects before running it.The clean worktree lacks only the gitignored App Store Connect key, so I'm symlinking the key file into it; its contents aren't read. `make tf` runs there once I've confirmed main hasn't moved.TestFlight build **202609280712** is uploaded from main at `9d365d578`: altool reported "UPLOAD SUCCEEDED", delivery UUID `f41fffcf-0eeb-4142-a837-8a283e007dc8`. It appears once App Store Connect finishes processing, which may first ask the export-compliance question. L1 on that commit passed 46/46.
+
+What changed for testers:
+- **Share order:** in the Shortcut's session list and the in-app picker, the session you last shared to comes first, even across gateways. Only one row is marked "last time". Hosts show their port, and sessions with the same title and folder show their key.
+- **F21 dark flash:** no more quarter-second of black on a cold launch.
+- **F16 tsnet stalls:** starting the connection relay no longer freezes the app, and a restart that loses a race can't leave the app deaf to sign-in and status updates.
+- **F1 ports and origin banner:** a gateway address typed with a port keeps it, discovery also tries port 8443, and there's a banner when the gateway refuses an origin with a port.
+- **Log token-leak fix:** the libtailscale change (`7292d891c`) that leaves stderr alone when system logging is mirrored to it, plus a test that checks the app's log files for a typed sign-in link.
+- **F22:** only `4f1cc3257`, the chip-state code for the gateway row, is in this build. The gateway row itself hasn't landed (issue #6 is still open).
+
+The kirocrew MCP servers (core, cron, work, computer) were unavailable in this session.
