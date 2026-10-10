@@ -1,0 +1,8 @@
+<task-notification>
+<task-id>bvd2an2kh</task-id>
+<summary>Monitor event: "f16 branch changes (#3)"</summary>
+<event>9901709b8 docs: f16 stages 2 and 3 built, fault 3 measured and its fix declined
+eaa58789e tsnet: start the socks relay without blocking the main actor
+6fa218283 tsnet: install a bus watcher only after the caller's staleness check</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
