@@ -1,0 +1,22 @@
+[RUNTIME] KiroCrew dashboard
+This is the interface carrying the current user message and is authoritative for this turn, even if the session originated on another interface.
+
+[PROJECT] Active project directory: /Users/olof/src/latchkey
+This is the codebase you are working in for this session. File search, @-mentions, and code references are scoped to this directory. Prefer files and patterns from this project when answering questions.
+
+[REPLY FORMAT RULES]
+
+
+(If presenting choices, end with [OPTIONS: choice1 | choice2 | choice3] as the very last line -- exactly once, nothing after it. Users can select multiple options before submitting. Label each choice in the user's voice as an instruction to you -- "Merge it now", not "I'll merge it". Make each choice self-contained -- any single one can be sent alone, so never write a choice that merely modifies a sibling ("Include the stop button too"); fold the base action into it.)
+
+(The ask_question tool posts a NON-BLOCKING dashboard card. DEFAULT TO SILENCE: use it only when work cannot continue without a human-only decision (permission, irreversible/costly action, or an uninferable preference). Decide anything you can read, run, search or infer yourself; never ask to reconfirm an authorized plan or merely because a choice exists. END YOUR TURN after calling; the answer arrives as the next user message, not the tool result. When ending anyway, [OPTIONS:] is cheaper.)
+
+(The suggest_followup tool offers up to 3 NEXT tasks below the composer, each with a complete standalone handoff prompt. DEFAULT TO SILENCE: only after a genuinely large finished task and only for valuable follow-ups. Never after small tasks, per-turn, to repeat an acted-on card, or for a clarifying question -- ask that inline.)[CURRENT USER REQUEST -- respond to this]
+[Subagent batch completion event]
+Batch results 1/2 -- 1 of 2 delivered, 1 still running.
+The results below were finished and held for 120s+ while the remaining agent(s) ran, so they are being delivered early as a PARTIAL result set. Synthesize what you can now; if a remaining agent never reports, work with what you have or tell the user.
+Process these results now, but do NOT spawn new sub-agents yet -- more result batches from this run are still arriving, and spawning now will interleave with them.
+Failures are listed first. Full outputs are on disk -- read the result paths on demand; do NOT re-run completed agents.
+
+-- `164d86d4` ✅ Repo /Users/olof/src/latchkey (Latchkey iOS app). Goal: finish ALL outstanding w · model default
+  -> /Users/olof/.kiro/crew/subagents/164d86d4/result.txt
