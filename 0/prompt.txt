@@ -1,0 +1,25 @@
+[RUNTIME] KiroCrew dashboard
+This is the interface carrying the current user message and is authoritative for this turn, even if the session originated on another interface.
+
+[PROJECT] Active project directory: /Users/olof/src/latchkey
+This is the codebase you are working in for this session. File search, @-mentions, and code references are scoped to this directory. Prefer files and patterns from this project when answering questions.
+
+[REPLY FORMAT RULES]
+
+
+(If presenting choices, end with [OPTIONS: choice1 | choice2 | choice3] as the very last line -- exactly once, nothing after it. Users can select multiple options before submitting. Label each choice in the user's voice as an instruction to you -- "Merge it now", not "I'll merge it". Make each choice self-contained -- any single one can be sent alone, so never write a choice that merely modifies a sibling ("Include the stop button too"); fold the base action into it.)
+
+(The ask_question tool posts a NON-BLOCKING dashboard card. DEFAULT TO SILENCE: use it only when work cannot continue without a human-only decision (permission, irreversible/costly action, or an uninferable preference). Decide anything you can read, run, search or infer yourself; never ask to reconfirm an authorized plan or merely because a choice exists. END YOUR TURN after calling; the answer arrives as the next user message, not the tool result. When ending anyway, [OPTIONS:] is cheaper.)
+
+(The suggest_followup tool offers up to 3 NEXT tasks below the composer, each with a complete standalone handoff prompt. DEFAULT TO SILENCE: only after a genuinely large finished task and only for valuable follow-ups. Never after small tasks, per-turn, to repeat an acted-on card, or for a clarifying question -- ask that inline.)[CURRENT USER REQUEST -- respond to this]
+[Subagent completion event]
+Agent `237d6a71` (kirocrew-worker) completed ✅
+Task: Repo /Users/olof/src/latchkey. Time-box: 30 minutes, small and direct, no spec. Two infra fixes: 1) 
+
+Full transcript: /Users/olof/.kiro/crew/subagents/237d6a71/result.txt (3,694 bytes)
+Preview (first+last 100 words):
+Checking for the existing `simpool` work first.Found it: `simpool.py` is untracked in the `latchkey-simpool` worktree and nothing is wired to it. Checking the sims and the keyboard prefs next.Shard 3 is in use (the other worker), so I'll leave it alone. Now comparing keyboard prefs on Shard 2 and Shard 1.No persisted pref differs and Simulator.app has no host prefs, so the keyboard state is live device state. I'll check for `AutomaticMinimizationEnabled` and see how the harness provisions sims.The test needs the software keyboard; the fix is the in-sim `AutomaticMinimizationEnabled=NO` pref, applied at provisioning. Checking the serial runner's boot path
+[...middle truncated -- read the full transcript below...]
+wired it in. Each simulator slot now has its own lock, so concurrent runs can't grab the same simulators or harness instances. A lock dies with the run that holds it. Checked with scratch lock files only; no sharded suite was run with it. 2. **Shard 2 keyboard** (`10ac4911b`): Shard 2 had a hardware keyboard connected, which is live device state, not a setting in any file. Every run now sets `AutomaticMinimizationEnabled=NO` on each shard sim, so the on-screen keyboard always shows. 3. **Verification:** on Shard 2 the keyboard came up and every check on the first pass ("page") succeeded
+
+The full result is on disk -- read it on demand with the read tool (offset/limit), grep the path above, or call spawn_status(agent_id, offset=, limit=, grep=). Do NOT re-run the subagent.
