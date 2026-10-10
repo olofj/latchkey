@@ -1,0 +1,8 @@
+<task-notification>
+<task-id>ab677064433909f2d</task-id>
+<task-id>a3136a3a2bb7a3a96</task-id>
+<task-id>ae22ba8cdec0ff8f6</task-id>
+<status>stopped</status>
+<summary>3 background agents didn't finish before the previous session ended: "Simulator slot pool" (ab677064433909f2d), "Simulator slot pool (resume)" (a3136a3a2bb7a3a96), "F16 finish and commit" (ae22ba8cdec0ff8f6).</summary>
+<note>No completion record was found for them in the previous session. They may have been stopped, or they may have been running when the previous Claude Code process exited — either way their transcripts are saved, so their progress is not lost. Resume any of them by sending a message to its id with SendMessage, or check its worktree/output for partial work before assuming the task landed.</note>
+</task-notification>
