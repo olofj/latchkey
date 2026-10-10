@@ -1,0 +1,117 @@
+<task-notification>
+<task-id>a0f64046eb9ba106c</task-id>
+<tool-use-id>toolu_01U1tnyXCoKVKfoqNZYz7quZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/7964d1cc-e5aa-4fe5-b522-0f1aaf8e4250/tasks/a0f64046eb9ba106c.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyse session+share tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I read both suites, the helpers, the shard runners, the post-run log checks in `scripts/test-session.sh`, and the timings in the serial run log `app/build/session-logs/20260925-194037/test.log`. Nothing was edited and nothing was run.
+
+**Short answer:** only one strict launch-sharing group exists, worth about 40 s serially. Almost everything else changes shared state. The bigger saving, about 150 s, is in wait slack inside the helpers and costs no coverage. Of the four owner-reported bugs, only two are guarded in this suite.
+
+**Legend.** D is `SessionTests.launch()` (reset workspaces, peer `gw`, keep web data). S is `ShareTests.launch()`, which adds `-UITestResetShare`. "cli" is a sign-in by pasting CLI output. L is the number of `app.launch()` calls, and each "+si" is one sign-in.
+
+## Per test
+
+| Test (file:line) | s | L | Setup | Unique claim | Overlap | Guards |
+|---|---|---|---|---|---|---|
+| SessionTests:71 SignedOutShowsNativeSheet… | 24.8 | 1 | D, no sign-in | sheet names the gateway; page banner still hidden after the 11 s watchdog; button reopens sheet | its sheet is every test's prefix | R22/R23, F1 |
+| :97 ABrokenBridge… | 17.5 | 1 | D + BreakSessionBridge | banner fallback visible | control for :71 | R22 |
+| :138 RealDashboardConnectsToNothing… | 17.9 | 1 | D + ProxyEverything + LogResponses, proxy reset, cli | connect set is exactly {gw:443} | feeds the F6 fonts log check (test-session.sh:382-403) | F6 §6, R41 |
+| :149 WithoutTheRuleList… | 18.0 | 1 | same + NoContentRules | reaches Google | control for :138 | F6 |
+| :161 PastingCLIOutputSignsIn | 24.9 | 1 | D, cli | one redemption, clipboard cleared, Status shows expiry | parser is host-tested | M4.4/R23, R38, M8.2 |
+| :184 ABadToken… | 17.7 | 1 | D, none | failure message, sheet stays, 0 redemptions | – | R23 |
+| :204 PageRefreshesAcrossExpiries… | 55.3 | 1 | expire_in=6, cli, 40 s read-only watch | at least 5 rotations, no sheet, no violation | – | R20/R25 |
+| :230 AnExpiredSession…Interceptor | 17.0 | 1 | expire_in=4000, cli, `__expire` | 403 leads to refresh, silently | – | R20 |
+| :258 ARevokedChain… | 21.4 | 1+2si | expire_in=6, `__revoke` | reload, then sheet, then recovery | – | R21 |
+| :295 ACLISessionSurvivesRestart | 30.8 | 1 | expire_in=6, restart down=3, 16 s sleep | WebSocket reconnects, keeps rotating | – | R24 |
+| :319 AQRSessionEnds… | 13.8 | 1 | expire_in=6, qr sign-in, restart | sheet appears | – | R24 |
+| :336 NetworkLoss… | 38.2 | 1 | expire_in=6, blackhole 20 s | no sheet, recovers | – | M4 |
+| :367 SignOutEverywhere… | 17.7 | 1+2si | expire_in=6, `__logout-all` | sheet via the 403 interceptor | differs from :258 (reload path) | M4 review |
+| :386 ALostRefresh…GraceWindow | 19.4 | 1 | expire_in=6, drop-next | grace re-serve | – | R25 |
+| :412 ALostRefreshAtARestart… | 21.7 | 1+2si | expire_in=6, drop+restart | violation, then sheet | – | M4 review |
+| :447 SigningOutRevokes… | 47.2 | 3 | D, cli, relaunches | logout and revoke at gateway; cookies gone from disk | – | R32 |
+| :509 SigningOut…Unreachable… | 43.2 | 2+2si | restart + blackhole | "this device only" notice; local clear has teeth | – | R32 review |
+| :565 ResetApp… | 39.4 | 1 | D, cli | logout and revoke, back to first run | – | R32/M5 |
+| :602 SwitchingBack… | 36.4 | 1 | two known gateways, peers gw+dash | no second redemption | – | F5 §7 |
+| :658 ChipsDoNotOverlapPortrait | 14.6 | 1 | D, cli (`signedInDashboard`) | chips disjoint and hittable | same launch as :161/:677/:690 | F5 §1a/§9 |
+| :677 ChipsOneRowLandscape | 16.4 | 1 | same, then rotate | one row in landscape | same | F5, F9 |
+| :690 SessionsPanelStillOpens | 18.1 | 1 | same, taps panel | panel search and New hittable | same | F5 §1 |
+| ShareTests:57 ASharedLinkReachesTheChosenSession | 28.0 | 1 | S, url sign-in, share+note+send | post body and nav; **page frame unchanged after the keyboard** | message format is host-tested | F3 §4.6, **F13 keyboard (owner)**, D1 XYZ |
+| :90 LastSessionPreselected | 25.5 | 1 | S, two shares | preselect survives | – | F3 answer 1 |
+| :113 OnlyAListedSlot… | 25.0 | 1 | S, `__slots` mid-test | nothing selected, 0 violations | – | F3 §4.5 |
+| :136 ABusySlotIsQueued… | 23.0 | 1 | `__slots busy` before launch | "queued" shown, inbox 0 | mapping is host-tested | F3 |
+| :153 ARefusedPostOffersPrefill | 23.8 | 1 | csrf-deny | prefill navigation, item kept | – | F1 §4a/F3 |
+| :185 SignedOutMidShare… | 26.2 | 1+2si | app-signed-out | waits for sign-in, then auto-sends | – | F3 |
+| :213 AColdLaunchKeepsTheItem | 26.8 | 2 | S, relaunch without reset | inbox is on disk | – | F3 |
+| :229 ADocumentIsUploaded… | 21.5 | 1 | seed 1 MB PDF | upload, then `[attached_file 1]` | – | F3, D1 filename, `share_uploaded` log line |
+| :250 FiftyMegabytes… | 20.1 | 1 | seed 50 MB | byte for byte, no content-process death | chunking is host-tested | F3 §7a |
+| :266 OverTheLimit…413 | 34.2 | 2+2si | seed 50 MB + 1 byte, then upload limit | refused at capture; 413 text shown | – | F3, `share_refused` log line |
+| :284 AnUnsupportedType… | 19.4 | 1 | seed .bin | 400 text shown | same path as :266's second half | F3 |
+| :300 UnreachableIsKeptAndRetried | 34.8 | 1 | restart + blackhole, 9 s sleep | kept, then Retry sends | – | F3 |
+| :327 LaterAfterThePostLeft… | 37.5 | 1 | `__slow post=5` | recorded, not offered again | – | **issue #1, posting twice (owner)** |
+| :361 LaterBeforeThePostLeft… | 38.7 | 1 | `__slow slots=4` | nothing posted, item offered again | control for :327 | issue #1 |
+| :389 TheSweepRunsAtLaunch | 15.4 | 1 | seed age 8 days | inbox 0 | policy is host-tested | F3, `share_swept` log line |
+| :398 AFreshSeedIsInTheInbox | 17.9 | 1 | seed age 6 days | inbox 1 | – | F3 control |
+| :413 TheShareSheetSaves… | 46.5 | 1 app + Safari | S | extension saves, app sends | – | F3 stage 2 (found the 7094016 bug) |
+
+In total there are 44 app launches and about 45 sign-ins, over 1036 s serial (Session 571 s, Share 464 s).
+
+**The other two owner bugs are not in this suite.** The Dynamic Island bug is guarded by L1's F9 inset probes. The picker stall is issue #3 / F16, guarded in the discovery suite by `testAStalledLoopbackEndsTheSearchWithinSeconds`. Nothing here has to stay for them.
+
+## Fixed per-test cost
+
+- **setUp** (SessionTests.swift:52-67, ShareTests.swift:35-48): about eight loopback requests with no waits. The 5 s timeouts only matter on failure. Negligible.
+- **Launch plus sign-in** is the floor, about 12-13 s. The shortest signed-in tests (QR 13.8 s, chips 14.6 s) are almost all launch and sign-in. setUp's `__reset` ends every session, so a signed-in app can't be carried from one test to the next.
+- **Waits that only time out** (measured in the serial log):
+  - **ShareTests.swift:500**: `share()` waits 3 s for springboard's "Open" prompt. It waited 12 times, timed out every time, and never tapped. That is 36 s of pure failure-path wait. Line :421 adds another 2 s.
+  - **XCTest's own `waitForExistence`** checks about once a second, so it costs about a second even when the element is already there. `token-paste-button` averaged 1.20 s across 42 waits. `session-auth-required-count` (SessionTests.swift:898) and the `share-inbox-count` marker (ShareTests.swift:546) each averaged about 1.07 s. The `share-picker` non-existence wait (:544) averaged 1.76 s. The `token-sheet` exists/gone waits (92 calls) carry about 0.5 s of slack each.
+  - Switching these to `appears`/`disappears` (UITestSupport.swift:101-119) saves roughly 110-120 s serial, about 15 s per shard, with no coverage change.
+- **Fixed sleeps that could become polls:**
+  - ShareTests.swift:315, 9 s waiting for down=8: poll `__state` instead.
+  - SessionTests.swift:308, 16 s: poll until `ws_opens` and rotations move, keeping a floor past the QR test's 5 s sheet window.
+  - SessionTests.swift:590, 6 s for a check its own comment calls a smoke check.
+  - About 10-15 s in all.
+
+## A. Launch sharing
+
+**A1, the one strict group: SessionTests:161, :658, :677 and :690.** All four use the same launch (D, no pre-launch state, cli sign-in). After sign-in they only read or move UI: Status sheet, rotation, sessions panel. None touches sessions, tokens or the gateway.
+
+- Take one cached run that records raw observations, with no asserts inside it. In order: gateway counters, clipboard and sign-in button right after sign-in; the portrait chip snapshot and hittability; the Status expiry rows; the landscape chips; then the panel, opened back in portrait.
+- Each test asserts its own claim on the snapshot, and the run is cached only if sign-in succeeded, as in b4fb2bd.
+- Saves about 3 × 13 = **~40 s** serial.
+- **Needed first:** `scripts/test-session-shards.py:68-73` returns no groups (`return names, []`). It must group these tests the way `test-offline-shards.py:42-55` does, or they land on different shards and the cache never hits.
+
+**A2, optional and not strict.** Run A1 under :138's signature (ProxyEverything plus LogResponses) and read :138's journal before the UI steps. That saves about 13 s more, but three product-config tests would then run under a test-only routing mode. I would not do it.
+
+**No other strict groups.** Every expire_in=6 test changes state after sign-in except :204, and :204 has no read-only partner. Every ShareTests test posts or changes the inbox. :389 and :398 could share one launch only if the seed hook took two items, which changes :389's "no picker" claim.
+
+## B. Logic already covered by host tests, or that could be
+
+- **Queued counts as delivered**: `app/scripts/test-share.swift:49-51,90`.
+- **Upload 400/413 keep the gateway's words**: test-share.swift:78-85, plus `testing/harness/gateway_check.py:403-410`.
+- **Message format** (ShareTests:78): test-share.swift:22.
+- **CLI multi-URL parse** (SessionTests:161): `test-token-input.swift:16-23`.
+- **Sweep 8 days vs 6 days**: test-share.swift:132.
+- **Chunking**: `test-share-scripts.js:82-111`.
+- **Could cover, not yet host-tested:** the preselect / stale-default decision in `App/Share/ShareDefaults.swift` (behind :90 and :113), and ShareDelivery's Later/settle state machine (behind :327 and :361). Extracting those into test-share.swift would add coverage, but the UI tests still hold the server-side checks (violations, `share_posts`). Don't delete them.
+
+## C. Deletion candidates
+
+F14 §3 rules out deleting tests to lower the time, so each of these needs a spec revision.
+
+1. **ShareTests:136 BusySlot (23 s).** Host tests cover the mapping. What would go unnoticed: ShareDelivery removing an item on `.sent` only instead of `isDelivered`, leaving a queued share in the inbox.
+2. **ShareTests:284 UnsupportedType (19.4 s).** :266's second half drives the same upload-failure path end to end, and host plus `gateway_check` cover the 400 text. What would go unnoticed: that an item admitted at capture with a .bin advisory still goes on to upload.
+3. **ShareTests:398 FreshSeed (17.9 s).** Its "the counter reads a non-zero inbox" control is already given by :174 and :374. A sweep-everything bug would fail :229. What would go unnoticed: the launch sweep passing a wrong cutoff (a 6-day item swept) while the host policy stays correct.
+
+**Must not go:**
+- **:57** (F13 keyboard, D1).
+- **:327 and :361** (issue #1).
+- **:389 and the first half of :266**, which produce the `share_swept` and `share_refused` lines test-session.sh:365-366 requires.
+- **:229**, which carries the D1 filename and the `share_uploaded` line (test-session.sh:365).
+- **:138**, which feeds the F6 fonts check.
+- **The controls** :97, :149 and :361.
+
+**Totals:** A1 saves about 40 s, the wait fixes about 150 s, and the sleep polls 10-15 s. That is about 200 s serial, roughly 25 s per shard at 8 shards, with no coverage lost. Deleting all three C candidates would add about 60 s.</result>
+<usage><subagent_tokens>141528</subagent_tokens><tool_uses>32</tool_uses><duration_ms>293549</duration_ms></usage>
+</task-notification>
