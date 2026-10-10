@@ -1,0 +1,39 @@
+<task-notification>
+<task-id>a7179a96bb28cf897</task-id>
+<tool-use-id>toolu_012AddU9c6kZDZ4ezd6xPaV8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/e0239ecc-d081-4825-b0bd-f4a3f7f1eb9f/tasks/a7179a96bb28cf897.output</output-file>
+<status>completed</status>
+<summary>Agent "Review: network, tailnet, security" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Adversarial review: TSNet / Network / Session / Discovery / Logging / Tailnet Status
+
+Scope read in full; ThirdParty consulted only to confirm behaviour the findings depend on. Redaction, split-tunnel construction, test-hook gating (`TestHooks` compiled out unless `LATCHKEY_TEST_HOOKS`), `allowFailover=false`, discovery's no-redirect/HTTPS-only probing, and the sign-in origin pinning all held up.
+
+### 1. HIGH — Relay listener is bindable by any co-resident app; SOCKS credential exposed
+`app/TSNet/SocksLogProxy.swift:174` sets `allowLocalEndpointReuse = true` on the loopback `NWListener` (OS-assigned port, so reuse buys nothing). Network.framework implements this with `SO_REUSEPORT`; on iOS every app runs as uid `mobile`, so another app can bind the same `127.0.0.1:&lt;port&gt;` and take WebKit's connections. It answers the greeting with method 0x02 and receives `tsnet:&lt;proxyCredential&gt;` plus every CONNECT target, which the relay forwards verbatim (`:36`, `:551-561`). With that credential it can use tsnet's real listener (plain Go `net.Listen`, `SO_REUSEADDR` only — `tsnet.go:457`, Go `sockopt_bsd.go:41` — so not itself hijackable) and reach the tailnet as this node.
+
+### 2. MEDIUM — Node start failure is a crash loop
+`app/TSNet/TSNetManager.swift:187-189` `fatalError`s on any throw. `TailscaleNode.init` throws when `tailscale_start` is non-zero (`TailscaleNode.swift:80-84`); `tsnet.go:968-974` fails on an undecodable `tailscaled.state`, `:863` on an unwritable state dir. Every launch dies before any UI, with no route to Settings/reset — unlike `workspaces.json`, which is handled non-fatally (`WorkspaceManager.swift:89-102`).
+
+### 3. MEDIUM — `SocksLogProxy.start()` blocks the main actor up to 4 s
+`SocksLogProxy.swift:147-158` waits on a semaphore (3 s timeout + 1). Callers run on the main actor: `TSNetManager.swift:221-223` and loopback recovery `:382` — exactly when loopback sockets are flaky and `NWListener` may sit in `.waiting`. UI, status-poll hops, and web-view delegate callbacks all queue behind it. The restart path already has an async form (`:268-272`); start does not.
+
+### 4. MEDIUM — Cancelled bus restart can leave the live bus unobserved
+`startEventBus` swaps `busErrorWatcher` unconditionally (`TSNetManager.swift:288-291`) and nothing inside it observes cancellation (`watchIPNBus` is fire-and-forget, `LocalAPIClient.swift:65-74`). If `recoverLoopbackAfterFailure` cancels `busRestartTask` (`:350`) while it is inside `startEventBus`, the restart still installs its sink after the guard at `:314` fails — cancelling the recovery's sink for `newConsumer` (`:363-372`). The live processor's consumer is then unobserved; at the next ~60 s idle death (`:266-268`) nothing restarts it: `LoginFinished`/`BrowseToURL`/`Prefs`/`NetMap` stop, only the 5 s state mirror survives. Window: restart past its backoff sleep when the poll reports -1004.
+
+### 5. MEDIUM — Unbounded 60 s waits on `backendStatus()`
+LocalAPI requests use a 60 s timeout (`LocalAPIClient.swift:337,357`; none set in `URLSession+Tailscale.swift:42`). `refreshStatusNow()` is awaited unbounded by the discovery sweep's health check (`GatewayDiscovery.swift:415`, with `phase == .probing`, `startedAt` set, button disabled) and by `pageLoadFailed` (`TSNetManager.swift:607`). A loopback that accepts but never answers (the mode `SocksRelayPolicy.swift:21-24` describes) stalls the picker at "Searching… 60 s", stalls each poll iteration 60 s (`:452`), and -1001 is not a loopback failure (`:333-342`), so no recovery fires.
+
+### 6. LOW — `restartListener` racing `stop()` leaks a bound listener
+`SocksLogProxy.swift:259-265` nils `listener` before `startListener`; a `stop()` arriving during the up-to-3 s wait (`:244-249`) cancels nothing. The pending listener reaches `.ready` on a relay the manager already dropped (`TSNetManager.swift:379-381`, `:724` guard). `stateUpdateHandler` captures `l` (`:186-227`) → retain cycle → port stays bound; connections hit `self?.handle` with `self == nil` and are never started or cancelled.
+
+### 7. LOW — Refused upstream leaves WebKit hanging 60 s
+Upstream `NWConnection` has no `stateUpdateHandler` (`SocksLogProxy.swift:415-422`). A refused loopback connect parks in `.waiting` (the probe's own comment, `:322-324`); `send` never completes, WebKit waits its full timeout for the method-select byte, then reports -1001 — excluded from `transportFailureCodes` (`SocksRelayPolicy.swift:139-141`). Every navigation between tsnet's loopback dying and the 5 s poll recovering it is a 60 s hang instead of a fast failure.
+
+### 8. LOW — Open auth sheet is torn down by transient state emits
+`StatusViewModel.swift:93` cancels the `ASWebAuthenticationSession` on any non-`NeedsLogin` emit. The bus re-emits state on every ~60 s watcher restart, and `:78-90` documents a `Starting`/`NoState` flicker. A user mid-login loses the sheet and `authURL` (`:92`) and must tap Login again.
+
+### 9. LOW — Second Login tap orphans the presented sheet
+`AuthManager.swift:36` overwrites `authSession` without cancelling the old one; `StatusButton` stays tappable while spinning (`StatusView.swift:89-101`). `authenticationSucceeded()`/`cancel()` then act on the never-presented session; the visible sheet stays until the user closes it.</result>
+<usage><subagent_tokens>258135</subagent_tokens><tool_uses>60</tool_uses><duration_ms>801474</duration_ms></usage>
+</task-notification>
