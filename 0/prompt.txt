@@ -1,0 +1,47 @@
+<task-notification>
+<task-id>a8de95e514f8efbf5</task-id>
+<tool-use-id>toolu_01H5H2JZEETk3AfcNZMBVMzg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/21486e9a-61ad-4dc7-b1e6-6585550c7e31/tasks/a8de95e514f8efbf5.output</output-file>
+<status>completed</status>
+<summary>Agent "Finish F21 (issue #4)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Issue #4 is fixed and committed on branch `f21`, rebased onto the current main (`96623a5f3`). Nothing is pushed. Every gate you asked for passed after the rebase.
+
+**Commits**
+- `52669f8c6` harness: hold asset responses on request
+- `606bdaf29` browser: keep the page's unresolved dark shell from painting
+- `26a7334e2` docs: f21 built, the shell's dark default no longer paints
+
+**What the fix does.** The KiroCrew 0.7.1 page starts dark on every load and only switches to its chosen theme after its code has loaded. The app now adds a small style rule as each page starts loading. Until the page picks its theme, the page paints nothing, so the web view's own light or dark background shows. The rule is removed as soon as the page picks. Nothing is delayed, and no timeout or delay threshold was needed.
+
+**Before and after**, measured with `scripts/measure-launch-flash.sh` on Shard 4, with the fake gateway holding each asset 50 ms to mimic the phone's slower path:
+
+| | Dark flash after the first white frame | Darkest frame (0–255) |
+|---|---|---|
+| Before (fix switched off) | 225 ms | 34.3 |
+| After | none | 114.2 (the launch fade-in) |
+
+**Changes from the abandoned session's work:**
+- **Moved out of the other worker's files.** The `DashboardRootView.swift` and `SessionTests.swift` edits are reverted. The two tests now live in a new class, `app/UITests/CalmLaunchTests.swift`, added to CLASSES in `scripts/test-session.sh`. I also added it to the shard plan in `scripts/test-session-shards.py`, the session trigger in `scripts/test-all.sh` and `scripts/session-durations.txt`. The test-only readout of page colours is a new file, `app/App/Browser/PageBackgroundInstrument.swift`, attached in `AppBar.swift`. It only appears with the launch flag `-UITestReportPageBackgrounds`, so the f10 screen checks never see a new element.
+- **A bug in the stashed colour tracking.** The first run of the "fix off" test failed: it saw no dark at all while the flash was on screen. The dark theme fades in and the page cuts that fade short, and the old code skipped any colour mid-fade. It now reports the colour a fade is heading for. With that, the "fix off" test catches `rgb(18, 20, 26)` and then white.
+- **Checked:** hiding the page's main area never hides KiroCrew's own "failed to load" panel, which sits outside it.
+- **Not touched:** `loadInitial`.
+
+**Test runs**
+- Final gate, run again after the rebase: `SIM_NAME="Latchkey Shard 4" LATCHKEY_INSTANCE=4 ONLY_TESTS="&lt;all 15 ShareTests + 2 CalmLaunchTests&gt;" scripts/test-session.sh --build` passed, 17/17 in 493 s.
+- `app/scripts/test-page-scripts.sh` passed (including 22/22 checks of the new rule) and `make test-policy` passed.
+- **Shown able to fail** (each on Shard 4, mutation reverted, recorded in F21 §9):
+  - With the rule's install line commented out, `testTheRealDashboardNeverPaintsItsDarkShellFirst` fails: `got ["rgb(18, 20, 26)", "rgb(255, 255, 255)"]`.
+  - With the rule forced on despite `-UITestNoCalmShell`, `testWithoutTheCalmShellTheRealDashboardPaintsDarkFirst` fails: `got ["", "rgb(255, 255, 255)"]`.
+
+**Things to know**
+- **Running `CalmLaunchTests` on its own always reports FAILED**, even though both tests pass. The script's end-of-run log check expects a sign-in somewhere in the run, and these tests don't sign in. Paired with ShareTests or in a normal sharded run it passes. This check predates F21 and I left it alone.
+- **The old stash is still there** (`stash@{0}: f21-wip`) because popping it hit conflicts. Everything in it has been moved into the commits, so it can be dropped.
+
+**Open for Olof, no decision blocking:**
+- Try a cold launch on the phone (F21 §7.5). Settings → Logs should show the first `page-background:` line as `none`, never `rgb(18, 20, 26)`.
+- Whether to file the upstream report drafted at `docs/upstream/kirocrew-theme-flash.md` is his call.
+
+Spec: `/Users/olof/src/latchkey-f21/docs/features/F21-calm-cold-launch.md` (§9 has the log).</result>
+<usage><subagent_tokens>144477</subagent_tokens><tool_uses>86</tool_uses><duration_ms>2283365</duration_ms></usage>
+</task-notification>
