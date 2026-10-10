@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b0esrwod1</task-id>
+<summary>Monitor event: "new commits on f16 (#3) and f21 (#4) branches"</summary>
+<event>f21 26a7334e2 docs: f21 built, the shell's dark default no longer paints</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
