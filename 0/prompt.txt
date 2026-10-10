@@ -1,0 +1,22 @@
+<task-notification>
+<task-id>ab6f5b1adcfeabb4e</task-id>
+<tool-use-id>toolu_01CE9uhSEQLqPQhtqnDCcu3S</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/7b72881e-a3a1-410e-a145-52fa8cc5684b/tasks/ab6f5b1adcfeabb4e.output</output-file>
+<status>completed</status>
+<summary>Agent "Finish F25 landing, dry-run" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The L1 suite (`test-offline.sh --build`) is still running in the background, so I'll wait for it to finish.
+
+So far:
+- **Rebase:** looks right. The f25 worktree is clean, it sits on main's eedec409c, and `main..f25` is exactly the 4 F25 commits.
+- **Spec line:** b164a1195 already has `Spec: docs/features/F25-mute-chirps.md`, so I didn't change any commit message.
+- **Simulators:** all 8 simpool slots were free and shut down, so the killed run left nothing to clean up.
+- **`make test-policy`:** everything passes except `test-loopback-stalls.sh`, which failed 2 of 21 on both runs, so the known timing flake did come back. Both times it was the same two timing checks, taking about 0.43–0.45 s:
+  - "within the bound + 100 ms"
+  - "a call that ignores cancellation is still abandoned at the bound"
+
+  F25 doesn't change any loopback code. Because `make` stops at the first failing script, I ran the 9 scripts after it by hand, and all passed (including `test-tf-notes`).
+
+Once L1 finishes I'll run the session suite. The merge, worktree and branch cleanup, and the F26 dry run wait until both suites pass.</result>
+<usage><subagent_tokens>34086</subagent_tokens><tool_uses>13</tool_uses><duration_ms>162581</duration_ms></usage>
+</task-notification>
