@@ -1,0 +1,40 @@
+<task-notification>
+<task-id>a44e5dc4c098d642c</task-id>
+<tool-use-id>toolu_01EsdtHi4xPPNHggmFVeJrnJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/e0239ecc-d081-4825-b0bd-f4a3f7f1eb9f/tasks/a44e5dc4c098d642c.output</output-file>
+<status>completed</status>
+<summary>Agent "Review: tests and harnesses" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything I planned to verify is verified; no further reads needed. Final report follows.
+
+## Adversarial review: Latchkey test suites
+
+Context: the working tree carries an uncommitted mutation of `ShareDelivery.swift` (items deleted instead of kept, `defaults.remember` removed). It reads as in-progress mutation testing, so I treated it as context, not a finding. All findings are from reading code; nothing was run.
+
+**1. HIGH — Quick tier never runs ShareTests for Share changes.** `/Users/olof/src/latchkey/scripts/test-all.sh:52` `SESSION_RE` omits `app/App/Share/`, `UITests/ShareTests.swift` and `App/Diagnostics/` (SessionTests reads `diag-*` rows), yet `scripts/test-session.sh:44` runs ShareTests. Regression: edit `ShareDelivery.swift`, run `test-all.sh` → "skip session (M4): nothing it exercises changed". Verified: grepping those three paths against the regex gives 0 matches. Latent today only because the stamp (`app/build/test-all/last-full`) names a pre-rewrite SHA (`62dfae1…`) that `cat-file -e` rejects (`test-all.sh:41-47`), so every suite currently runs; it bites after the next `--full`.
+
+**2. HIGH — Keyboard test's fixture is more forgiving than the product.** Both fake pages put the text field at the *top* as `&lt;input&gt;` (`/Users/olof/src/latchkey/testing/harness/dashboard.py:116, :284`); the pinned 0.6.0 composer is a bottom-anchored `&lt;textarea&gt;` (App-GOBYv73C.js: 108 textarea, 0 `type:"text"`). `OfflineHarnessTests.swift:794` `field.isHittable` ("the field being typed into is on screen") cannot fail: a top field is never under the keyboard. The 0–120 pt gap check (:789) is real; the field check is vacuous. No suite types into the real bundle (ShareTests type into the native sheet). Regression: bottom-composer keyboard avoidance breaks on the real dashboard → green.
+
+**3. MEDIUM-HIGH — Important browser paths have no hermetic E2E coverage.** Content-process termination recovery (`ContentProcessRecovery.swift`), blank-popup handling (`PopupCatcher.swift`), return-to-dashboard, LogViewer exist only in `/Users/olof/src/latchkey/app/UITests/LatchkeyUITests.swift:1175,1202,1229,770`, which need a real tailnet; `scripts/test-inherited.sh:18` runs only three connection-independent tests. Verified by grep across the other suites: zero hits. Host test `test-content-process-recovery` covers pure logic only.
+
+**4. MEDIUM — Offline token-leak scan silently skipped.** `/Users/olof/src/latchkey/scripts/test-offline.sh:233-235`: container not found → prints "skipped", `LEAK_RC` stays 0, run exits 0. `test-session.sh:157-158` sets `LEAK_RC=1` in the same case. Regression: a stale `BUNDLE` (`:32`) after another bundle-id move → tests pass, R1 scan never runs, green.
+
+**5. MEDIUM — Fixture parity is shallow and skippable.** `/Users/olof/src/latchkey/app/scripts/test-fixture-parity.swift:29-33` `exit(0)` with SKIP when KiroCrew isn't installed; wired into `test-policy` (`app/Makefile:211`). `:130-140` compares only `viewport-fit`, `interactive-widget`, and env() yes/no; the `overflow:hidden` body / inner-scroller shape F15 hinges on, the shell probe, and input element type are never compared. Regression: KiroCrew changes its shell layout → fake stays "in parity"; CI box without KiroCrew → test-policy ok.
+
+**6. MEDIUM — `authpath_test.go` never runs, and one assertion can't fail.** No script runs `go test` in `/Users/olof/src/latchkey/testing/tsnet-harness` (`test-all.sh:104-106` covers libtailscale only; `tsnet-harness/Makefile:108` runs `-selftest`). `authpath_test.go:38` asserts `isHostileAuthSegment(seg)`, which `authpath.go:45` loops until true.
+
+**7. MEDIUM — Stale binary passes.** Every suite runs `test-without-building` unless `--build`; `test-all.sh:76` forwards it only on request. The sole staleness guard is the test *count* (`test-offline.sh:151-155`, `test-session.sh:127-130`). Regression: app edit, quick run without `--build` → old binary reported ok with no indication.
+
+**8. MEDIUM — Selftest skip hash misses harness inputs.** `/Users/olof/src/latchkey/scripts/test-tailnet.sh:85` hashes only tsnet `*.go`, go.mod/sum, Makefile, vendored tree. `make check` also depends on `testing/harness/` (dashboard.py's "FAKE DASHBOARD", certs, `harness-up`). Regression: dashboard.py change breaks the self-test → skipped as "unchanged".
+
+**9. LOW-MEDIUM — Status-blind `post()` survives in two suites.** `/Users/olof/src/latchkey/app/UITests/SessionTests.swift:659-665`, `ShareTests.swift:438-444` ignore non-2xx — the exact bug `UITestSupport.swift:13-21` was written to fix; the other four suites use `HarnessControl`. A renamed control route (e.g. `__reset` in `setUp`) 404s silently and state leaks to the next test. Mostly caught downstream, hence low.
+
+**10. LOW — Flash allowed despite the claim.** `OfflineHarnessTests.swift:313-315` accepts `connecting-shown:1`; the doc (:305-306) says "must not flash". Removing the 300 ms delay so the block flashes every fast load passes.
+
+**11. LOW — Signed-out share is timing-sensitive.** `ShareTests.swift:182-185`: after `__expire`+`__revoke`, the page's own 30 s poll can raise the token sheet before `share-send` is tapped; the tap then lands on the sheet, `resumeKey` is never set, and the test fails at :192. Fails closed (flaky, not vacuous).
+
+**12. LOW — Test-only path bypasses the loopback rule.** `/Users/olof/src/latchkey/app/App/TimingHarness.swift:50` hardcodes `https://controlplane.tailscale.com` in Testing builds, sidestepping `TestControlPlane`'s loopback allowlist. No suite passes `-TimingHarness`, so no test impact today.
+
+Solid: the counter-flat/positive-control discipline in SessionTests, DOC-id checks against stale reports, `journal`-based tailnet proof, and the D1/R1 validated scans.</result>
+<usage><subagent_tokens>255486</subagent_tokens><tool_uses>38</tool_uses><duration_ms>532430</duration_ms></usage>
+</task-notification>
