@@ -1,0 +1,24 @@
+[RUNTIME] KiroCrew dashboard
+This is the interface carrying the current user message and is authoritative for this turn, even if the session originated on another interface.
+
+[PROJECT] Active project directory: /Users/olof/src/latchkey
+This is the codebase you are working in for this session. File search, @-mentions, and code references are scoped to this directory. Prefer files and patterns from this project when answering questions.
+
+[REPLY FORMAT RULES]
+
+
+(If presenting choices, end with [OPTIONS: choice1 | choice2 | choice3] as the very last line -- exactly once, nothing after it. Users can select multiple options before submitting. Label each choice in the user's voice as an instruction to you -- "Merge it now", not "I'll merge it". Make each choice self-contained -- any single one can be sent alone, so never write a choice that merely modifies a sibling ("Include the stop button too"); fold the base action into it.)
+
+(The ask_question tool posts a NON-BLOCKING dashboard card. DEFAULT TO SILENCE: use it only when work cannot continue without a human-only decision (permission, irreversible/costly action, or an uninferable preference). Decide anything you can read, run, search or infer yourself; never ask to reconfirm an authorized plan or merely because a choice exists. END YOUR TURN after calling; the answer arrives as the next user message, not the tool result. When ending anyway, [OPTIONS:] is cheaper.)
+
+(The suggest_followup tool offers up to 3 NEXT tasks below the composer, each with a complete standalone handoff prompt. DEFAULT TO SILENCE: only after a genuinely large finished task and only for valuable follow-ups. Never after small tasks, per-turn, to repeat an acted-on card, or for a clarifying question -- ask that inline.)[CURRENT USER REQUEST -- respond to this]
+[Subagent completion event]
+Agent `34f9bcf9` (kirocrew-worker) completed ✅
+Task: Repo /Users/olof/src/latchkey. Olof's standing request: prune low-value and slow tests from the Latc
+
+Worktree `../latchkey-prune` is on branch `prune`. Next I'm comparing tonight's measured L1 durations against the committed ones to see where the time went.Now the typing split: a shared helper, page half into the app-bar launch, shell half stays.Edits done. Running L1 with a build through simpool in the foreground.L1 passes 45/45 (218 s wall), but the folded carrier is now 75 s and sets shard 3's critical path. Checking where its time goes.Status fold is ~19 s of swipes in `reveal`, inherent to the row; leaving it. Refreshing `scripts/l1-durations.txt` from this run, keeping its order and groups.1. **Merged or removed (4 L1 launches):** `testStatusNamesTheCommitTheAppWasBuiltFrom` and the fake-page half of `testTypingInThePageKeepsItOnScreen` now run at the end of `testNothingOfOursSitsOnThePageAndSettingsIsReachable`. The Try again launch of `testTheErrorPageOffersRetryAndAnotherGateway` now runs at the end of the stalled-load test. The "plain" inset probe is dropped: WebKit always tells a page without `viewport-fit=cover` 0, so that check could never fail. Every other claim is kept.
+2. **Seconds saved (L1 only; I didn't touch session or the other suites):** per-test time drops by about 34 s (status −29.0, plain −11, typing 31.3->21.1, error page 36.5->28.7, carrier 51.7->75.0). But other tests ran slower this time, so the suite total only went from 691->689 s. Wall time was 218 s, under the 240 s budget. I have no earlier wall time to compare it with.
+3. **Suite result:** L1 passed 45/45 on four simulators through simpool, in the foreground. Shard durations are refreshed in `/Users/olof/src/latchkey/scripts/l1-durations.txt`.
+4. **Not changed:** the carrier is now 75 s and sets shard 3's length. About 19 s of that is the Status screen scrolling to the commit row, which a merge can't remove.
+5. **Commits:** `dcbce7366` (fold, plus a line in F12's test table) and `2485bed46` (durations) are on branch `prune` in `../latchkey-prune`; main is fast-forwarded to them, not pushed. The diffs are left out to stay under 6 lines.
+6. **MCP:** @kirocrew-core, -cron, -work and -computer were not available in this session. Excalidraw, Expedia, Slack and Tripadvisor need authorizing in claude.ai connector settings.
