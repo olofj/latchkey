@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>aad8ca514bb812e11</task-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/aad8ca514bb812e11.output</output-file>
+<status>completed</status>
+<summary>Agent "F21 finish and commit" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Still L2. Waiting.</result>
+<usage><subagent_tokens>74572</subagent_tokens><tool_uses>20</tool_uses><duration_ms>403957</duration_ms></usage>
+</task-notification>
