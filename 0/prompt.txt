@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b8y3ns7h9</task-id>
+<tool-use-id>toolu_01KfkvMH2Jd3MpvAqf3P2vvm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/822a6635-4d2e-40ac-a6b0-80661cc67d25/tasks/b8y3ns7h9.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the session suite to finish" completed (exit code 0)</summary>
+</task-notification>
