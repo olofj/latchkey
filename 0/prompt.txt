@@ -1,0 +1,54 @@
+<task-notification>
+<task-id>a7f9bdb0b72a25496</task-id>
+<tool-use-id>toolu_01FkfCjX2gA5A1Npc6FjLrWD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/a7f9bdb0b72a25496.output</output-file>
+<status>completed</status>
+<summary>Agent "Session suite pruning analysis" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Premise check first.** The session suite is already sharded (commit 8729090aa, 2026‑09‑25): `scripts/test-session.sh` defaults to `LATCHKEY_SHARDS=8`, 39/39 in **200 s**; the 1039–1099 s figures are the `--serial` path. N=4 (the L1 shape) was measured at 319 s; it is feasible but 8 is better, since this suite drives real WebKit (1.39× contention). Per‑shard fixed overhead is 30–54 s, so pruning serial cost buys little wall time at N=8.
+
+**History.** No session test has ever failed on a real app regression after landing. `testAColdLaunchKeepsTheItem` and `testARefusedPostOffersPrefill` found bugs at authoring (084fd8c67); `testASharedLinkReachesTheChosenSession` and `testLaterAfterThePostLeft…` guard owner‑reported bugs written after the fact; `testSignedOutMidShareThenResumed` has two flake commits. Judgements below rest on "could catch". Seconds are serial, from `app/build/session-logs/20260926-090406` (1051 s).
+
+| Test | s | Verdict | Saved | Coverage lost |
+|---|---|---|---|---|
+| ABusySlotIsQueuedNotSent | 24 | remove | 24 | "queued" label in‑app (logic host‑tested) |
+| AnUnsupportedTypeShowsTheGatewaysWords | 19 | remove | 19 | 400 wording (413 test + host cover it) |
+| TheLastSessionIsPreselected | 25 | merge → ASharedLinkReaches… shared run | 20 | none; cascades if first send fails |
+| OnlyAListedSlotIsEverPosted | 24 | merge → same run | 20 | same |
+| AFreshSeedIsInTheInbox | 21 | merge → TheSweepRunsAtLaunch (needs 2‑spec `-UITestSeedShare`) | 18 | none |
+| ABadTokenSaysSoAndKeepsTheSheet | 19 | merge → SignedOutShowsTheNativeSheet… | 13 | none |
+| SignOutEverywhereShowsTheSheet | 17 | merge → ARevokedChain… | 12 | 403‑sheet becomes step 2 |
+| ALostRefreshResponse…GraceWindow | 19 | merge → ALostRefreshAtARestart… | 12 | grace path becomes step 1 |
+| ThePageRefreshesAcrossExpiries | 55 | keep (watch 40→25 s optional, −15) | 0 | fewer rotations |
+| SigningOutRevokes…AtTheGateway | 47 | keep, 3 launches; trim cookie wait | 0 | – |
+| TheShareSheetSaves…AppSendsIt | 47 | keep (only real‑extension test) | 0 | – |
+| SigningOutWithTheGatewayUnreachable | 43 | keep | 0 | – |
+| LaterAfterThePostLeft… | 43 | keep (issue #1) | 0 | – |
+| LaterBeforeThePostLeft… | 40 | keep (control) | 0 | – |
+| ResetAppEndsTheSession | 39 | keep | 0 | – |
+| NetworkLossDoesNotShowTheSheet | 38 | keep (20 s blackhole is the claim) | 0 | – |
+| OverTheLimit…413 | 36 | keep | 0 | – |
+| UnreachableIsKeptAndRetried | 35 | keep; retry hook could save ~10 | 0 | – |
+| SwitchingBackToAGateway | 34 | keep | 0 | – |
+| ACLISessionSurvivesAGatewayRestart | 31 | keep | 0 | – |
+| ASharedLinkReachesTheChosenSession | 29 | keep, carrier (F13 owner bug) | 0 | – |
+| ARefusedPostOffersPrefill | 27 | keep (found a bug) | 0 | – |
+| AColdLaunchKeepsTheItem | 26 | keep (found a bug) | 0 | – |
+| SignedOutMidShareThenResumed | 26 | keep, watch flakiness | 0 | – |
+| PastingCLIOutputSignsIn | 25 | keep, carrier of 4 | 0 | – |
+| SignedOutShowsTheNativeSheet… | 25 | keep, carrier | 0 | – |
+| ARevokedChain…Recovers | 23 | keep, carrier | 0 | – |
+| ADocumentIsUploadedThenReferenced | 23 | keep (D1) | 0 | – |
+| ALostRefreshAtARestart… | 22 | keep, carrier | 0 | – |
+| FiftyMegabytes… | 21 | keep | 0 | – |
+| WithoutTheRuleList…Google | 18 | keep (F6 control) | 0 | – |
+| TheRealDashboardConnectsToNothing… | 18 | keep | 0 | – |
+| TheSweepRunsAtLaunch | 18 | keep, carrier | 0 | – |
+| ABrokenBridgeLeavesTheBanner | 17 | keep (R22 control) | 0 | – |
+| AnExpiredSession…Interceptor | 16 | keep (split out for determinism, 39bdf4d25) | 0 | – |
+| AQRSessionEndsAtAGatewayRestart | 14 | keep | 0 | – |
+| InstanceChips ×2, SessionsPanel | 0.1 | keep (already shared) | 0 | – |
+
+**Total:** remove 43 s + merge 95 s = **~138 s serial (13%)**; ~35 s more via wait‑shortening hooks. At N=8 this is roughly 200 → ~185 s wall. The other worker's three uncommitted F18 tests add ~81 s serial (one run failing), not judged here.</result>
+<usage><subagent_tokens>78358</subagent_tokens><tool_uses>16</tool_uses><duration_ms>316808</duration_ms></usage>
+</task-notification>
