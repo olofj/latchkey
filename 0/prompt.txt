@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b0esrwod1</task-id>
+<summary>Monitor event: "new commits on f16 (#3) and f21 (#4) branches"</summary>
+<event>f16 0acfcf5ff tsnet: start the socks relay without blocking the main actor</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
