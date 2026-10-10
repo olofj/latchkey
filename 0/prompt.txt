@@ -1,0 +1,78 @@
+<task-notification>
+<task-id>a7649d3e2757b0219</task-id>
+<tool-use-id>toolu_01Nhe9MxV75xNDaH34wdsvvm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/90536899-92e6-42ee-a6ea-5cf3281611f2/tasks/a7649d3e2757b0219.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit 0.7.1 frontend bundle needs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The same auth code is in three renamed files in 0.7.1, and all seven strings survive with their old names. The app's page dependencies all still exist, and the runtime external origins are unchanged. The one behaviour change a fake must handle is in the session-expired banner's token paste box. Everything was read with `unzip -l`/`unzip -p` only.
+
+The scratch `kirocrew-0.7.1.whl` has sha256 `dfb4a31c…f267f461`, which matches `PINNED_WHEEL_SHA256`. `fake_gateway.py` is only partly re-pinned: the version and URL say 0.7.1, but `PINNED_FILES` and `REQUIRED_STRINGS` still name the 0.6.0 files. `def6d3f5…` is 0.6.0's `index.html`.
+
+## 1. Asset mapping (all under `kiro_crew/static/dist/`)
+
+| role | 0.6.0 | 0.7.1 | sha256 (0.7.1) |
+|---|---|---|---|
+| index.html | def6d3f5… | same name | `a72d684fff1ec557faa89842c08bfea77a82ae33c4ba3cb1b5a4fbb516df095a` |
+| main entry | `assets/main-BhsK4HoM.js` | `assets/main-BkIou08w.js` | `81cc0a9ffd1bc543b296c432c23605357a0c13d92a6b4688165368935bb831da` |
+| API client | `assets/client-oM83i081.js` | `assets/client-D5eTcPHC.js` | `341acbee9bd048f07a7fa85bf292942a99625eb3e25ae9887e2178b8be8b3bd1` |
+| App chunk | `assets/App-GOBYv73C.js` | `assets/App-e17PGpKz.js` | `e840f8e3b4afdbb99acab5d3a3c2d5bf0c9978ac0e982e6c40e81f6d385f1425` |
+
+Where each string lives in 0.7.1:
+- **client-D5eTcPHC.js:** all seven except `refresh_chain_revoked`. `/api/auth/me` is new in the client (it was in main only in 0.6.0).
+- **main-BkIou08w.js:** everything except `/api/auth/refresh`.
+- **App-e17PGpKz.js:** `mc-auth-required` and `mc-auth-cleared`.
+
+The current `REQUIRED_STRINGS` split still holds once the filenames are swapped. The error helper also moved, from `apiError-GNYM0AEJ` to `apiError-BXuo01r8`.
+
+## 2. Auth client, 0.7.1 vs 0.6.0
+
+Unchanged:
+- **403 detection:** status 403 with header `X-Auth-Required: true`. 0.7.1 also registers the handler as a hook (`f(V)`), with the same condition.
+- **Refresh call:** `fetch('/api/auth/refresh', {method:'POST', credentials:'include'})`, no body, one call in flight at a time.
+- **Terminal errors:** in the client, 401 is terminal (no more silent refresh) and anything else is transient. In main, 401 with `body.error === 'refresh_chain_revoked'` is terminal and runs `onChainRevoked` or `location.assign('/')`. Other failures back off at 60s, 240s, 960s, then 3600s.
+- **`/api/auth/me` on boot:** `GET` with `credentials:'include'`.
+  - 404 means refresh is unsupported.
+  - 401, or 403 with `X-Auth-Required`, triggers a silent refresh and one retry.
+  - It reads `session_exp` (epoch seconds) and schedules a refresh 3600s before it, never sooner than 5s.
+- **Banner:** id `mc-session-expired`, prepended to body. It fires `mc-auth-required` on show and `mc-auth-cleared` on clear or dismiss. Inside an iframe the page posts `{type:'mc-auth-expired'}` to its parent instead.
+
+New in 0.7.1:
+- **Token paste in the banner.** 0.6.0 redirected to `/?token=`. 0.7.1 instead calls `GET /api/auth/me?token=&lt;t&gt;` with `credentials:'include'`. It reads `token_accepted` and `owner_ok` (the stale-owner case needs both true), and on success clears the banner in place. The fake already returns both fields (`fake_gateway.py` ~780-787).
+- **New event `mc-auth-recovered`:** fired together with `mc-auth-cleared` after a successful recovery. App listens for it; Latchkey does not.
+
+## 3. What Latchkey depends on in the page
+
+All of these still exist in 0.7.1:
+- **Session bridge** (`app/App/Browser/PageScriptSources.swift:93-97`): `#mc-session-expired` for the CSS hide, and the `mc-auth-required` / `mc-auth-cleared` events.
+- **`/chat?sid=&amp;prefill=`** (`app/App/Share/ShareDelivery.swift:569-573`): App-e17PGpKz still reads `sid` (or `slot`) and `prefill`, stores `{slotKey, prompt, ts}`, then deletes `prefill`. A new, separate `new=1&amp;prefill=` path was also added.
+- **API paths** (ShareDelivery :354/:360/:440, PageScriptSources :198): `/api/chat?ws=1`, `/api/chat/slots`, `/api/chat/folders`, `/api/upload/file` are all in client-D5eTcPHC.
+- **`?token=` handling:** App still reads it for the prompt claim. The decoder the doc comment at PageScriptSources.swift:38 calls `YA()` is now named `Bpe()`, so that comment is out of date. Behaviour is the same.
+- **Not found:** no sessions-panel or chat-input selectors and no localStorage keys. The Swift code does not depend on any.
+
+The `LOADED-PAGE` log line (`BrowserViewModel.swift:1031`) records `fontsLinkRel` from `link[href*="fonts.googleapis.com/css"]` and the list of loaded `webFonts`.
+
+The F6 check in `scripts/test-session.sh:247-266` looks only at lines with `"rules":"installed"`:
+- At least one must show `"fontsLinkRel":"preload"`.
+- None may show `"stylesheet"`.
+- `webFonts` must not include "Space Grotesk" or "JetBrains Mono".
+
+0.7.1's `index.html` has the same font markup as 0.6.0: preconnects to `fonts.googleapis.com` and `fonts.gstatic.com`, and `&lt;link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Space+Grotesk…&amp;family=JetBrains+Mono…" onload="this.rel='stylesheet'"&gt;`. So the F6 check and `SessionTests.swift:143-144` (which expects connections to both font hosts) still apply.
+
+## 4. External origins used at runtime
+
+The set is the same in both versions:
+- **fonts.googleapis.com and fonts.gstatic.com:** `index.html`; the content rules block them.
+- **cdn.jsdelivr.net and cdnjs.cloudflare.com:** in the CSP `script-src` of the markdown-rendered iframe (`MarkdownRenderer-B4qxyxIU.js`).
+- **esm.sh:** Excalidraw's `ASSETS_FALLBACK_URL` (`chunk-K2UTITRG-C4t9bLD_.js`).
+- **platform.twitter.com/widgets.js and embed.reddit.com/widgets.js:** embed `src` strings in the same chunk, both outside the allowlist.
+
+The CDN hosts in that set are all in `allowedCDNHosts`; `cdn.tailwindcss.com` is allowed but not referenced. The roughly 60 hosts that appear only in 0.7.1 (Sentry, Amplitude, Figma, and other `mcp.*` entries, plus `tracker.example.com`) are integration-catalog data and link targets in App-e17PGpKz, not things the page loads.
+
+## To re-pin `testing/harness/fake_gateway.py`
+- Replace the four frontend entries in `PINNED_FILES` (lines 151-154) with the 0.7.1 names and hashes above.
+- Change the `REQUIRED_STRINGS` keys (lines 173-175) to `client-D5eTcPHC.js` and `main-BkIou08w.js`.
+- Optionally add `mc-auth-recovered` to the client's required strings.
+- The pins for the `dashboard/*.py` server files were not checked.</result>
+<usage><subagent_tokens>75329</subagent_tokens><tool_uses>22</tool_uses><duration_ms>255969</duration_ms></usage>
+</task-notification>
