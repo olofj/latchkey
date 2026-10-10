@@ -1,0 +1,59 @@
+<task-notification>
+<task-id>a187e2cba972490ea</task-id>
+<tool-use-id>toolu_01WJakgVTT8fgJH9dbPvESEm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/4a3b4c37-af87-40ee-824d-79f8213a2dca/tasks/a187e2cba972490ea.output</output-file>
+<status>completed</status>
+<summary>Agent "Adversarial review of F6 commits" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found no path that loads an http(s) page with no rule list, or with another origin's list, in normal operation. I found one medium defect in the coalescing logic, one medium gap in the session tests, and several lows. `make -C app test-policy` passes; I edited, built and ran nothing else.
+
+**1. Load paths: no high findings.**
+- **Covered paths:** reload, goBack, content-process recovery, restored tabs, `loadSessionURL`, the F3 share (`page?.load`) and TimingHarness all reach `loadResolved`. Where they don't, they rely on the list already sitting in the view's content controller.
+- **PopupCatcher and toggle flips:** PopupCatcher's view is built from the same configuration, so the same controller and list govern it. A toggle flip goes through `reopenHomeTab`, so it always gets a new view model and a new view.
+- **Low, `BrowserViewModel.swift:1267`:** `routeNewWindow` calls `webView.load` itself. That breaks the stated invariant ("written only in `loadResolved`"). It is safe today only because a list stays installed on the controller. Fix: check `installedRulesIdentifier == ContentRules.identifier(allowedOrigin, allowWidgetCDNs())` before loading, and otherwise go through `loadResolved`.
+- **Low, test builds only, `ProxyBounceTestHarness.swift:146`:** the `bounce-test:` first load takes the non-http branch, so that page runs with no list at all.
+
+**2. Races**
+- **Medium, `BrowserViewModel.swift:571-574`: the non-http branch doesn't bump `loadGeneration`.**
+  - Scenario: an http load is waiting on a compile, then `Workspace.blankCurrentPage` (`Workspace.swift:248`, sign-out) calls `load(about:blank)`. When the compile finishes, `generation == loadGeneration`, so the gateway URL loads over the blank page.
+  - That is exactly the "the page could set a cookie between the wipe and the fresh load" case R32 guards against. It also breaks "exactly one load starts, the latest".
+  - The window is the first compile per identifier per process: milliseconds normally, 15 s at worst.
+  - Fix: `loadGeneration += 1` in that branch too.
+- **Low: `unloadWebView` doesn't bump `loadGeneration` either.**
+  - Scenario: a never-committed tab is unloaded mid-compile. `makeWebView` then calls `loadInitial`, which holds (no peer data yet) and so never bumps. The old compile then passes `webView != nil` against the *new* view and loads the stale URL while the page shows "holding". A second load follows later.
+  - The list is correct, so nothing leaks; the state is wrong. Fix: bump in `unloadWebView`.
+- **Low, `BrowserViewModel.swift:594-598` + `dispatchLoad:707`:** if `loadResolved` runs with `webView == nil` and the list is cached, `installRules` returns early, leaves the identifier unset, and the `assert` fires, crashing Debug and test builds. `loadSessionURL` can reach this. Fix: guard `webView` at the top of `loadResolved`.
+- **Low, `ContentRulesInstaller.swift:475`:** `removeOthers` runs on every compile, even with several workspaces or a compile in flight for the other setting. Lists already mapped survive the file being deleted, so I found no concrete failure. Sweeping the store once at launch would be safer.
+- **Clean:** the resume-once timer and continuation logic, and the per-identifier cache.
+
+**3. Rule JSON**
+- **Low, `ContentRules.swift:344`:** `urlFilterEscaped` leaves `+ ( ) ^` unescaped. The URL parser (URLComponents) accepts `+ ( )` in a host; I checked. A gateway `a+b.ts.net` would compile to `^https://a+b\.ts\.net/`, which also admits `aab.ts.net`. It is theoretical (no MagicDNS name has these), but the comment calling this "WebKit's own table" is wrong: that table is for `if-domain`. Fix: escape every regex metacharacter, or reject such hosts.
+- **Low, hardening:** the CDN rules have no `resource-type`, so they admit iframes, `fetch`/POST, `sendBeacon` and ping to all four hosts, not just scripts and styles. Fix: add `"resource-type":["script","style-sheet"]` (plus `fetch` if needed). Then data can't be sent to third parties through them.
+- The IPv6 escaping, the anchoring and the ordering all look correct.
+
+**4. Blocked-image marker**
+- **Low, `PageScriptSources.swift:608-616`:** the click handler trusts any element carrying `data-latchkey-blocked`, via `closest()`. Sanitized agent HTML (DOMPurify allows `data-*` by default) could put `&lt;div data-latchkey-blocked="https://phish"&gt;` over the whole view. A real tap anywhere on it then opens that URL in Safari, and the page's own handlers never see the tap.
+  - A tap is still required. It is no worse than an `&lt;a href&gt;` overlay.
+  - Fix: keep the marked elements in a `WeakSet` in the app's isolated world, only honour `img`, and check the URL equals `currentSrc`.
+- **Clean:** the frame-origin check (`SessionManager.matches`) and the D1 redaction. Only `redactedForLog` URLs reach the log; the counts and hosts are never logged as URLs.
+
+**5. Persistence**
+- **Low:** an older build rewrites `workspaces.json` without `allowWidgetCDNs`. After a downgrade and re-upgrade, strict mode comes back as on, i.e. CDNs allowed (fails open).
+- **Low, `Workspace.swift:61`:** the closure's `?? true` also defaults to allowed.
+- Decoding is otherwise sound.
+
+**6. Tests**
+- **Medium, `scripts/test-session.sh` F6 block:** the `fontsLinkRel`/`webFonts` check has no positive control. It only reads `"rules":"installed"` lines and never shows that the `-UITestNoContentRules` run's line says `"stylesheet"` or names a Google face. The dump runs at `didFinish`, and faces often finish after that, so "no Space Grotesk" can pass whether or not the list blocked anything. Fix: assert the control run's line shows `stylesheet` and a Google face. (§9 already says these tests are committed unrun.)
+- **Low:** the `esm.sh:8444` zero in `testAnAllowlistedCDNIsFetched…` has no control; the control test checks only the gateway's `:8444`. Add `/f6/cdn-port` to its path assertions.
+- **Clean:** the L1 instruments. `host_of` strips the port so the path matching works, the handshake counter is exercised by `make check`, and the controls cover the away origin, the lookalikes and the font hosts.
+
+**7. Docs**
+- **Low:** R41 lists "preconnect" as blocked, as fact. §9 says it was only observed on the simulator, through the proxy, and "on a device … remains unobserved". R41 should carry that caveat.
+- **Low:** §9's "`loadResolved` … the one path app loads take" is contradicted by `routeNewWindow`, `reload()` and `goBack()`. They are only safe because the list persists on the controller, and the docs should say that.
+- R41 otherwise states both halves, the tightening and the four exceptions, accurately against `ContentRules.allowedCDNHosts` and the toggle.
+
+Files: `/Users/olof/src/latchkey/app/App/Browser/BrowserViewModel.swift`, `ContentRules.swift`, `ContentRulesInstaller.swift`, `PageScriptSources.swift` (same directory), `/Users/olof/src/latchkey/app/App/Workspace/Workspace.swift`, `/Users/olof/src/latchkey/scripts/test-session.sh`, `/Users/olof/src/latchkey/app/UITests/OfflineHarnessTests.swift`, `/Users/olof/src/latchkey/docs/PLAN-REVISIONS.md`.
+
+The Excalidraw, Expedia, Slack and Tripadvisor connectors need authorizing in claude.ai's connector settings. This review didn't use them.</result>
+<usage><subagent_tokens>127902</subagent_tokens><tool_uses>19</tool_uses><duration_ms>396769</duration_ms></usage>
+</task-notification>
