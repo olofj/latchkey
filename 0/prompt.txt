@@ -1,0 +1,10 @@
+<task-notification>
+<task-id>aa6036402862de126</task-id>
+<tool-use-id>toolu_017jXXVn6xc6zxfvYzkyfFdF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/aa6036402862de126.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply session suite pruning" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Everything left — the commit split, the full sharded run, the durations refresh, the docs entry — depends on this run's verdict, so there's nothing further to request until it lands.</result>
+<usage><subagent_tokens>174091</subagent_tokens><tool_uses>51</tool_uses><duration_ms>515592</duration_ms></usage>
+</task-notification>
