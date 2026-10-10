@@ -1,0 +1,32 @@
+<task-notification>
+<task-id>ad96ce641e61f67d6</task-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/ad96ce641e61f67d6.output</output-file>
+<status>completed</status>
+<summary>Agent "F18 share: pick and send" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Nothing remains to request: the tier is green, the upload succeeded, the durations commit is in, and the tree is clean. Report follows.
+
+## F18 built, tested and shipped to TestFlight
+
+**Upload:** build **202609270214**, commit `38d4c46fd490` — `UPLOAD SUCCEEDED with no errors`, Delivery UUID `53352b3c-ff50-49ec-ad27-c7658c16104e` (`app/build/f18-tf.log`). It appears in App Store Connect → TestFlight after processing.
+
+**Commits on main (not pushed), all under `38d4c46fd` plus one after:**
+- `28e06968b` share: mirror the session list and deliver addressed items
+- `45c6fd28b` share: run the intent in the background with a session parameter
+- `f87345c44` session: cover the addressed share and the intent's run
+- `38d4c46fd` docs: f18 built as option c with b as its fallback (the uploaded commit)
+- `12397aa91` session: refresh shard durations for the f18 tests (after the upload, as asked)
+
+**Tests (quick tier, `scripts/test-all.sh --build`, all ok):** host tests incl. share 125/125; vendored Go; L1 42/42; L2; session **42/42** on 8 shards in 215 s (new controls `share_intent_post` and `share_mirror` found); discovery; lifecycle. Mutation shown once: with the verify in `deliver` skipped, both "session gone" tests failed — the stale key was posted, the fake answered 404 and recorded the violation. Simulator phase times: node up 0 ms (fixture), page ready 3.1–3.4 s off-screen, post 0.3–0.5 s, done ~3.6 s.
+
+**What was built:** `App/Share/Inbox/ShareMirror.swift` (group container, titles/folders only, written after every listing and once per foreground, pruned with the gateway); `ShareItem.destination` (v2, v1 reads as unaddressed); `SendToSessionIntent` with `destination` (entity query over the mirror, last destination first, 24 h staleness with §5 wording, no "new session"), modes `[.background, .foreground(.dynamic)]`; `ShareDelivery.performIntent` (node up → page ready → post inside a 25 s budget, `continueInForeground` on sign-in/session gone/timeout; never posts an unverified key); the `share-delivery` sheet for addressed items. F3 §3 and §6.1 revised; README row, DECISIONS, DEVICE-CHECK rows added.
+
+**Phone steps (the §9 Q2 measurement):**
+1. Install the TestFlight build, open Latchkey once signed in (this writes the mirror).
+2. In Shortcuts, edit "Send to Latchkey": set *Session* to *Ask Each Time* (or pick one). Share from Safari with Latchkey backgrounded; expect "Sent to &lt;session&gt;" in the sheet, or "Latchkey needs to open to finish this share: &lt;reason&gt;" (option B).
+3. Repeat after a force-quit (cold node), then once signed out of the dashboard.
+4. Read the times: Settings → Diagnostics → Logs, search **`ShareIntent:`** — lines `begin`, `node up in N ms`, `page ready in N ms`, `post in N ms`, `done in N ms` or `needs foreground after N ms: &lt;reason&gt;`. Record them in DEVICE-CHECK §6's F18 rows.
+
+**Open issues:** device numbers unmeasured (budget iOS allows, page world in the background — if `page ready` never comes, §9 Q4 is next); option A (app-row drop-down) not built; the drop-down has no per-gateway sections (host in the subtitle instead); Shortcut requests (`requestDisambiguation`) untestable on the simulator.</result>
+<usage><subagent_tokens>335536</subagent_tokens><tool_uses>169</tool_uses><duration_ms>6244025</duration_ms></usage>
+</task-notification>
