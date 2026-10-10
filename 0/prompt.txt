@@ -1,0 +1,10 @@
+<task-notification>
+<task-id>a880c90cd600a1f3d</task-id>
+<tool-use-id>toolu_01Pt4sBx6VDdrGEQtX3sV9Ko</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/7b72881e-a3a1-410e-a145-52fa8cc5684b/tasks/a880c90cd600a1f3d.output</output-file>
+<status>completed</status>
+<summary>Agent "Land F25, dry-run TF notes" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The build is done and simpool is booting Latchkey Shard 1 for L1. I'll wait for the completion notice.</result>
+<usage><subagent_tokens>55134</subagent_tokens><tool_uses>16</tool_uses><duration_ms>236707</duration_ms></usage>
+</task-notification>
