@@ -1,0 +1,597 @@
+<task-notification>
+<task-id>a70b2f664becb5a58</task-id>
+<tool-use-id>toolu_015sVKELPHzckuJ5MnEmuqE1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/1769ca01-0565-40fe-9fc3-6ae9b3a6d30c/tasks/a70b2f664becb5a58.output</output-file>
+<status>completed</status>
+<summary>Agent "Spec F19 App Review readiness" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have to stop here: every write path in this session is refused — the Write tool (twice), a Bash heredoc, even a `printf` to `/tmp` — and now read-only `git status` is refused too, so I cannot create the file or commit. Everything else is done: the research is complete and the spec is written. Below is the deliverable for the parent to write and commit; nothing in the tree was touched.
+
+## Report
+
+**Commit hash:** none. Session became read-only mid-task (see above). To land it: write the spec below to `docs/features/F19-app-review.md`, add the README row, then `git add docs/features/F19-app-review.md docs/features/README.md &amp;&amp; git commit -m "docs: spec F19 design, App Store review readiness"` (no trailers, no push). The other worker's dirty files (`app/UITests/ShareTests.swift`, `docs/features/F3-share-into-a-session.md`, `testing/harness/fake_gateway.py`, `testing/harness/gateway_check.py`) must stay out of the add.
+
+**Number collision — decide before committing.** While I worked, the other worker committed `b829b5d98` adding `docs/features/F19-app-review-access.md` (an *options* doc: 0/A/B1/B2/C, "not decided") and its README row. My spec is the *design* that decides it (B2 + A). I kept the brief's file name and title it F19 with the collision stated in its status cell and §8 Q9; a one-line `git mv` to `F20-app-review.md` (and s/F19 —/F20 —/ in the heading) is the cleaner alternative. The README row below works for either.
+
+**Where the brief was wrong (all verified, cited in §1 of the spec):**
+- The hook is not Debug-gated: it's `LATCHKEY_TEST_HOOKS`, compiled only into the **Testing** configuration (`app/App/TestHooks.swift:16-21`, `project.pbxproj:707`). Debug carries no hooks. DECISIONS.md:674 is the R15 entry saying so.
+- "Key stored in Keychain": the app uses no Keychain (`app/App/Workspace/BackupExclusion.swift:27-29`), and the key has no use after the join — the node's own state is the durable credential. The spec does **not** persist it; owner can overrule (§8 Q3).
+- "Real dashboard fronting the fake or a real agent": the fake *is* the real 0.7.1 frontend (`testing/harness/fake_gateway.py:1-12`); the choice is the server behind it.
+- The only documented auth-key UI test, `testAuthKeyLoginAndLogout` (`app/README.ui-automation.md:74`), no longer exists in `app/UITests/`.
+
+**Key design findings from the code:**
+- A running node at `NeedsLogin` can take a key via LocalAPI `POST /start` with `Ipn.Options.AuthKey` (`TailscaleKit/LocalAPI/LocalAPIClient.swift:121-129`, `Types.swift:230-233`, `ipn/ipnlocal/local.go:3211`) — no node restart, key never enters `Configuration`/workspace.
+- A refused key is **silent today**: control's `"invalid authkey"` arrives as `Notify.ErrMessage` (`Types.swift:44`) and nothing in `app/` or `TSNet/` reads it.
+- A real gateway can't be the demo: sign-in links die `min(300 s, ttl)` after minting (`fake_gateway.py:26-27,198`, from `token_auth.py:870,3005`). Recommendation: the fake in a new `--demo` mode (standing token, seeded sessions) behind `tailscale serve` on a tagged always-on node; trade-off table in §4.5.
+- `LogRedaction.swift` has no `tskey-` rule (the Go side does, `latchkey_locallog.go:186,200`); the spec adds one.
+- L2 harness needs `/reset?authkey=` → `testcontrol.Server.RequireAuthKey` (`testcontrol.go:57,982`), and the harness's own peers must present the key too. Caveat: testcontrol's `RequireAuth` ignores auth keys (`:1116-1123`), so tests use `authkey=` alone.
+- Media: nothing records video today (`look.sh:44` stills only). Spec: `make review-media` → `scripts/review-media.sh` → `ReviewMediaTests.testWalkthrough` on the **L2** harness (L1's fixture starts no node, so can't show a join), `simctl io recordVideo`, stills at 6.9" iPhone (`iPhone 17 Pro Max`: 1320×2868/1290×2796/1260×2736) and 13" iPad (2064×2752/2048×2732) — both required since `TARGETED_DEVICE_FAMILY = "1,2"` (`project.pbxproj:413`). Apple's current rule (web check): 6.9" iPhone and 13" iPad are the mandatory base; smaller classes are scaled. Sources: [Apple screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/), [ScreenKit 2026 sizes](https://screenkit.tools/specs/app-store-screenshot-sizes).
+
+**Open decisions for the owner (spec §8):** F19-options Q1–Q3 (external testers / App Store at all; the rejection text); where the demo node lives (VPS vs second userspace `tailscaled` on chonk); store the key or not; KiroCrew frontend licence for serving to Apple; keep the iPad claim; App Store metadata (privacy policy URL, nutrition labels); the share extension's missing privacy manifest; the F19/F20 number.
+
+**Unverified:** that `LocalBackend.Start` with a bad key yields `ErrMessage` on the bus (first thing to measure when building); whether beta-review App Review Information accepts a video attachment; which 6.9"/13" simulators this Mac has (`simctl list` was refused); that `iPhone 17 Pro Max` stills come out at 1320×2868 (the script's `sips` check decides); tagged nodes' key-expiry default on the review tailnet.
+
+---
+
+### README row (insert after the existing F19 row in `docs/features/README.md`)
+
+```
+| [F19](F19-app-review.md) (design) | Reviewable by Apple: an auth-key sign-in at the gate, a review tailnet with `fake_gateway.py` in demo mode, the review notes, and generated review media | spec; decides F19-options §4 as **B2 + A**. The key is pasted, never stored; a refused key gets a sentence (today it is silent); the 300 s link window rules out a real gateway as the demo; `make review-media` records the walkthrough on the L2 harness and both required screenshot sets |
+```
+
+### `docs/features/F19-app-review.md`
+
+````markdown
+# F19 — Reviewable by Apple: an auth-key sign-in, a review tailnet, the notes and the media
+
+| | |
+|---|---|
+| **Status** | spec. The **design** that decides [`F19-app-review-access.md`](F19-app-review-access.md) §4 (called *F19-options* below) as **B2 + A**, with B's host as a runbook and the review media generated by a suite. Nothing built. The two files share a number: the options landed (`b829b5d98`) while this was being written under the name it was asked for; §8 Q9 is the renumbering |
+| **Requested** | 2026-09-25, by Olof, after F19-options: "make the app reviewable by Apple (guideline 2.1 needs a live demo account/backend; reviewers won't set up servers or tailnets)". Five parts: an auth-key sign-in a reviewer can use in Release, a review tailnet runbook, the App Review notes, a generated walkthrough video and screenshots, and end-to-end tests for the sign-in |
+| **Revision** | **R44**, amending R15: a *user-driven* auth-key sign-in ships in every configuration; the *launch-argument* key stays Testing-only. F19-options §4.2 named this conflict |
+| **Touches** | `App/Tailnet Status/` (a new sheet, `StatusViewModel`), `App/Browser/ConnectionGateView.swift`, `TSNet/TSNetManager.swift`, `TSNet/TSNetModel.swift`, `App/Logging/LogRedaction.swift`, `App/Discovery/GatewayPickerView.swift` (one flag), `testing/tsnet-harness/` (`/reset?authkey=`), `testing/harness/fake_gateway.py` (`--plain`, `--demo`), `app/UITests/` (one new class, two L2 tests), `scripts/review-tailnet.sh`, `scripts/review-media.sh`, `app/Makefile` (`review-media`), `docs/TESTFLIGHT.md` |
+
+## 1. Why
+
+F19-options §1 has the evidence: build 0.1 was rejected for beta review on
+2026-09-25, and structurally a reviewer can reach nothing past the gate — no
+tailnet identity, no gateway, no token. It costs the routes and stops. This
+spec picks, and it picks from what the code allows rather than from the
+brief. Four facts, each checked on 2026-09-25 at `b829b5d98`:
+
+1. **The node already takes an auth key; a running node takes one too.** At
+   creation, `TailscaleNode.swift:71-72` passes `config.authKey` to
+   `tailscale_set_authkey`, which is `tailscale.go:665-670` setting
+   `Server.AuthKey`. That is the test hook's path
+   (`TSNetManager.launchAuthKey`, `TSNetManager.swift:273-275`). There is a
+   second path for a node that is *already up* at `NeedsLogin`, which is the
+   gate's situation: LocalAPI `POST /start` with `Ipn.Options.AuthKey`
+   (`LocalAPIClient.swift:121-129`, `Types.swift:230-233`), which
+   `LocalBackend.Start` hands to a fresh control client
+   (`ipn/ipnlocal/local.go:3211`). No node restart, no change to
+   `Configuration`, and the key never enters the workspace.
+2. **A refused key is silent today.** Control answers a bad key with a
+   `RegisterResponse.Error` (the harness's `testcontrol.go:982-986`,
+   `"invalid authkey"`); the backend forwards it as `Notify.ErrMessage`
+   (`Types.swift:44`). Nothing in `app/` or `TSNet/` reads `ErrMessage`
+   (grep, 2026-09-25). The node would sit at `NeedsLogin` and the gate would
+   say "Login Required" as if nothing had been tried.
+3. **A real gateway cannot be the demo.** A sign-in link is redeemable for
+   `min(300 s, ttl)` from minting (`fake_gateway.py:26-27, 198`, read from
+   `token_auth.py:870, 3005`), so no token can be written into review notes
+   days ahead. `fake_gateway.py` serves the real 0.7.1 frontend byte for byte
+   and emulates the server (`fake_gateway.py:1-12`); its credentials are its
+   own invention (D10), so a standing demo token is its rule to make.
+4. **Nothing records video, and the Swift redactor does not know auth
+   keys.** `look.sh:44` and the suite scripts take stills with
+   `simctl io … screenshot`; no `recordVideo` anywhere. The Go-side log
+   filter redacts `tskey-…` (`latchkey_locallog.go:186, 200`); the app's
+   `LogRedaction.swift` has no such rule, so a key interpolated into an app
+   log line would be kept.
+
+**Where the brief was wrong**, so nobody builds from it:
+
+- "`-AuthKey`/`APERTURE_AUTHKEY` is a Debug-gated test hook (DECISIONS.md:674)."
+  It is gated by `LATCHKEY_TEST_HOOKS`, compiled only into the **Testing**
+  configuration (`TestHooks.swift:16-21`, `project.pbxproj:707`); Debug, what
+  Xcode's Run installs, carries no hooks. DECISIONS.md:674 is the R15 entry
+  that says exactly that.
+- "Key stored in Keychain." No Keychain item exists in the app, TailscaleKit
+  or libtailscale (`BackupExclusion.swift:27-29`), and the key has no use
+  after the join: the node's own key in its state directory is the durable
+  credential, as after a browser login. Storing a reusable tailnet key on the
+  phone is a liability with no flow behind it. §5 does not persist it; §8 Q3
+  is where the owner can overrule.
+- "F19" was free when the brief was written and taken by the time this was
+  saved (§8 Q9).
+- "The real 0.7.1 dashboard fronting either `fake_gateway.py` or a real
+  agent." The fake *is* the real 0.7.1 dashboard; the choice is the server
+  behind it (§4.5).
+
+## 2. What the owner sees
+
+### 2.1 The reviewer, on a fresh install
+
+1. The gate: F11's introduction, **Sign in to Tailscale**, and under it a
+   plain second button, **Sign in with an auth key**. Both visible to every
+   user on every build; nothing hidden (2.3.1).
+2. The auth-key sheet. Three sentences: an auth key joins this phone to a
+   tailnet without a browser sign-in; tailnet admins make them in the admin
+   console; use one only from a tailnet you mean to join, because Latchkey
+   will open a dashboard on it. A field, **Join**, and Cancel.
+3. Paste, Join. The sheet says "Joining…"; the gate reports Running; the
+   sheet closes.
+4. The picker shows **Joined `&lt;tailnet name&gt;`** and the one gateway it found,
+   and waits for a tap (§4.2: no auto-select after an auth-key join).
+5. The token sheet names the gateway (R23); the reviewer pastes the demo
+   token from the notes. The real 0.7.1 dashboard loads with the seeded
+   sessions.
+6. Share: the reviewer shares a link from Safari (the Latchkey icon, F3
+   stage 2), opens Latchkey, picks a session, Send; the message appears in
+   that session. Settings: gateway switcher, Diagnostics, Reset.
+
+### 2.2 Failing
+
+- **Control refuses the key** (wrong, expired, revoked): within a second the
+  sheet shows *The tailnet refused this key: `&lt;control's message&gt;`. Ask for
+  a new one.* The Join button returns. The node stays at `NeedsLogin`; the
+  gate is unchanged behind the sheet.
+- **No answer in 20 s** (no network, control unreachable): *The tailnet did
+  not answer.* Try again, and the gate's existing states (F4 G2/G6, F8 G7)
+  carry on saying what the node is doing.
+- **The node is not at `NeedsLogin` yet** (still starting): Join is disabled
+  with *Waiting for the node…* until it is.
+- **Joined, nothing found** (a policy mistake on the review tailnet): the
+  picker's existing empty state (F4 P-states) plus the tailnet name it
+  joined, so the owner's first question — *which* tailnet? — is answered on
+  screen.
+- **Malformed input** (no `tskey-` prefix, whitespace inside, under 20
+  characters): the sheet says what an auth key looks like and does not call
+  the node.
+
+### 2.3 The owner, before a submission
+
+`scripts/review-tailnet.sh rotate` prints a fresh reviewer key and demo token
+once, to the terminal. `make review-media` regenerates the walkthrough video
+and the screenshots. `scripts/review-tailnet.sh check` proves the demo node
+is up with a trusted certificate and the token redeems. The notes in §4.7 get
+the two secrets pasted in. Every one of these fails loudly rather than
+producing something half-true.
+
+## 3. Non-goals
+
+- **Not F19-options' C** (a demo inside the app) and **not B1** (an SSO
+  identity handed to Apple). B2 is the only route where the reviewer runs the
+  real app against a real tailnet with no credential that opens an IdP.
+- **Not persisting the auth key**, in Keychain or anywhere (§1, §5).
+- **No change to the split tunnel, the manual-entry gate or the single
+  destination.** The reviewer's gateway is a tailnet host found by the
+  ordinary sweep.
+- **No Funnel, no public host.** The demo node is reachable only from the
+  review tailnet.
+- **Not the reply to Apple**, and not App Store metadata beyond the notes
+  (privacy policy URL, nutrition labels: §8).
+- **Not device automation.** What only a phone can capture is listed in
+  §4.8 and recorded by hand.
+
+## 4. Design
+
+### 4.1 The sheet: `App/Tailnet Status/AuthKeySheet.swift` (new)
+
+Modelled on `TokenEntrySheet`. `AuthKeyInput.parse(_:) -&gt; Result&lt;String,
+Refusal&gt;` is pure (Foundation only, host-tested like `TokenInput`): trims,
+strips the wrapping punctuation `TokenInput` strips, requires the `tskey-`
+prefix, no interior whitespace, at least 20 characters. It does not
+distinguish `tskey-auth-` from `tskey-client-`; control does.
+
+Identifiers, the contract with §6: `gate-authkey-button` (the gate),
+`authkey-sheet`, `authkey-field` (a `SecureField`; the key is a secret and
+the video must not show it), `authkey-join`, `authkey-cancel`,
+`authkey-error` (the refusal text), `authkey-joining` (the progress row).
+
+The button lives in `ConnectionGateView` under `GateLoginButton`
+(`ConnectionGateView.swift:72`), shown on the same condition as the primary
+button. Not on `LoginBanner` (mid-session `NeedsLogin`,
+`DashboardRootView.swift:581-627`): that state is a re-login after expiry,
+outside a review window.
+
+### 4.2 Applying it: `TSNetManager.join(authKey:)` and `TSNetModel.controlError`
+
+- `TSNetManager.join(authKey: String) async throws` calls
+  `localAPIClient.start(options: Ipn.Options(UpdatePrefs: nil, AuthKey:
+  key))`. Precondition: `model.state == .NeedsLogin` and a LocalAPI client
+  (`localAPIClient`, set in `startTailscale`, `TSNetManager.swift:288-292`);
+  otherwise it throws `notReady`, which the sheet shows as *Waiting for the
+  node…*. The key is a parameter and a local; it is not stored on the
+  manager, the model, the workspace or the definition.
+- `TSNetModel` gains `@Published var controlError: String?`, set from
+  `notify.ErrMessage` where `TSNetModel.swift:93-128` reads the other
+  `Notify` fields, cleared on any state change to `Running`. The sheet shows
+  it as the refusal. **To measure first** (§9 will record it): that
+  `LocalBackend.Start` with a bad key produces an `ErrMessage` on the bus
+  and leaves the state at `NeedsLogin`, on the L2 harness. If it does not, the
+  fallback is `TailnetLogout`'s shape — read the failure from the node's
+  `/status` after a bounded wait — and the spec is amended.
+- `StatusViewModel` gets `joinWithAuthKey(_:)`: parse, call `join`, and race
+  the model's next `Running` / `controlError` against the 20 s timeout.
+  `authSessionEndedGeneration` is not reused; the sheet has its own state.
+- After a successful join, `Workspace.joinedByAuthKey = true` (in memory
+  only). `DashboardRootView` passes `autoSelectSingle: !joinedByAuthKey` to
+  the picker (`GatewayPickerView.swift:26-27`), and the picker's header
+  shows *Joined `&lt;model.tailnetName&gt;`*. This is the mitigation for the risk
+  F19-options §4.2 states: a user talked into pasting a stranger's key is not
+  carried straight to the stranger's token sheet; the tailnet's name and a
+  tap stand between. The token sheet's R23 naming stays.
+
+### 4.3 Logging and redaction
+
+- The sheet and the manager log *that* a join was requested and its outcome,
+  never the key or its prefix. (`TimingHarness.swift:202, 432` log a
+  14-character prefix; that file is `#if LATCHKEY_TEST_HOOKS` and stays.)
+- `LogRedaction.scrub` gains the Go filter's rule: `(?i)\btskey-[^\s"'&lt;&gt;\\`]*`
+  → `tskey-…`, so a key that reaches `Logger.log` by any path (an
+  interpolated error, a URL, a future line) is cut. One case in
+  `scripts/test-log-redaction.swift`.
+- `LogRedaction` already keeps control's login links out of the app log
+  (`LogRedaction.swift:45-52`); an auth-key join never receives one.
+
+### 4.4 R44, and what stays Testing-only
+
+R15's reason was a paired Mac joining the app to a foreign tailnet through a
+launch argument with no user present (`TestHooks.swift:11-14`). The UI path
+needs a tap and a paste. So:
+
+- `TSNetManager.launchAuthKey()` / `launchEphemeral()` and every reader of
+  `TestHooks` are unchanged and remain Testing-only. R15's binary check
+  (DECISIONS 2026-09-20: `APERTURE_AUTHKEY` absent from the non-Testing
+  binaries) becomes acceptance criterion §7.3 and is extended: the Release
+  binary must *contain* the sheet's strings (the path is not hidden) and
+  must *not* contain `APERTURE_AUTHKEY` (the hook is not promoted).
+- R6 (a real install is never ephemeral) holds: the UI path sets no
+  ephemeral flag; the key's own attributes decide at control, and the
+  reviewer key is not ephemeral (§4.6).
+- `../PLAN-REVISIONS.md` gets **R44**: "An auth key can be pasted at the gate
+  in every build; the launch-argument key stays Testing-only."
+
+### 4.5 The demo server: `fake_gateway.py` in demo mode
+
+The choice the brief asked for, with the trade-off:
+
+| | The fake, in demo mode | A real KiroCrew with a cheap model and a spend cap |
+|---|---|---|
+| What the reviewer sees | the real 0.7.1 frontend over seeded, unchanging sessions; a sent message appears in the session (the fake journals posts and answers as the server would) but nothing replies | the same frontend, and an agent that answers |
+| The token | a standing demo token the fake accepts for as long as it runs — its own rule, since its credentials are its own (D10) | a link dies 300 s after minting (§1.3); the reviewer would need one minted on demand, which needs the owner on hand |
+| Risk | none: no tools, no model, no data | tool execution and spend by a stranger; the cap bounds cost, not what the tools do |
+| Upkeep | the pin ages (0.7.1); fine for showing | KiroCrew upgrades under it; the token problem never goes away |
+
+**Recommendation: the fake.** A reviewer is checking that the app does what
+the notes say, not that an agent is clever; the notes say plainly that the
+demo dashboard does not run an agent. The real-agent option is closed by the
+300 s link window alone.
+
+Two flags, both refused by the suites (`test-session.sh` never passes them,
+and `gateway_check.py` fails if `/__state` reports `demo: true` without
+`--demo`):
+
+- `--plain`: listen on plain HTTP for `tailscale serve` to front. Everything
+  else stays as behind serve: cookies named for the emulated 5476 listen port
+  (`fake_gateway.py:31-34`), `Secure` set (the phone sees HTTPS), the Host
+  allowlist on `--host`.
+- `--demo &lt;seed.json&gt;`: a fixed token (≥ 16 characters of `TokenInput`'s
+  charset, `TokenInput.swift:41-48`) that redeems any number of times and
+  survives `/__restart`; seeded slots and messages with fixed timestamps so
+  two captures are byte-alike; `/__state` reports `demo: true`; the control
+  port binds loopback only. The seed is `testing/harness/demo-seed.json`,
+  three sessions ("notes", "research", "inbox") with a handful of messages
+  each and no name, host or text of the owner's.
+
+The fake already answers discovery's recognition pair (M5 uses it as the
+`gw` peer), so the sweep finds it unchanged.
+
+### 4.6 The review tailnet: runbook and `scripts/review-tailnet.sh`
+
+A separate tailnet under a dedicated identity that owns nothing else.
+Settings once, in the admin console: MagicDNS on, HTTPS certificates on
+(for `tailscale serve`), device approval off, tailnet lock off. Policy:
+
+```json
+{
+  "tagOwners": { "tag:demo": ["autogroup:admin"], "tag:reviewer": ["autogroup:admin"] },
+  "grants": [
+    { "src": ["tag:reviewer"],    "dst": ["tag:demo"], "ip": ["tcp:443"] },
+    { "src": ["autogroup:admin"], "dst": ["tag:demo"], "ip": ["*"] }
+  ]
+}
+```
+
+Nothing else is granted: reviewer nodes reach the demo node on 443 and
+nothing more, not each other, not the admin's devices. Discovery accepts a
+tagged gateway regardless of owner (`GatewayCandidates.swift:64-70`), and a
+tagged node's key does not expire by default, which is F19-options §4.2's
+"expiry disabled" for free (verify in the console when the node first
+appears).
+
+**The node.** One small always-on Linux host that is *not* on the owner's
+tailnet — a container or VM, or a second `tailscaled` in userspace mode on
+an owner machine with its own state and socket. `scripts/review-node.sh`,
+run on it: install tailscale, `tailscale up --auth-key &lt;tag:demo key&gt;
+--hostname demo`, copy `testing/harness/` only, `make bundle`, a systemd
+unit for `fake_gateway.py --plain --port 8444 --host demo.&lt;tailnet&gt;.ts.net
+--demo demo-seed.json` with the token in an env file (mode 600), and
+`tailscale serve --bg --https=443 http://127.0.0.1:8444`. The host holds the
+repo's harness directory, the pinned wheel and the token; no key of the
+owner's, no log of his, no session.
+
+**Keys.** A reusable, pre-authorized, **non-ephemeral** `tag:reviewer` auth
+key, 90 days (the maximum). Non-ephemeral so a reviewer's node survives a
+relaunch without the key (§5); the cost is stale reviewer nodes, which
+rotation removes. `scripts/review-tailnet.sh`, on the Mac, with an OAuth
+client for the review tailnet (`auth_keys` and `devices` scopes) in
+`~/.latchkey-review/oauth` (600), the way `app/.asc-key` holds the ASC key:
+
+- `rotate`: revoke every earlier `tag:reviewer` key, delete `tag:reviewer`
+  devices not seen for 7 days, mint a new key (`POST
+  /api/v2/tailnet/-/keys`, reusable, preauthorized, `tag:reviewer`,
+  `expirySeconds` 7776000, description dated), generate a new demo token,
+  and print both **once** to the terminal. With `REVIEW_NODE_SSH` set it
+  updates the node's env file and restarts the unit; otherwise it prints the
+  two commands to run there. Nothing is written to disk on the Mac.
+- `check`: over SSH to the node (or locally if run there):
+  `https://demo.&lt;tailnet&gt;.ts.net/manifest.json` names "Kiro Crew",
+  `/api/auth/me` answers 403 with `X-Auth-Required`, the certificate chain
+  validates against the system store, and `/?token=&lt;demo&gt;` redeems twice.
+  This is F19-options §6's "review gateway check", with `gateway_check.py`'s
+  client.
+- `status`: the tailnet's devices, keys and their expiries, so the owner can
+  see a key about to lapse mid-review.
+
+**Between submissions:** `rotate`, then `check`, then paste into the notes.
+The old key is dead the moment the new one exists, so a leaked notes field
+from a previous review opens nothing.
+
+### 4.7 The review notes
+
+For App Review Information → Notes, with the two secrets pasted in. Under
+4000 characters; native value first, for 4.2:
+
+&gt; **What Latchkey is.** A single-purpose client for a KiroCrew dashboard the user runs on their own computer. The computer is not on the public internet; Latchkey reaches it over the user's private Tailscale network. The native parts are the point: the app embeds its own userspace Tailscale node (no VPN profile, no effect on the rest of the phone's traffic), routes only that network's hosts through it, discovers the dashboard by probing the network's peers, switches between gateways, keeps the dashboard's session native (sign-in sheet, QR scan, sign-out, reset), and adds a share-sheet extension and a Shortcuts action that send links and files from other apps into a session. The web view shows one origin and nothing else; every other link opens in the user's browser after a tap.
+&gt;
+&gt; **Why a demo network is needed.** A user's dashboard is private to their network, so we run a review network with one demo dashboard on it. It serves the dashboard's real frontend over scripted sessions; it does not run an AI agent, so nothing replies to messages. Nothing on it belongs to a real person.
+&gt;
+&gt; **How to test.** 1. On the first screen tap *Sign in with an auth key* and paste: `&lt;AUTH KEY&gt;`. Tap Join; the app joins the review network. 2. It finds the demo dashboard; tap it. 3. In the sign-in sheet paste the dashboard token: `&lt;DEMO TOKEN&gt;`. The dashboard opens with three sessions. 4. Share: in Safari, share any page to Latchkey (its icon is in the share sheet), open Latchkey, pick a session, Send; the message appears in that session. Or add the *Send to Latchkey* action in Shortcuts. 5. Settings (gear): switch gateway, Diagnostics, Reset (signs the node out of the network and wipes the app).
+&gt;
+&gt; **What is not there.** No account of ours is needed: the auth key is the sign-in. The ordinary path is *Sign in to Tailscale* with the user's own account, which you can also try; it creates an empty network with nothing to open, which the app explains. The Local Network permission prompt is the node looking for direct paths to peers. The app is iPhone-first; iPad is supported and included in the screenshots.
+&gt;
+&gt; **Third parties.** KiroCrew is an open-source, self-hosted server the user runs themselves; the app is its client. Tailscale is the network layer, embedded as a library. Nothing leaves the phone: logs stay on the device (Settings → Diagnostics).
+&gt;
+&gt; **Encryption.** Standard: WireGuard and TLS in the embedded node, system HTTPS in the web view; declared exempt in App Store Connect.
+&gt;
+&gt; A 60-second walkthrough video of this exact path is attached.
+
+Kept as `docs/review-notes.md` so it is diffed with the app, and re-read
+before each submission (F19-options' "keep the notes true").
+
+### 4.8 The media: `ReviewMediaTests`, `scripts/review-media.sh`, `make review-media`
+
+One XCUITest class, `app/UITests/ReviewMediaTests.swift`, Testing
+configuration, one method `testWalkthrough`. It is a test as well as a
+recording: every step asserts server-side (§6). It paces itself with named
+holds so the video reads at human speed, ~60 s total:
+
+| Step | Holds | Still |
+|---|---|---|
+| launch (`-UITestResetWorkspaces -UITestResetShare`), the gate with F11's intro | 4 s | `01-gate` |
+| tap `gate-authkey-button`, the sheet, type the key (SecureField: dots), Join, "Joining…" → Running | 6 s | `02-authkey` (before Join) |
+| the picker: *Joined tail-scale.ts.net*, one gateway; tap it | 4 s | `03-picker` |
+| the token sheet naming the gateway; type the demo token; sign in | 4 s | `04-signin` |
+| the dashboard, three seeded sessions | 8 s | `05-dashboard` |
+| `latchkey://share?url=…&amp;title=…` via `XCUIDevice.shared.system.open` (`ShareTests.swift:489-494`), pick "notes", a note, Send, "Sent", the session with the message | 10 s | `06-share` |
+| Settings: the switcher, Diagnostics rows | 5 s | `07-settings` |
+
+**Two backends, one switch.** `REVIEW_MEDIA_TARGET=fake` (default) runs on
+the **L2** harness, not L1: L1's `-TestStatusFixture` starts no node
+(`TestNetworkFixture.swift:22-25`), so it cannot show a join. The tsnet
+harness runs with `-gateway` (the `gw` peer fronting the fake, as M5 uses it)
+and the fake in `--demo` mode; `/reset?authkey=&lt;demo key&gt;` (§4.9) makes
+control require the key the test types. `REVIEW_MEDIA_TARGET=review` runs the
+same class against the real review tailnet: no `-TestControlURL`, the key and
+token from `LATCHKEY_REVIEW_AUTHKEY` / `LATCHKEY_REVIEW_TOKEN`, the gateway
+name from `LATCHKEY_REVIEW_TAILNET` — all through `TEST_RUNNER_…` like the
+harness ports (`UITestSupport.swift:57-66`), never written into a test file,
+so R10's allow-list scan (`check-fixture-tailnets.sh`) keeps passing. The
+review target is also the pre-submission proof that a reviewer's node can do
+the whole path (F19-options §7.3).
+
+**Deterministic.** The script pins what can vary: `simctl ui &lt;udid&gt;
+appearance light`; `simctl status_bar &lt;udid&gt; override --time 9:41
+--batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4`;
+a fresh container (`simctl uninstall`, as `test-session.sh:135`); the fake's
+seed with fixed timestamps; the fixture tailnet name; no Diagnostics screen
+(its log lines carry times). Two runs differ only in the SecureField's dot
+count if the key length changes.
+
+**Video.** `xcrun simctl io &lt;udid&gt; recordVideo --codec h264 --force
+&lt;out&gt;/walkthrough-&lt;device&gt;.mp4`, started before `xcodebuild test
+-only-testing:LatchkeyUITests/ReviewMediaTests` and stopped with `SIGINT`
+after. The script asserts the file exists and its duration (`ffprobe` or
+`mdls -name kMDItemDurationSeconds`) is 50–80 s.
+
+**Screenshots.** The test writes each still with
+`XCUIScreen.main.screenshot().pngRepresentation` to `&lt;out&gt;/&lt;device&gt;/NN-name.png`
+(the pattern `LatchkeyUITests.swift:699-704` already uses; the simulator
+shares the host filesystem). Two device classes, both required by App Store
+Connect for an app that claims iPhone and iPad (`TARGETED_DEVICE_FAMILY =
+"1,2"`, `project.pbxproj:413`): **6.9" iPhone** (`iPhone 17 Pro Max`;
+accepted sizes 1320×2868, 1290×2796, 1260×2736 portrait) and **13" iPad**
+(`iPad Pro 13-inch`; 2064×2752 or 2048×2732). Smaller classes are scaled
+from these by App Store Connect. The script measures each PNG with `sips -g
+pixelWidth -g pixelHeight` and fails on any size outside those lists — the
+one-line check that keeps a wrong simulator from producing a wrong set. It
+resolves both device names from `simctl list devices available` and fails
+naming what is installed if either is missing. Which simulators this Mac has
+was not checked while writing (§8).
+
+**One target.** `make review-media` in `app/Makefile` runs
+`../scripts/review-media.sh` — harness up, fake in demo mode, reset with the
+key, both simulators booted and CA-trusted (fake target), recording, the test
+class per device, stops, size and duration checks, teardown — and prints the
+output directory `app/build/review-media/&lt;timestamp&gt;/`. `REVIEW_MEDIA_TARGET`,
+`SIM_IPHONE`, `SIM_IPAD` override.
+
+**What only a real device can capture**, recorded by hand with Control
+Centre against the review tailnet, and why:
+
+- the share sheet itself: Safari → the Latchkey icon → the extension's sheet
+  (`ShareCaptureView`). XCUITest drives neither the intent nor a share sheet
+  (`ShareTests.swift:12-15`, F3 §7); the simulator path opens the
+  `latchkey://` URL, which is the app half only;
+- *Sign in to Tailscale*: the `ASWebAuthenticationSession` browser and
+  Tailscale's login page, a real IdP;
+- the QR scan (`AVCaptureSession`, `TokenEntrySheet.swift:169-211`): no
+  camera in the simulator;
+- the Local Network permission prompt, the real Dynamic Island, a direct vs
+  DERP path in Diagnostics, and the TestFlight install.
+
+The device recording is the second attachment; the generated one is the
+first and the one that is regenerated per submission.
+
+### 4.9 The L2 harness: `/reset?authkey=&lt;key&gt;`
+
+`testing/tsnet-harness/main.go:946-947` parses `auth` and `machine`; it gains
+`authkey`, which sets `testcontrol.Server.RequireAuthKey`
+(`testcontrol.go:57`) *and* `AuthKey` on each harness peer's tsnet server
+(`node.go`), because testcontrol requires the key of every node
+(`testcontrol.go:982`, "for all nodes"). `GET /state` reports
+`requireAuthKey: true` and never the key. **Caveat, read from
+`testcontrol.go:1116-1123`:** `RequireAuth` consults only `nodeKeyAuthed`, so
+with `auth=1` a node presenting the right key is still sent to the login
+page, unlike real control. The tests use `authkey=` without `auth=1`; a
+faithful model would be a vendored change (its own commit, R16) and is not
+needed here.
+
+**Invariants this must not break** (see `../../app/AGENTS.md`):
+- the split tunnel decides what goes through the proxy; only tailnet hosts do
+  — the demo gateway is a tailnet host found by the ordinary sweep;
+- `allowFailover` stays false;
+- ATS stays on with no exceptions; HTTPS only — `tailscale serve`'s
+  publicly trusted certificate, no test CA on a reviewer's phone;
+- D1: no app or node logs leave the device — the reviewer's included;
+- a vendored-tree change is its own commit (R16) — none is planned; §4.9
+  says where one would be.
+
+## 5. State and migration
+
+- **The auth key is not persisted**, anywhere: not in `WorkspaceDefinition`
+  (`Workspace.swift:84-86` already says "NOT stored in the definition"), not
+  in the Keychain, not in `UserDefaults`, not in a log. It is a parameter of
+  one LocalAPI call. Consequence: a reviewer node that is logged out (R32
+  Reset, or a key revoked at control) needs the key pasted again. That is
+  the design, and it is why the reviewer key is non-ephemeral (§4.6).
+- `hasEverConnected` is set on `Running` as today (`Workspace.swift:155-156`),
+  so F11's introduction leaves after an auth-key join too. `joinedByAuthKey`
+  is in memory only and false on every launch.
+- R32 is unchanged and exercised: a reviewer's Reset expires their node's
+  key at control, so a tidy reviewer leaves nothing; an untidy one leaves a
+  node that `rotate` removes.
+- The demo node's state is the runbook's (§4.6), and `docs/TESTFLIGHT.md`
+  gets a "Before a review" section pointing here.
+- Nothing written by a previous version changes meaning.
+
+## 6. End-to-end tests
+
+The one auth-key test the docs describe, `testAuthKeyLoginAndLogout`
+(`README.ui-automation.md:74`), no longer exists in `app/UITests/` — the
+README is stale, and the UI path has no test yet.
+
+| Test | Suite | Asserts | Shown to fail by |
+|---|---|---|---|
+| `testAnAuthKeyPastedAtTheGateJoinsTheTailnet` | L2 (`TailnetHarnessTests`) | `/reset?authkey=K`; launch with `-TestControlURL`, **no** `APERTURE_AUTHKEY`; both gate buttons exist; sheet, type K, Join; `Running` within `joinTimeout`; the dashboard loads and the dash peer journals a connection from the app node (`assertJournaled`); harness `/state`: the app node registered, `logins` empty (no login page used) | against today's build: `gate-authkey-button` never exists. And by typing `K + "x"`: the harness refuses it (proves the harness gate has teeth) |
+| `testAWrongAuthKeyIsRefusedAndTheSheetSaysSo` | L2 | `/reset?authkey=K`; type `K'`; `authkey-error` appears within 20 s carrying control's text; state stays `NeedsLogin`; `assertNoDashboardLoad(for: 3)`; `/state` has no app node | by deleting the `ErrMessage` → `controlError` line: the sheet spins to the timeout and the assertion on the text fails |
+| `testTheAuthKeyReachesNoLogAndNoFile` | L2, plus `test-tailnet.sh` step 5 | after the join, the app log (Settings → Logs text and the file), `tsnet.log` and every file in the container are scanned for the literal K (the existing login-link scan, `test-tailnet.sh:173-234`, extended with the key of the `requireAuthKey` run); the app log must contain the *redacted* marker `tskey-…` from the join line, or the scan proved nothing (the same premise check the link scan makes) | by writing K into `WorkspaceDefinition` for one build: the scan finds it in `workspaces.json` |
+| `tskey` redaction | L0 host (`test-log-redaction.sh`) | `scrub("… tskey-auth-kABC-def …")` yields `tskey-…`; a line without a key is unchanged | running the case before the rule is added |
+| `testTheReviewWalkthroughRecords` (= `ReviewMediaTests.testWalkthrough`, fake target) | `review-media.sh` | every step of §4.8 server-side: the harness registered the app node with the key; the fake counted one redemption, one `/api/auth/me` 200, one post to "notes" with the shared title and URL, zero violations; the stills exist at the required sizes; the video is 50–80 s | by starting the fake without `--demo`: the token does not redeem; by pointing `SIM_IPHONE` at `iPhone 17`: the size check fails |
+| demo mode self-test | host (`gateway_check.py --demo`) | the demo token redeems twice, survives `/__restart`, `/__state` says `demo: true`; without `--demo` the same script fails on `demo: true` | starting the fake without `--demo` |
+| `review-tailnet.sh check` | owner-run, on the node | §4.6's four checks | stopping `tailscale serve`; a self-signed certificate |
+| `make review-media REVIEW_MEDIA_TARGET=review` | owner-run, before each submission | the walkthrough passes against the real review tailnet with the rotated key | stopping the demo node's unit |
+
+## 7. Acceptance criteria
+
+1. On the L2 harness with `authkey=` set, the app joins from the gate with
+   the key typed into the sheet and the dashboard loads over the tailnet.
+   Instrument: the dash peer's journal entry from the app node.
+2. A refused key is on screen within 20 s with control's reason, and never
+   silent. Instrument: `authkey-error` in the accessibility tree; the app
+   log's join-outcome line.
+3. The Release binary contains the sheet's strings ("Sign in with an auth
+   key", "The tailnet refused this key") and does not contain
+   `APERTURE_AUTHKEY` or `-AuthKey`. Instrument: `strings` on
+   `Latchkey.app/Latchkey` from `make tf UPLOAD=0`, in `testflight.sh`'s
+   preflight, failing the export otherwise.
+4. The literal key is in no file of the app container and in no log after a
+   join. Instrument: `test-tailnet.sh`'s scan, which must also find the
+   redacted marker.
+5. `make review-media` produces, from a clean checkout with the harnesses
+   only, one video of 50–80 s and seven stills per device class at sizes in
+   App Store Connect's lists, and exits non-zero otherwise. Instrument: the
+   script's own `sips` and duration checks, and its exit code.
+6. `review-tailnet.sh check` passes within an hour before each submission
+   (F19-options §7.3), and `rotate` has run since the previous one.
+   Instrument: the script's output and the key's description date in
+   `status`.
+7. Apple's verdict: the build's review status. Instrument: App Store
+   Connect.
+
+## 8. Open questions and owner actions
+
+1. **F19-options Q1–Q3 still stand.** This spec assumes the answer to
+   "external testers or the App Store?" is yes; if internal testing is
+   enough, F19-options §4.0 is the whole fix and nothing here is built.
+2. **Where does the demo node live?** A small VPS or container, or a second
+   userspace `tailscaled` on chonk with its own state directory. Either
+   works with `review-node.sh`; the second keeps no new machine but puts a
+   review-tailnet process on an owner machine.
+3. **Store the key after all?** §1 and §5 say no. If a reviewer's node being
+   logged out mid-review (a Reset they tried) is worth avoiding a second
+   paste, the alternative is a Keychain item with
+   `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`
+   (`BackupExclusion.swift:27-29`), wiped by Reset, and a re-join on
+   `NeedsLogin`. It adds a secret to protect and a path to test.
+4. **KiroCrew's frontend, served to Apple** — F19-options §8 Q6. The demo
+   node serves the pinned wheel's bundle to a third party. Check the licence,
+   or ask.
+5. **iPad: keep the claim?** The media target produces the 13" set and runs
+   the walkthrough on an iPad simulator, which is the first time anything
+   here runs on one (F19-options §2.2). If it shows layout faults, they are
+   their own spec; dropping to iPhone-only (`TARGETED_DEVICE_FAMILY = 1`)
+   removes both the set and the risk.
+6. **App Store metadata this does not cover:** a privacy policy URL (required
+   for App Store review, not for TestFlight), the privacy nutrition labels
+   (D1 makes them short), a support URL. Owner actions in App Store Connect.
+7. **The share extension's privacy manifest** (F19-options §2.2), before the
+   next upload; its own commit.
+8. **Unverified while writing:** whether App Review Information accepts a
+   video attachment in the beta-review flow as it does for App Store review;
+   whether `LocalBackend.Start` with a bad key yields an `ErrMessage` rather
+   than only a log line (the first thing to measure, §4.2); which 6.9" and
+   13" simulators this Mac has installed (the script names what is missing);
+   that `iPhone 17 Pro Max` stills come out at 1320×2868 (the size check
+   decides, not this sentence); that the review tailnet's HTTPS certificates
+   are enabled before `tailscale serve` is asked for 443.
+9. **The number.** Two files carry F19. One `git mv` makes this F20, or the
+   options document's §4 is replaced by a pointer here and this becomes the
+   one F19. Owner's call; nothing links to this file by number yet.
+
+## 9. Log
+
+2026-09-25, written from `b829b5d98`. Found while writing: the LocalAPI
+`start` path with `Ipn.Options.AuthKey` exists in the vendored Swift and Go
+(`LocalAPIClient.swift:121`, `local.go:3211`), so a pasted key needs no node
+restart; `ErrMessage` is delivered by the bus (`Types.swift:44`) and read by
+nothing; the Swift redactor has no `tskey-` rule while the Go one does;
+`testAuthKeyLoginAndLogout` is documented but gone; testcontrol's
+`RequireAuth` ignores an auth key, so the harness tests must not combine the
+two; and the 300 s link window decides the demo backend before any other
+argument does.
+````</result>
+<usage><subagent_tokens>271815</subagent_tokens><tool_uses>55</tool_uses><duration_ms>2048897</duration_ms></usage>
+</task-notification>
