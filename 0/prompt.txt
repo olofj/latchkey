@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>aa6036402862de126</task-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/aa6036402862de126.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply session suite pruning" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The build is in progress on shard 1, stamped with the merge commit (clean tree). Waiting.</result>
+<usage><subagent_tokens>177681</subagent_tokens><tool_uses>55</tool_uses><duration_ms>713857</duration_ms></usage>
+</task-notification>
