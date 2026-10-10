@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b5k5i2rik</task-id>
+<tool-use-id>toolu_01RgFqGQqAjTRdqstkJ1tQ8j</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/7964d1cc-e5aa-4fe5-b522-0f1aaf8e4250/tasks/b5k5i2rik.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait until no suite run is active" completed (exit code 0)</summary>
+</task-notification>
