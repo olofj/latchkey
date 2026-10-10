@@ -1,0 +1,52 @@
+<task-notification>
+<task-id>ae49da5096b766d57</task-id>
+<tool-use-id>toolu_019YgiewRUnKFYcxng5vRDWQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/21486e9a-61ad-4dc7-b1e6-6585550c7e31/tasks/ae49da5096b766d57.output</output-file>
+<status>completed</status>
+<summary>Agent "Finish F16 (issue #3)" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>All three stages are committed on `f16` with their tests, and lifecycle, discovery and targeted L1 pass on the final code. One thing is still broken: `make test-policy` fails to compile one host test, a problem that comes from main (details at the end). I stopped rebasing when you asked, so `f16` is currently on main at `1aceba1fc`.
+
+## Commits (oldest first)
+- `c439c6aff tsnet: install a bus watcher only after the caller's staleness check` (stage 2)
+- `a42923cdb tsnet: start the socks relay without blocking the main actor` (stage 3)
+- `bf5e2ec14 docs: f16 stages 2 and 3 built, fault 3 measured and its fix declined` (F16 status and §9 log, the `docs/features/README.md` row, a new `DECISIONS.md` entry, and a timing note added to the existing -1009 entry)
+
+The docs quote the SHAs from before the last rebase (`85c7ca8`, `7dda491`). Your rebase will change them again, so they need re-stamping after it. Each commit body says how its tests were shown able to fail.
+
+## Per stage
+- **Stage 2 (built).** I reviewed the leftover uncommitted work before using it. Its core idea held up: the caller checks, then installs. But its `dropFirst` on the error watcher would silently lose a real bus death that lands between the start and the subscription. I replaced it with a watcher that ignores errors until it is installed; the install then picks up any error that arrived before it. The start also clears the consumer's old error first.
+  - The spec wanted the shutdown test as a host or L1 test. Neither can run it: the host tests can't compile `TSNetManager`, and L1 has no node. So `testShutdownDuringRecoveryInstallsNoWatcher` is an L2 lifecycle test, forced with a new `-UITestShutdownDuringRecovery` hook.
+  - Shown able to fail: with the old install order, the Login after the race never completes, and the shutdown test finds a watcher installed.
+- **Stage 3 (built).**
+  - `start()` is async. A second caller of the same loopback generation joins the start already in flight. A start that a recovery or `shutdown()` overtakes stops its relay and publishes nothing.
+  - The `loadInitial` guard checks that the web view's data store has a proxy, rather than `tsnetModel.proxyConfiguration`. The view model's updates arrive asynchronously, so a load could otherwise run before the proxy is in the store and go direct.
+  - `BrowserViewModel.swift`: only that guard line changed.
+  - The L1 tests are in a new `LoopbackStallOfflineTests` class. `test-offline.sh` and the shard planner now run both classes; the new class's test ids carry the class name, and `l1-durations.txt` has entries for them.
+  - The main-thread stall is measured only late in a slow relay start. A cold launch alone stalls the main thread for up to about 1.4 s, so a whole-run maximum measured the launch, not the relay.
+  - Shown able to fail:
+    - A blocking start reads 2162 ms.
+    - A ready delay past the start timeout makes the load skip the relay (0 relayed requests).
+    - Without the `loadInitial` guard, both anti-leak copies load the leak origin directly.
+    - Without the post-start checks, the stale relay gets published and the page's WebSocket never reopens.
+- **Stage 4 (measured; fix declined).**
+  - With the relay in front, the error page (-1009) shows 1002–1071 ms after the load starts. Without the relay (`-NoSocksLog`) it is -1004 after 1002–1019 ms. That is 5 runs each, from the app's own `page-state` log line.
+  - The relay's session ends 10–36 ms after it accepts the connection, because the upstream's receive fails with connection refused.
+  - That is far under the spec's 10 s threshold, so no upstream state handler was added. The fault stays open for device evidence.
+  - I couldn't add the spec's timing to `OfflineHarnessTests`, because that file was off-limits.
+
+## Test runs (final numbers are on the final code)
+- **Lifecycle:** `SIM_NAME="Latchkey Shard 2" SUITE_TIMEOUT=900 scripts/test-lifecycle.sh --build` passed 9/9 on every rebase, including the log checks for stages 1–3. One run failed earlier because the test runner process itself restarted mid-test; it passed unchanged on rerun.
+- **Discovery:** `SIM_NAME="Latchkey Shard 2" scripts/test-discovery.sh` passed 16/16 on the final code. One earlier run broke the same way (the test runner restarted twice mid-run). Another couldn't start because a harness from `/Users/olof/src/latchkey` was holding instance 0 at the time; it passed after that was released.
+- **Targeted L1:** `SIM_NAME="Latchkey Shard 3" LATCHKEY_INSTANCE=3 LATCHKEY_XCTESTRUN=&lt;abs path&gt; LATCHKEY_SHARD_TESTS="…" scripts/test-offline.sh`, with the tests picked by name.
+  - 11/11: the 3 new tests, the 4 existing anti-leak tests, the dashboard happy path and 3 launch-path tests.
+  - 8/8 on the final code.
+  - The measured stall under the delay was 0–1 ms.
+- **Host tests (`make test-policy`):** passed through the second-to-last rebase; the SOCKS relay host test is 99/99 after moving it to the async start. On the final tip, the browser view model host test doesn't compile: `cannot find 'GatewayEndpoint' in scope`, in `SessionManager.swift`. Main's `1aceba1fc` added `GatewayCandidates.swift` to the session manager test script but not to `test-browser-view-model.sh`, which compiles the same file. It's a one-line fix in that script.
+
+## Unresolved
+- The full sharded L1 was not run, per your constraints.
+- Other workers ran sharded suites on Shard 2 and 3 during this session; I waited them out. The new simulator slot pool on main should stop that from recurring.
+- Still to come from a device: whether a defunct listener drops connection attempts instead of refusing them, and whether the relay listener ever sits waiting before it is ready.</result>
+<usage><subagent_tokens>307004</subagent_tokens><tool_uses>174</tool_uses><duration_ms>9418756</duration_ms></usage>
+</task-notification>
