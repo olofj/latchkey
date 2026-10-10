@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>af81a0b2a321f3f3c</task-id>
+<tool-use-id>toolu_01L8Jec5tKAjva8trMpGfFsS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/7b72881e-a3a1-410e-a145-52fa8cc5684b/tasks/af81a0b2a321f3f3c.output</output-file>
+<status>completed</status>
+<summary>Agent "Build F25 mute chirps" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I built F25 on branch `f25` in `/Users/olof/src/latchkey-f25` and every suite I ran is green. Nothing is merged or pushed and no TestFlight build was made. Before running any tests I re-checked the build against each item in spec §2 and §5.
+
+**Setup:** I copied from main the TailscaleKit framework, the libtailscale archives, `.dev-team`, `Local.xcconfig`, the harness certificates and the cached 0.7.1 wheel. `make check-framework` passes.
+
+**Commits:**
+- `9f8b8376e` browser: mute the dashboard's chirps from the app bar
+- `e5104f91f` harness: pin the dashboard's chirp settings key in the bundle check
+- `928efeef2` l1: test that the bar mutes the chirps and read-aloud still plays
+- `c56920207` docs: f25 built, per-origin chirp scripts and the 0.7.1 module
+
+**Tests:**
+- **Host tier (`make test-policy`): passed.** It includes a new Node test, `app/scripts/test-chirp-mute.js` (34/34), which runs the real script against a fake page and a copy of the dashboard's settings reader. If the script stops keeping the other stored fields, 2 of the 34 checks fail.
+- **L1: 50/50.** The new test `testTheBarMutesTheChirpsAndReadAloudStillPlays` covers spec §5 items 1–4:
+  - muted at the first read of a first launch;
+  - a tap unmutes the live page without a reload;
+  - the choice survives a relaunch;
+  - read-aloud plays while muted.
+- **It can fail, as §5 requires:** with the script disabled (`-UITestNoChirpMute`) the test fails at item 1 with `enabled: 1, reads: 1`. I then took the flag out, rebuilt, and the test passed again.
+- **Bundle check (`fake_gateway.py --check-bundle`):** passes on the pinned wheel and fails if the event name is changed by one letter.
+- **Session suite: 39/39 against the real 0.7.1 bundle.** The app logged `chirp-mute: muted (no-key)` and `muted (applied)` as the spec describes.
+- **L2 and lifecycle suites:** both passed.
+- **Over time budget (warnings only):** the L1 run took 261 s against its 240 s budget, and the session suite 318 s against 300 s.
+
+All simulators came from the shared pool: 4 slots for the L1 and session runs, 1 slot for the single-test and L2/lifecycle runs. The "iPhone 17" simulator outside the pool was already booted before I started; I didn't drive it.
+
+**Spec items that differ or were unclear:**
+- **The module's file name.** The pinned 0.7.1 wheel has no `useNotificationSound-*.js`. The sound settings live in `MemoryTab-e91XvJr7.js`, so that is the file the bundle check names.
+- **How the state is set at each load.** Page scripts can't be removed once added, so each tap adds a newer script for every gateway the page has loaded, and the newest one wins. That is one tiny script per gateway per tap, cleared when the page is torn down. It's recorded in `docs/DECISIONS.md`, along with the overlap with the dashboard's own sound toggle (Latchkey's choice wins at the next load).
+- **What `no-key` means in the log.** I read it as "no saved settings existed, so a fresh one was written", which is the normal case on a first load. A tap can also log `off-gateway` or `failed`.
+- **Icons.** I used the outline `speaker.slash` / `speaker.wave.2` the spec names. The gear next to them is a filled icon.
+
+**Needs checking on the device (spec §6):**
+1. With music playing, a finished turn makes no chirp and doesn't pause the music.
+2. After tapping unmute, the next notification chirps.
+3. While muted, Speak on a reply is heard.
+
+Also worth a look: whether the bar's extra 44 pt button crowds the gateway chips on a narrow phone.</result>
+<usage><subagent_tokens>219526</subagent_tokens><tool_uses>105</tool_uses><duration_ms>2163293</duration_ms></usage>
+</task-notification>
