@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bl86992xb</task-id>
+<tool-use-id>toolu_01HNdRQxg7kfowu77N6WoPzD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/4a3b4c37-af87-40ee-824d-79f8213a2dca/tasks/bl86992xb.output</output-file>
+<status>completed</status>
+<summary>Background command "Wake when the review agent goes quiet" completed (exit code 0)</summary>
+</task-notification>
