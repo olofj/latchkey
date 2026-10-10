@@ -1,0 +1,17 @@
+<task-notification>
+<task-id>a875e34dc1291b629</task-id>
+<tool-use-id>toolu_01U2Drzf5mwZjtUKKVwC9p2C</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/7b72881e-a3a1-410e-a145-52fa8cc5684b/tasks/a875e34dc1291b629.output</output-file>
+<status>completed</status>
+<summary>Agent "Research KiroCrew 0.8.0 nav logo" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Verdict: this is an intended change, not a regression.** KiroCrew 0.8.0 is released (v0.8.0, 2026-10-09; repo https://github.com/kirodotdev/KiroCrew).
+
+- **Release notes** (https://github.com/kirodotdev/KiroCrew/releases/tag/v0.8.0, "One bar on the phone"): on phones the chat title row now sits inside the top bar, and "the sessions drawer gains a rail of the main destinations."
+- **PR #14472** (https://github.com/kirodotdev/KiroCrew/pull/14472, merged 2026-09-28) made the change. The chat bar has no logo on purpose. The panel icon is the sessions toggle. The drawer it opens has a rail of tiles (Home, Sessions, Schedule, Artifacts, Discover, installed apps, Capabilities, Kiro Account, Settings, Search all) beside the session list. The PR says outright that Library, Developer, Terminal and Connect-your-phone stay off the rail and are "reachable from every non-chat page." The swipe that opens the main nav (#7133) is also turned off on the chat page.
+
+I didn't download the 0.8.0 wheel. The PR describes the panel icon's behaviour and its tests directly. GitHub's rate limit stopped my last search for follow-up "Terminal unreachable" issues, and the searches that did run found none.
+
+**Workaround:** tap the panel icon, tap Settings (or another tile) in the rail, then tap the ghost logo and pick Terminal. That's three taps.</result>
+<usage><subagent_tokens>36267</subagent_tokens><tool_uses>7</tool_uses><duration_ms>74446</duration_ms></usage>
+</task-notification>
