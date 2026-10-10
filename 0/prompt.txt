@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>a6c4781bbe70dd6e1</task-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/a6c4781bbe70dd6e1.output</output-file>
+<status>completed</status>
+<summary>Agent "F21 calm cold launch" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>Everything except the suite counts is in place: code, host test, session tests, harness knob, measurement script, spec, README, DECISIONS and the upstream report are all reviewed and consistent, and `app/build` is ignored so the recordings stay out of the commits. The only remaining input is the full-suite run, which is still queued behind the other workers on the simulator lock; the commits (one for code, tests and spec; one for the docs) and the final durations refresh depend on its result, so I'll wait for its notification.</result>
+<usage><subagent_tokens>355903</subagent_tokens><tool_uses>202</tool_uses><duration_ms>7127497</duration_ms></usage>
+</task-notification>
