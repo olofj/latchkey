@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>abba40172b034126a</task-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/abba40172b034126a.output</output-file>
+<status>completed</status>
+<summary>Agent "F16 next stage" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The holder is a session-suite run with `--build` (about 6–8 min), then my lifecycle run (about 5 min), so the 10-minute waiter may expire once; I'll re-arm it if so. Nothing else can proceed until the run reports, so I'm waiting on that notification.</result>
+<usage><subagent_tokens>196248</subagent_tokens><tool_uses>61</tool_uses><duration_ms>842492</duration_ms></usage>
+</task-notification>
