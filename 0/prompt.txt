@@ -1,0 +1,10 @@
+<task-notification>
+<task-id>a6c4781bbe70dd6e1</task-id>
+<tool-use-id>toolu_014QV3Vp1uxk4tgn9T7EEPaB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/8d31e2c2-f591-47f4-8edb-8d898916a57e/tasks/a6c4781bbe70dd6e1.output</output-file>
+<status>completed</status>
+<summary>Agent "F21 calm cold launch" finished</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>The F18 worker holds the lock (3 share tests on the same iPhone 17), so my baseline run is queued behind it; that's the lock doing its job. I can't rebuild yet either: the "after" build must not land in DerivedData before the baseline has been recorded from the unfixed products. I'll wait for the background task's completion notification.</result>
+<usage><subagent_tokens>250162</subagent_tokens><tool_uses>89</tool_uses><duration_ms>1180640</duration_ms></usage>
+</task-notification>
