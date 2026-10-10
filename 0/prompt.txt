@@ -1,0 +1,8 @@
+<task-notification>
+<task-id>b0esrwod1</task-id>
+<summary>Monitor event: "new commits on f16 (#3) and f21 (#4) branches"</summary>
+<event>f21 52669f8c6 harness: hold asset responses on request
+f21 606bdaf29 browser: keep the page's unresolved dark shell from painting
+f21 fb72cda40 docs: f21 built, the shell's dark default no longer paints</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
