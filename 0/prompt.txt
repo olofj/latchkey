@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>b0esrwod1</task-id>
+<summary>Monitor event: "new commits on f16 (#3) and f21 (#4) branches"</summary>
+<event>f16 f6e72c9fb tsnet: install a bus watcher only after the caller's staleness check</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
