@@ -1,0 +1,32 @@
+<task-notification>
+<task-id>aae09bb3c2d5ccaad</task-id>
+<tool-use-id>toolu_018QVV7tc9DBqfybkB7xv41h</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-olof-src-latchkey/e0239ecc-d081-4825-b0bd-f4a3f7f1eb9f/tasks/aae09bb3c2d5ccaad.output</output-file>
+<status>completed</status>
+<summary>Agent "Review: UI, browser, share" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Adversarial review of `/Users/olof/src/latchkey` (share path, browser, workspace, settings, diagnostics, harness). Read-only; nothing edited or run. Working tree reviewed as on disk, including the uncommitted `ShareDelivery.swift` diff. Findings, most severe first.
+
+**1. Critical — inbox wiped on every launch (uncommitted).** `app/App/Share/ShareDelivery.swift:125` calls `store.removeAll()` unconditionally in `init`, after `ShareTestHooks.apply` (:123) and before `prepare()`. Scenario: a share fails "unreachable" (UI says *Kept*), app is killed or relaunched → item gone silently; every `-UITestSeedShare` seed is deleted the instant it is written. Breaks `testAColdLaunchKeepsTheItem` and all document tests. Verified: `removeAll` deletes `root` (`ShareInboxStore.swift:132-134`).
+
+**2. Critical — failed items deleted while UI says "Kept" (uncommitted).** `ShareDelivery.swift:537` replaced `store.update(item)` with `store.delete(item.id)` in the failure path; `:542 reload()` then empties `waiting`. Scenario: gateway down → `.unreachable` → sheet says "Kept — it will be sent when the gateway is back" (`ShareOutcome.swift:137`), Settings says "Nothing waiting", nothing auto-retries (`ShareInboxPolicy.swift:101` has no item). For a document, Retry hits `upload()` :441-443 → "The shared file is missing on this phone." Your own new assertion at `app/UITests/ShareTests.swift:296` fails against this code.
+
+**3. High — signed-out share loses the item and no longer resumes (uncommitted).** `ShareDelivery.swift:518` deletes on `.signedOut` and drops `resumeKey`. After sign-in `preconditionsChanged` (:293-300) takes `list()`, so the owner must re-pick and re-send (spec §2: "resumes by itself"); a document then fails as in #2 (`store.update` no-ops, `ShareInboxStore.swift:122`); killing the app on the token sheet loses it. Breaks `testSignedOutMidShareThenResumed`.
+
+**4. High — cancel during a send causes a duplicate post (committed).** "Later" (`ShareDestinationView.swift:113`) and swipe-dismiss stay enabled while `.working`. `close()` (`ShareDelivery.swift:594-615`) cancels `runTask` and nils `current`, but `deliver` (:411-436) never checks cancellation and `callAsyncJavaScript` is not cancellable, so `POST /api/chat` completes. `finish` (:490) then returns on `current == nil`: nothing deleted, no log line, `close()` already reverted `.sending` to `.pending`. Next foreground clears `deferred` (:205) and re-presents; owner sends again → the session receives the message twice. "Sent is the gateway's word" is violated the other way: the gateway said sent and the app forgot.
+
+**5. Medium — last session no longer remembered (uncommitted).** `ShareDelivery.swift:497` replaced `defaults.remember(...)` with `_ = title`. `list()` :330-338 never preselects and never shows the "Last time on … — switch?" line. Breaks `testTheLastSessionIsPreselected`; spec §2 step 3.
+
+**6. Medium — any foreign URL scheme opens another app with no confirmation.** `NavigationPolicy.swift:74-77` returns `.openExternally` for every scheme not explicitly listed; `TabManager.swift:180-192` refuses only javascript/data/file/blob/about and calls `UIApplication.shared.open` directly. Unlike Safari, that path shows no "Open in …?" prompt. Scenario: agent output (built from a page the owner just shared in) renders `shortcuts://run-shortcut?name=…`; one tap runs the shortcut; a page script setting `location` needs no tap at all (`BrowserViewModel.swift:987-992`).
+
+**7. Medium — VoiceOver reads a stray "none"/slot key in Release.** `ShareDestinationView.swift:202-207`: a 1-pt `Text` with an explicit `accessibilityLabel`, not inside `#if LATCHKEY_TEST_HOOKS` (the sibling instrument at :97-104 is). Swiping through the Session section announces "none" or a raw key — the exact class F15 §9 removed (`DashboardRootView.swift:296-301`).
+
+**8. Low — first-run share dead-ends and misreports.** `attach` runs only from `gatewayContent.onAppear` (`DashboardRootView.swift:426`), which exists only when `homePage.hasGateway` (:232). With no gateway, `workspace == nil` → blocker "Choose a gateway first." (`ShareDelivery.swift:269`), "Change gateway…" is hidden (`ShareDestinationView.swift:49`), the sheet covers the inline picker, and `startPageWait` (:303-313) fires `.unreachable` after 20 s: "Couldn't reach the gateway. Kept". Spec §2 says picker first, then share.
+
+**9. Low — 50 MB copy on the main actor.** `ShareDelivery.admit` (:151-153) → `ShareInboxStore.add` (:79-84) runs synchronously under `@MainActor` from `SendToSessionIntent.perform()` (`ShareIntents.swift:44,72`), contradicting the store's contract (:19-20). Shortcuts handing `file.data` rather than a URL → `Data.write` of up to 50 MB blocks the UI thread while the intent foregrounds the app.
+
+**10. Low — full-DOM style sweep every 500 ms while chat streams.** `PageScriptSources.swift:335-340` calls `getComputedStyle` on every element; `:376` re-arms it via a subtree/characterData `MutationObserver` on the whole document. A streaming session mutates continuously, so the content process pays an O(N) pass twice a second for the life of the page.
+
+**Checked and sound:** `LATCHKEY_TEST_HOOKS` is defined only in the Testing configuration (`project.pbxproj:597`); every hook, including `-AuthKey`, `-Ephemeral`, `-ProxyEverything`, `-NoSocksLog`, reads through `TestHooks` (`TSNetManager.swift:159-174,813-817`); harness files are wholly `#if`-guarded. Script message handlers live in app-only content worlds, the session bridge checks frame origin (`SessionManager.swift:236`), share scripts take arguments as JS values, and `NavigationPolicy` pins the main frame to `allowedOrigin` set only by app loads.</result>
+<usage><subagent_tokens>291350</subagent_tokens><tool_uses>67</tool_uses><duration_ms>457728</duration_ms></usage>
+</task-notification>
