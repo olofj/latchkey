@@ -141,9 +141,6 @@ int ga_up(tailscale s, char* dir) {
 	if (tailscale_set_dir(s, dir) != 0) {
 		return set_err(s, 'v');
 	}
-	if (tailscale_set_logfd(s, -1) != 0) {
-		return set_err(s, 'w');
-	}
 	if (tailscale_up(s) != 0) {
 		return set_err(s, 'x');
 	}
