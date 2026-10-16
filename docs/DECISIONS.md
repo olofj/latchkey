@@ -3813,3 +3813,31 @@ Decided:
 - **Things to try quote the specs' device checks**, condensed mechanically.
   Some items are written for Olof, not a tester. `(owner only)` drops one;
   which ones to drop is left to the first few builds.
+
+## 2026-10-15 — F27: vendored libtailscale at upstream 0.2.0
+
+**Decision:** the vendored libtailscale takes upstream
+`tailscale/libtailscale` through 0.2.0, `d1dc45d`, one commit here per
+upstream commit, with the fork's Latchkey changes kept. **Last upstream
+libtailscale revision reviewed: `d1dc45d`.** Upstream does not tag; 0.2.0
+is the version in its bindings (`python/setup.py`,
+`ruby/lib/tailscale/version.rb`).
+
+**Why:** the fork branched from upstream at `5e89501` and had not taken
+anything since. Not taken: the `tailscale.com` module bumps (`4e3b222`'s
+`go.mod`/`go.sum`, all of `019b925`), because `go.mod` replaces the module
+with `tailscale-patched/`, which stays at `b5adfd8` (F27 §3). Upstream's
+new listener test called `tailscale_set_logfd`, which the fork replaced
+with process-wide logging, so the test starts its node without it.
+
+**Evidence:** per file, the delta between upstream `d1dc45d` and the
+vendored tree equals the delta between `5e89501` and the tree before the
+update, except `go.mod`, `go.sum` and `tstestcontrol.go` (the bumps not
+taken) and `tsnetctest.go` (the `set_logfd` call). The whole libtailscale
+Go package passes, upstream's new listener tests
+included; `make check-framework`, `make test-policy`, L1 49/49, L2 9/9,
+discovery 21/21 and lifecycle 11/11 pass. Session: 38/39 on this tree
+and 38/39 on the tree before the update (`eedec409c`), the same test
+failing in both, `ShareTests/testSignedOutMidShareThenResumed` (no
+result within 45 s); a first run here had 5 other failures that did not
+recur. The device check (F27 §6) is open.

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | spec |
+| **Status** | built 2026-10-15; vendored Go tests, host tests, L1, L2, discovery and lifecycle pass; session 38/39, as before the update. Device check open (§6) |
 | **Requested** | 2026-10-15, by Olof: "Bring the vendored libtailscale up to upstream 0.2.0 and rebuild TailscaleKit." (issue #13) |
 | **Revision** | none: no documented behaviour changes |
 | **Touches** | `app/ThirdParty/libtailscale` (vendored, R16), `app/ThirdParty/VENDORED.md`, the TailscaleKit xcframework |
@@ -90,3 +90,25 @@ No new tests of ours. Upstream's own Go tests come with the cherry-picks.
 - The device check (§6).
 
 ## 9. Log
+
+2026-10-15, built:
+
+- The nine upstream commits are on main as `bbaeee607`..`11854056d`, the
+  module bumps not taken (§3), plus `1ba520972`: upstream's listener test
+  called `tailscale_set_logfd`, which the fork replaced with
+  `tailscale_setup_logs`.
+- **Against upstream.** For every file upstream changed since `5e89501`,
+  the delta from upstream `d1dc45d` to the vendored tree equals the delta
+  from `5e89501` to the tree before the update, except `go.mod`, `go.sum`,
+  `tstestcontrol.go` (§3) and `tsnetctest.go` (the call above).
+- **Go.** The test-all Go step passes, and so does the whole libtailscale
+  package, upstream's new listener tests included. The
+  new test was not run against the pre-update tree.
+- **Suites.** `make check-framework` and `make test-policy` pass (loopback
+  stalls 21/21). L1 49/49, L2 9/9, discovery 21/21, lifecycle 11/11.
+- **Session** 38/39, and 38/39 on `eedec409c`, the tree before the
+  update: both fail `ShareTests/testSignedOutMidShareThenResumed` (no
+  result within 45 s). A first run on the new tree failed 5 others
+  (sign-in waits, a share reporting the gateway unreachable); none came
+  back on the rerun.
+- Open: the device check (§6).

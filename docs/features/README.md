@@ -45,7 +45,7 @@ the change, or by breaking it on purpose — and the spec says how.
 | [F24](F24-edge-swipe-panes.md) | A swipe in from the screen edge opens the dashboard's sessions (left) or activity (right) drawer | **prototype built 2026-10-08**: screen-edge recognisers run a page script that uses the dashboard's `toggle-activity-panel` event and its "Toggle sessions" button (English labels only, §5); L1 test. Refined the same day from device feedback (§7): opens after 40 pt of inward travel, and an edge swipe no longer scrolls the chat. Device check owed (§6) |
 | [F25](F25-mute-chirps.md) | A mute icon next to the gear silences the dashboard's notification chirps, muted by default; read-aloud still plays | spec 2026-10-09 |
 | [F26](F26-testflight-notes.md) | Every TestFlight build says why it was sent, what changed since the last one, and what to try (`make tf PURPOSE=...`, `tf/<build>` tags) | **built** 2026-10-09: `scripts/tf_notes.py` writes What to Test through the App Store Connect API after processing; host tests with a fake API, live service read-only. A missing PURPOSE refuses the upload. First real write on the next `make tf` |
-| [F27](F27-libtailscale-0.2.0.md) | Update vendored libtailscale to 0.2.0 and rebuild TailscaleKit (issue #13) | spec 2026-10-15 |
+| [F27](F27-libtailscale-0.2.0.md) | Update vendored libtailscale to 0.2.0 and rebuild TailscaleKit (issue #13) | **built** 2026-10-15: upstream through 0.2.0 (`d1dc45d`), module bumps not taken; all suites as before. Device check open |
 
 ## Still open, not yet answered
 
