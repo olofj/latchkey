@@ -9,10 +9,10 @@ revision R16 and decision D2 in `../../docs/PLAN-REVISIONS.md` and
 
 | Path | Upstream repository | Revision |
 |---|---|---|
-| `ThirdParty/libtailscale/` | https://github.com/tailscale/libtailscale, as patched in the aperture-plus fork network | `f55900d2efb7ccc327a9ac07779b92767c1e48ab` |
+| `ThirdParty/libtailscale/` | https://github.com/tailscale/libtailscale, as patched in the aperture-plus fork network | imported at `f55900d2efb7ccc327a9ac07779b92767c1e48ab`; upstream taken through 0.2.0, `d1dc45d039edb7759ecbee6ba2aea0c4bca884b8` (see Tracking upstream) |
 | `ThirdParty/libtailscale/tailscale-patched/` | https://github.com/tailscale/tailscale, as patched in the aperture-plus fork network | `b5adfd852c01a53025cbacc0727789984ffbf427` |
 
-Neither commit is in the public libtailscale or tailscale repositories. Both
+Neither import commit is in the public libtailscale or tailscale repositories. Both
 are carried as unreferenced objects inside
 https://github.com/tailscale/aperture-plus (that is what its submodules'
 `url = .` meant) and are fetchable from there by SHA:
@@ -70,6 +70,20 @@ diff -ru /tmp/lt-new ThirdParty/libtailscale --exclude=tailscale-patched --exclu
 **Cherry-pick only** (revision R16). No merges: upstream changes are reviewed
 and brought over commit by commit, for the vendored tree and for `TSNet/`.
 The last upstream revision reviewed is recorded in `../../docs/DECISIONS.md`.
+
+The fork's libtailscale branched from public upstream at `5e89501`
+(2026-02-28; the ruby and python trees match it blob for blob). On
+2026-10-15 (F27) upstream was cherry-picked through **0.2.0, `d1dc45d`**
+(upstream does not tag; the version lives in the bindings). Each upstream
+commit is one commit here naming its SHA, with Latchkey adaptations in
+commits of their own. Not taken: the `tailscale.com` module bumps
+(`4e3b222`'s `go.mod`/`go.sum`, and all of `019b925`, v1.104.1), because
+`tailscale-patched/` stays at the revision in the table above.
+
+Upstream patches carry repo-root paths, so apply them with
+`git apply --3way --directory=app/ThirdParty/libtailscale`. The 3-way
+merge needs upstream's preimage blobs: write each touched file at the
+commit's parent into the object store first (`git hash-object -w`).
 
 ## Build products
 
